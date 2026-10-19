@@ -24,6 +24,7 @@ def main():
         return
     if not args.input:
         raise ValueError("Specify a local annotation file or saved dataset.")
+    # Convert local annotations to the shared editing record format.
     print(json.dumps(convert(args.kind, args.input, args.dataset, args.output, args.captions, args.partition), allow_nan=False))
 
 if __name__ == "__main__":

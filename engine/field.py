@@ -143,6 +143,7 @@ def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, prob
     if session.scale == 0 or not torch.any(request != 0).item() or radius == 0 or not session.cleanup:
         report.update({"status": "degenerate", "reason": "Zero request, disabled field, zero radius, or identity continuation."})
         return Field(request, report)
+    # Retain independent contrast directions for the response fit.
     basis, singular = orthogonal([first] if delta == 0 else [first, second], tolerance)
     rank = basis.shape[1]
     original = request.detach().reshape(-1).to(device="cpu", dtype=torch.float64).numpy()
@@ -171,6 +172,7 @@ def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, prob
         neutral = tensor(native.endpoint(torch.zeros_like(request)))
         if neutral.shape != request.shape or neutral.device != request.device:
             raise ValueError("Pullback references must match the clean request geometry.")
+        # Measure endpoint responses with the same cached noise.
         columns = []
         for index in range(rank):
             direction = torch.from_numpy((step * basis[:, index]).reshape(request.shape)).to(device=request.device, dtype=torch.float32)

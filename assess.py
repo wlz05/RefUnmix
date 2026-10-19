@@ -31,6 +31,7 @@ def grouped(rows, field):
     groups = {}
     for row in rows:
         groups.setdefault(str(row["key"]), []).append(row)
+    # Average seeds within each source before aggregating metrics.
     means = [{"metrics": {key: value["mean"] for key, value in summary([{"metrics": row[field]} for row in values]).items()}} for values in groups.values()]
     result = summary(means)
     infinite = {key for key, values in groups.items() if any(row.get("status", {}).get("psnr") == "positive infinity" for row in values)}

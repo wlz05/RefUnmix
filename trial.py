@@ -65,6 +65,7 @@ def frozen(args, chosen):
     payload = read(source)
     if payload.get("schema") != 1 or payload.get("split") != "val" or not payload.get("variants") or payload.get("settings") != settings(args):
         raise ValueError("Frozen tests require unchanged validation control settings.")
+    # Keep test sources disjoint from the validation recipe.
     current = set(identities(chosen).values())
     if current & set(payload.get("digests", {}).values()):
         raise ValueError("Test images overlap validation sources.")

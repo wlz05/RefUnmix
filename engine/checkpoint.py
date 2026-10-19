@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 
 def fingerprint(root):
+    # Identify weights by content rather than checkpoint filenames.
     files = sorted(path for path in Path(root).rglob("*") if path.is_file() and path.suffix.casefold() in {".bin", ".safetensors", ".pt"})
     if not files:
         return None

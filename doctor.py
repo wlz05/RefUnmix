@@ -48,6 +48,7 @@ def weights(root, family):
     if not path.is_dir():
         raise NotADirectoryError(path)
     names = ("unet", "scheduler", "vae", "tokenizer", "text") if family == "vp" else ("transformer", "scheduler", "vae", "tokenizer", "text_encoder", "text_encoder_2")
+    # Check checkpoint components before loading any weights.
     parts = {name: locate(path, Path(name)) for name in names}
     if family == "vp" and not parts["text"].is_dir():
         parts["text"] = locate(path, Path("text_encoder"))
