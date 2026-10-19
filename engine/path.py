@@ -105,6 +105,7 @@ class Path:
             reference = self.zero(0.) - eta * self.direction
         else:
             reference = self.zero(eta)
+        # Remove the matched reference before restoring the source anchor.
         return self.session.anchor.float() + (target - reference)
 
     def candidate(self, point):

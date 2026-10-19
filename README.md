@@ -100,7 +100,7 @@ python -m pip install datasets pyarrow gradio
 
 Experiments use **one NVIDIA GeForce RTX 4090** and seeds **42, 52, 3047, and 3407**. Single-image inference defaults to 42. For dataset experiments, use `--seeds 42 52 3047 3407`.
 
-Dataset partitions remain fixed across seeds. Large flow checkpoints may require more memory than a single RTX 4090; automatic offloading and quantization are not implemented.
+Dataset partitions remain fixed across seeds. Flow backends load their complete checkpoints into GPU memory.
 
 ---
 
@@ -195,7 +195,19 @@ See `python -B RefUnmix/main.py --help` for all options. The report records the 
 
 ---
 
-## Dataset Format and Split Provenance
+## Datasets
+
+PIE-Bench is the main benchmark. The data interfaces also load MagicBrush, Emu Edit, ImgEdit-Bench, and GEdit-Bench.
+
+| Dataset | Task | Profile |
+|---------|------|---------|
+| [PIE-Bench](https://github.com/cure-lab/PnPInversion) | Prompt-guided editing; 700 samples across 10 edit categories | `pie` |
+| [MagicBrush](https://github.com/OSU-NLP-Group/MagicBrush) | Single-turn and multi-turn instruction-guided editing | `magicbrush` |
+| [Emu Edit](https://huggingface.co/datasets/facebook/emu_edit_test_set) | Local, global, background, and attribute editing | `emu` |
+| [ImgEdit-Bench](https://github.com/PKU-YuanGroup/ImgEdit) | Instruction adherence, editing quality, and detail preservation | `imgedit` |
+| [GEdit-Bench](https://github.com/stepfun-ai/Step1X-Edit/tree/main/GEdit-Bench) | Real-world image editing requests | `gedit` |
+
+### Annotation Format
 
 Store annotations as a JSON object or a list of records. Example `data/mapping.json`:
 
@@ -229,7 +241,7 @@ python -B RefUnmix/split.py --dataset data --mapping mapping.json --images image
 python -B RefUnmix/doctor.py --dataset data --mapping mapping.json --images images --manifest outputs/split.json --split val --model models --clip clip
 ```
 
-Custom splits use train/validation/test ratios of 0.70/0.15/0.15. For datasets with official partition tags, use `--protocol official` to preserve them. Source groups are kept disjoint. RefUnmix requires no training on the train partition.
+Custom splits use train/validation/test ratios of 0.70/0.15/0.15. For datasets with official partition tags, use `--protocol official` to preserve them. Source groups are kept disjoint.
 
 ### Four-Seed Dataset Evaluation
 
@@ -242,6 +254,26 @@ Use `--split all` without a manifest to evaluate a complete release. Edit-region
 ---
 
 ## Experiments
+
+RefUnmix achieves state-of-the-art image editing performance on **PIE-Bench**, with improved protected-content preservation and target-text alignment. All experiments run on a **single NVIDIA GeForce RTX 4090** with seeds **42, 52, 3047, and 3407**.
+
+### Baselines
+
+We compare against [ChordEdit](https://github.com/ChordEdit/ChordEdit), [SwiftEdit](https://github.com/Qualcomm-AI-research/SwiftEdit), and [FlowEdit](https://github.com/fallenshock/FlowEdit), covering one-step diffusion editing and inversion-free flow editing.
+
+### Evaluation Metrics
+
+Evaluation follows the PIE-Bench protocol in [ChordEdit](https://arxiv.org/abs/2602.19083). Background preservation and editing semantics are measured separately:
+
+| Metric | Region | Measurement | Better |
+|--------|--------|-------------|--------|
+| PSNR | Non-edited | Pixel reconstruction fidelity in dB | Higher |
+| MSE x 1,000 | Non-edited | Mean squared pixel error | Lower |
+| LPIPS x 1,000 | Non-edited | Perceptual distance from the source | Lower |
+| CLIP-Whole | Whole image | Alignment with the target caption | Higher |
+| CLIP-Edited | Edited region | Local alignment with the target caption | Higher |
+
+Efficiency is reported as denoiser evaluations, forward calls, VAE decodes, runtime in seconds, and peak GPU memory. Field and controller comparisons use matched evaluation budgets.
 
 ### Field and Controller Matrix
 
