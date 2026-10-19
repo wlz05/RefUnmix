@@ -286,5 +286,5 @@ class FlowTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

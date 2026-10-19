@@ -106,5 +106,5 @@ class Collector:
     def report(self):
         return {"tokens": self.indices, "maps": len(self.maps), "skipped": self.skipped, "maximumqueries": self.maximum, "note": "Read-only attention reconstruction with token-neighbor phrase heuristics."}
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

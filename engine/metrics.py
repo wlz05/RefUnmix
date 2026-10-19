@@ -97,5 +97,5 @@ class Protocol:
         displayed = {name: None if value is None else value * factors.get(name, 1) for name, value in raw.items()}
         return {"raw": raw, "table": displayed, "status": status, "backend": self.metadata}
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

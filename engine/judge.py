@@ -145,5 +145,5 @@ class ClipJudge:
     def stats(self):
         return {"evaluations": self.evaluations, "imagecalls": self.imagecalls, "imagesamples": self.imagesamples}
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

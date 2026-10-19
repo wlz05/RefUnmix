@@ -74,5 +74,5 @@ def runs(encoded, shape):
         raise ValueError("RLE mask runs exceed their declared geometry.")
     return total
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

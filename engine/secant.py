@@ -68,5 +68,5 @@ def defect(actual, predicted):
         raise ValueError("Response disagreement exceeded numerical range.")
     return {"absolute": error, "relative": error / denominator}
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

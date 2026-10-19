@@ -23,5 +23,5 @@ def design(observed=("sourcezero", "targetzero", "targetfield")):
             coefficients[name] = (value @ inverse).tolist()
     return {"observed": list(observed), "matrix": rows.tolist(), "rank": rank, "nullity": 4 - rank, "kernel": vectors[rank:].tolist(), "identifiable": identifiable, "coefficients": coefficients, "fullinverse": np.linalg.inv(matrix).tolist(), "scope": "Exact finite endpoint contrasts, including nonlinear interactions; rank does not imply pure semantic effects."}
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com
