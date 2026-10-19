@@ -1,8 +1,8 @@
 # RefUnmix: Endpoint-Aligned Fields for Protected Image Editing
 
-**RefUnmix** is a training-free image editing framework that aligns an editing field with the response of a frozen generator and controls the resulting edit under content-preservation constraints. It constructs a coupled pullback field from matched conditional contrasts, separates reference-dependent changes using matched endpoints, and selects an edit through finite-query response control.
+**RefUnmix** performs training-free image editing with a frozen diffusion or rectified-flow model. It estimates how the generator transforms an editing displacement, fits an endpoint-aligned field, and controls the edit while preserving protected content.
 
-The implementation provides native diffusion and rectified-flow interfaces, field and controller ablations, grouped dataset partitions, and independent evaluation interfaces. A one-step or few-step generator is the backbone; the complete controlled editor uses multiple queries. Candidate count, denoiser sample evaluations, forward calls, decoding, latency, and memory are recorded separately.
+RefUnmix uses one-step or few-step backbones with a finite-query controller. Reports include denoiser evaluations, forward calls, VAE decodes, latency, and peak memory.
 
 ---
 
@@ -26,10 +26,9 @@ Source image + source caption + target caption
 
 ### Key Contributions
 
-- **Endpoint-Aligned Editing Field**: Fits a coupled inverse response in the conditional-contrast subspace so that an input displacement better matches the requested output displacement.
-- **Reference Compensation**: Uses matched native endpoints to distinguish source reconstruction drift from the direct target-conditioned response.
-- **Protected-Response Control**: Selects field strength and reference compensation from observed generator responses, with trust-region proposals, curvature monitoring, and explicit query budgets.
-- **Reproducible Evaluation**: Separates controller scores from final evaluation, freezes validation configurations before testing, and records checkpoint, source, and output hashes.
+- **Endpoint-Aligned Field**: Fits the editing displacement to the generator's measured endpoint response in a coupled conditional-contrast subspace.
+- **Reference Compensation**: Separates source reconstruction drift from the direct target-conditioned response using matched endpoints.
+- **Protected-Response Control**: Adjusts field strength and reference compensation under preservation constraints and a fixed query budget.
 
 ---
 
@@ -70,8 +69,6 @@ RefUnmix/
 `-- README.md
 ```
 
-All Python filenames contain lowercase letters only. Source folders are Python namespace packages without `__init__.py`. Every Python file has a UTF-8 declaration, a project title, and an author footer. Single blank lines separate logical code blocks.
-
 ---
 
 ## Requirements
@@ -87,37 +84,35 @@ All Python filenames contain lowercase letters only. Source folders are Python n
 
 ### Installation
 
-Install a CUDA-compatible PyTorch build for your system, then install the remaining dependencies in a dedicated environment:
+Install PyTorch with CUDA support, then install the dependencies:
 
 ```bash
 python -m pip install numpy pillow scipy diffusers transformers accelerate safetensors sentencepiece protobuf
 ```
 
-Optional dataset and interface dependencies:
+For saved Hugging Face datasets and the Gradio interface:
 
 ```bash
 python -m pip install datasets pyarrow gradio
 ```
 
-PyTorch must be installed separately if it is not already available. The runtime report records the actual package versions used for each experiment.
-
 ### Hardware and Random Seeds
 
-The reference experiment setup uses **one NVIDIA GeForce RTX 4090** and random seeds **42, 52, 3047, and 3407**. Single-image inference defaults to seed 42. Dataset evaluation and trials accept all four through `--seeds 42 52 3047 3407`.
+Experiments use **one NVIDIA GeForce RTX 4090** and seeds **42, 52, 3047, and 3407**. Single-image inference defaults to 42. For dataset experiments, use `--seeds 42 52 3047 3407`.
 
-Use the same source groups, seeds, model weights, precision, and budgets across compared methods. Keep the dataset partition seed separate from inference seeds. Large flow checkpoints may exceed single-card memory; the interface does not automatically offload or quantize them.
+Dataset partitions remain fixed across seeds. Large flow checkpoints may require more memory than a single RTX 4090; automatic offloading and quantization are not implemented.
 
 ---
 
 ## Pretrained Models
 
-No RefUnmix training stage is required. Download the frozen backbone and control scorer separately, following their respective access and usage terms. Native loading is local-only and does not silently download missing weights.
+Download the backbone and control scorer before running. All checkpoints are loaded from local directories.
 
-For `--backbone vp`, place a compatible SD-Turbo-style diffusion checkpoint in `models/` with its native `unet/`, `vae/`, `scheduler/`, `tokenizer/`, and `text_encoder/` components. A `text/` folder is also supported. A bare UNet weight file is insufficient.
+For `--backbone vp`, place a compatible SD-Turbo-style checkpoint in `models/`, including `unet/`, `vae/`, `scheduler/`, `tokenizer/`, and `text_encoder/`. The text encoder can also be stored in `text/`.
 
-For controlled editing, place a compatible Transformers CLIP model and processor in `clip/`. Raw-field and fixed-reference modes do not require a CLIP control model. A report-only CLIP scorer, if used, must have different checkpoint weights from the controller.
+Place a Transformers CLIP model and processor in `clip/` for controlled editing. The `raw` and `fixed` modes run without CLIP. Evaluation with `--evalclip` requires a separate checkpoint from the control scorer.
 
-`--backbone flux` and `--backbone sd3` load their corresponding complete native pipelines. They require the actual transformer, VAE, scheduler, tokenizers, and text encoders for that architecture. Changing this flag does not convert a diffusion checkpoint into a flow checkpoint or distill a multistep model into a one-step model.
+For `--backbone flux` or `--backbone sd3`, provide the corresponding pipeline with its transformer, VAE, scheduler, tokenizers, and text encoders. The checkpoint determines the supported continuation schedule.
 
 ### Workspace Layout
 
@@ -135,7 +130,7 @@ workspace/
 `-- outputs/            # Generated results and reports
 ```
 
-All configured paths are relative to the current working directory. Absolute paths and parent-directory escapes are rejected. **Run the following inference commands from `workspace/`, not from inside `RefUnmix/`.** Use a new output name for every run; existing outputs are not overwritten.
+**Run inference from `workspace/`.** Paths are relative to this directory; absolute paths and `..` are rejected. Outputs must use a new file or directory name.
 
 ---
 
@@ -147,7 +142,7 @@ All configured paths are relative to the current working directory. Absolute pat
 git clone https://github.com/wlz05/RefUnmix.git
 ```
 
-Stay in the parent workspace and prepare `models/`, `clip/`, and `input.png` as described above.
+Place `models/`, `clip/`, and `input.png` alongside the checkout.
 
 ### 2. Check Local Inputs
 
@@ -155,7 +150,7 @@ Stay in the parent workspace and prepare `models/`, `clip/`, and `input.png` as 
 python -B RefUnmix/doctor.py --model models --clip clip --device cuda --precision fp16
 ```
 
-The preflight checks local dependencies and checkpoint structure without performing model inference.
+This checks dependencies and checkpoint structure without loading model weights.
 
 ### 3. Edit One Image
 
@@ -163,7 +158,7 @@ The preflight checks local dependencies and checkpoint structure without perform
 python -B RefUnmix/main.py --image input.png --source "A person wearing a blue shirt." --target "A person wearing a striped shirt." --model models --clip clip --device cuda --precision fp16 --field pullback --method path --prior off --maxsamples 15 --maxcalls 15 --candidates 12 --seed 42 --no-control --no-heldout --output outputs/result.png --report outputs/result.json
 ```
 
-`--source` and `--target` are captions of the source and desired image, not interchangeable with a free-form edit instruction. The JSON report includes the selected controls, actual cost, checkpoint metadata, and reproducibility information.
+Provide source and target image captions through `--source` and `--target`. Each run saves the edited image and a JSON report containing controls, inference costs, and checkpoint hashes.
 
 ### 4. Compare Field-Only and Fixed-Reference Modes
 
@@ -172,7 +167,7 @@ python -B RefUnmix/main.py --image input.png --source "A person wearing a blue s
 python -B RefUnmix/main.py --image input.png --source "A person wearing a blue shirt." --target "A person wearing a striped shirt." --model models --device cuda --precision fp16 --field pullback --method fixed --axes none --eta 0 --prior off --seed 42 --output outputs/fixed.png --report outputs/fixed.json
 ```
 
-The examples explicitly disable optional consistency priors. Enable them only for the corresponding supported backend and include their queries in the total budget.
+These commands use `--prior off`. Optional consistency priors consume additional model queries.
 
 ### Arguments
 
@@ -196,13 +191,13 @@ The examples explicitly disable optional consistency priors. Enable them only fo
 | `--geometry` | `output` | Compensation geometry: output, latent, attenuate |
 | `--axes` | `all` | Active control coordinates |
 
-Run `python -B RefUnmix/main.py --help` for the complete interface. A low hard budget can trigger the documented field fallback or shorten search; inspect the recorded actual field and cost rather than equating a candidate budget with completed queries.
+See `python -B RefUnmix/main.py --help` for all options. The report records the field used and the completed queries when a budget limit shortens execution.
 
 ---
 
 ## Dataset Format and Split Provenance
 
-The native mapping accepts an object or a list of records. For example, `data/mapping.json` can contain:
+Store annotations as a JSON object or a list of records. Example `data/mapping.json`:
 
 ```json
 {
@@ -217,9 +212,9 @@ The native mapping accepts an object or a list of records. For example, `data/ma
 }
 ```
 
-With `--dataset data --images images`, the image resolves to `data/images/source.png`. Records derived from the same source must share a group. Field names and path matching are case-insensitive; ambiguous case collisions are rejected. Caption content is preserved.
+With `--dataset data --images images`, `source.png` resolves to `data/images/source.png`. Assign edits of the same source image to one group. Field names and paths are matched case-insensitively.
 
-`prepare.py` provides local conversion interfaces for **PIE**, **Emu Edit**, **MagicBrush**, **ImgEdit**, and **GEdit**. It does not download datasets. Instruction-only records require a source/target caption sidecar; inspect its format with:
+`prepare.py` converts local **PIE**, **Emu Edit**, **MagicBrush**, **ImgEdit**, and **GEdit** annotations. For instruction-only records, supply a JSON sidecar with source and target captions. Print an example with:
 
 ```bash
 python -B RefUnmix/prepare.py --kind emu --template
@@ -234,7 +229,7 @@ python -B RefUnmix/split.py --dataset data --mapping mapping.json --images image
 python -B RefUnmix/doctor.py --dataset data --mapping mapping.json --images images --manifest outputs/split.json --split val --model models --clip clip
 ```
 
-The custom default ratios are 0.70/0.15/0.15. They are a development protocol, not an official PIE-Bench split. Use `--protocol official` only when the input supplies official partition tags; the implementation preserves those tags and checks source-group leakage. A train partition is a dataset interface, not a requirement to train RefUnmix.
+Custom splits use train/validation/test ratios of 0.70/0.15/0.15. For datasets with official partition tags, use `--protocol official` to preserve them. Source groups are kept disjoint. RefUnmix requires no training on the train partition.
 
 ### Four-Seed Dataset Evaluation
 
@@ -242,7 +237,7 @@ The custom default ratios are 0.70/0.15/0.15. They are a development protocol, n
 python -B RefUnmix/evaluate.py --dataset data --mapping mapping.json --images images --manifest outputs/split.json --split test --model models --clip clip --device cuda --precision fp16 --prior off --maxsamples 15 --maxcalls 15 --candidates 12 --seeds 42 52 3047 3407 --output outputs/evaluation
 ```
 
-Use `--split all` without a manifest when evaluating a complete benchmark release. Official edit-region annotations are evaluation inputs; exposing them to the controller requires the explicit `--oracle` option and should be reported separately.
+Use `--split all` without a manifest to evaluate a complete release. Edit-region annotations are used for evaluation; `--oracle` also exposes them to the controller.
 
 ---
 
@@ -265,13 +260,13 @@ Compare matched full-controller outputs:
 python -B RefUnmix/evidence.py --reference outputs/fieldtest/chordfull/summary.json --comparison outputs/fieldtest/pullbackfull/summary.json --contrast field --output outputs/comparison.json
 ```
 
-Report the equal-budget frontier across sample-evaluation limits, together with actual forward calls, VAE decodes, wall-clock latency, and peak memory. The built-in `chord` field is a matched field ablation, not a replacement for reproducing the original ChordEdit release under its own protocol.
+For equal-budget comparisons, vary `--maxsamples` and report quality alongside forward calls, VAE decodes, latency, and peak memory. The built-in `chord` field is the field-level ablation; full ChordEdit comparisons use its original implementation.
 
 ### Independent Evaluation
 
-`evaluate.py` exports per-image outputs and diagnostic summaries. Its pixel, frequency, and controller scores are not official PIE metric implementations.
+`evaluate.py` exports edited images and diagnostic scores. Official PIE scoring is run separately through `assess.py` with a metric adapter supplied via `--protocol`.
 
-`assess.py` loads a separately supplied, verified official PIE metric adapter through `--protocol`. `report.py` generates independent task-annotation templates, and `blind.py` exports anonymized comparisons. Use these interfaces to report edit completion, protected-content preservation, and image quality after output selection. Do not reuse controller scores as independent evidence of task completion.
+For independent task assessment, `report.py` creates annotation templates and `blind.py` exports anonymized comparisons. These assessments measure edit completion, preservation, and image quality after output selection, separately from the control scorer.
 
 ### Tests
 
@@ -282,15 +277,14 @@ cd RefUnmix
 python -B -m unittest discover -s tests -p '*.py' -q
 ```
 
-Unit tests check algebra, constraints, budgets, image formats, dataset conversion, and fallback behavior. Real-image experiments additionally require the local checkpoints and benchmark data described above.
+The suite covers field construction, control constraints, query accounting, image formats, and dataset conversion.
 
 ---
 
 ## Implementation Details
 
-- All backbone parameters remain frozen. Field construction uses paired conditional predictions and native endpoint probes, not additional model training.
-- The main path uses a coupled low-dimensional inverse fit, matched reference endpoints, and response-aware control. Legacy frequency-only experiments remain available in separate CLI modes and are not the default method.
-- The default contrast times are 0.90 and 0.75. They are configurable noise coordinates, not universal optimal times or image-frequency labels. Flow backends use their declared sigma/velocity convention.
-- Candidate evaluations, batched denoiser samples, forward calls, and continuation steps are different quantities. Optional priors and probes add work and are included in the recorded accounting.
-- Image inputs use explicit RGB conversion and aligned EXIF handling. Masks require declared geometry; ambiguous labels and malformed RLE are rejected.
-- Deterministic mode records its runtime controls. Cross-device or cross-version bitwise equality is not implied by using the same seed.
+Backbone parameters remain frozen throughout editing. Conditional contrasts at times 0.90 and 0.75 define the default field subspace; `--start` and `--delta` set these times. Endpoint probes fit a coupled inverse response within this subspace. The controller then adjusts the field and reference path using observed outputs.
+
+`--poststeps` sets the steps in each native continuation. `--maxsamples` and `--maxcalls` limit denoiser sample evaluations and forward calls, including optional probes and priors. The candidate budget is set independently by `--candidates`.
+
+Inputs are converted to RGB with EXIF orientation applied consistently to images and masks. Deterministic execution is available through `--deterministic`; reports store the runtime settings and package versions.
