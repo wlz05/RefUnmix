@@ -156,5 +156,5 @@ def capacity(model, radius, lower, damage, reference, scales, indices, ridge=1e-
     consistent = bool(valid and math.isfinite(low) and math.isfinite(high) and high >= low - tolerance)
     return {"full": {key: value for key, value in full.items() if key != "move"}, "field": {key: value for key, value in field.items() if key != "move"}, "verified": consistent, "incrementlower": low if consistent else None, "incrementupper": max(low, high) if consistent else None, "positiveidentified": bool(consistent and low > tolerance), "iterations": full["iterations"] + field["iterations"], "tolerance": tolerance, "scope": "Same frozen protected model and all floors; missing is not zero."}
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

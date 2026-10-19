@@ -45,5 +45,5 @@ class Budget:
     def report(self):
         return {"maximum": self.maximum, "calllimit": self.calls, "walllimit": self.seconds, "samples": self.used, "calls": self.forwards, "remaining": self.maximum - self.used, "elapsed": perf_counter() - self.started, "stages": {key: dict(value) for key, value in self.stages.items()}}
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

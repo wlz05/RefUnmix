@@ -139,5 +139,5 @@ class FrequencyRouter:
         protected = (1.0 - mask.float()) * (result - anchor).square().mean(dim=1, keepdim=True).sqrt()
         return {"proxyhh": hh, "proxyhl": hl, "proxyll": ll, "protected": protected}
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

@@ -75,5 +75,5 @@ def snapshot():
         result["torch"] = {"cuda": torch.version.cuda, "cudnn": torch.backends.cudnn.version(), "deterministic": torch.are_deterministic_algorithms_enabled(), "warnonly": torch.is_deterministic_algorithms_warn_only_enabled(), "benchmark": torch.backends.cudnn.benchmark, "matmultf32": torch.backends.cuda.matmul.allow_tf32, "cudnntf32": torch.backends.cudnn.allow_tf32, "threads": torch.get_num_threads(), "gpus": [torch.cuda.get_device_name(index) for index in range(torch.cuda.device_count())] if torch.cuda.is_available() else []}
     return result
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

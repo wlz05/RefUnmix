@@ -294,5 +294,5 @@ def collect(editor, judge, items, configs, seeds, groups, local=0.5, completed=N
                 scoring = time.perf_counter() - started
                 yield {"key": item.key, "group": groups[item.key], "category": item.category, "seed": seed, "config": name, **scores, "original": originalscore, "editgain": scores["semantic"] - originalscore, "seconds": elapsed, "scoreseconds": scoring, **result.report, "frequency": final, "probes": probes}
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

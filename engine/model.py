@@ -428,5 +428,5 @@ class Editor:
             maps.update(router.audit(anchor, latent, maps["target"], maps["mask"]))
         return Result(self.decode(latent), latent.detach().cpu(), {key: value.detach().cpu() for key, value in maps.items()}, {"calls": self.calls, "samples": self.samples})
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

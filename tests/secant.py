@@ -69,5 +69,5 @@ class SecantTests(unittest.TestCase):
         self.assertEqual(row["factorial:singlevalidjointinvalid"], 1.)
         self.assertEqual(row["factorial:semantic:score"], -.03)
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

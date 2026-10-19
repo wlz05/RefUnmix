@@ -97,5 +97,5 @@ def dictionary(base: torch.Tensor, current: torch.Tensor, pool: dict[float, torc
                 output.append(atom)
     return output
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

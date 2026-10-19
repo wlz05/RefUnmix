@@ -65,5 +65,5 @@ def safeguard(candidate, fallback, origin, mask, scores, reference, slack=0., mi
     selected = candidate if accepted else fallback
     return selected, {"accepted": accepted, "semanticvalid": semantic, "improves": improves, "protectedvalid": protection.valid, "rawscores": reference, "candidatescores": scores, "rawdamage": original, "candidatedamage": changed, "damagechange": changed - original if protection.valid else None, "scores": scores if accepted else reference, "audit": protection.audit(selected), "rule": "Every recorded semantic score must retain the raw baseline while protected damage decreases."}
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

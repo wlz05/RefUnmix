@@ -356,5 +356,5 @@ def select(base, render, score, origin, mask, config=None, pool=None, transport=
     report.update({"gain": selectedscores["score"] - baseline["score"], "damagechange": selecteddamage - damage, "scores": selectedscores, "audit": protection.audit(selectedimage)})
     return finish(selectedfield, selectedimage, "Verified signed field repair." if not report["fallback"] else "All projected repairs failed actual output checks.")
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

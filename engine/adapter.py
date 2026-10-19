@@ -82,5 +82,5 @@ def load(value, session):
         raise ValueError("Native adapters must preserve the metered session.")
     return native
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

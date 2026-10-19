@@ -274,5 +274,5 @@ class ThreadRouter:
     def clip(self, tensor: torch.Tensor, cap: torch.Tensor) -> torch.Tensor:
         return tensor * torch.minimum(torch.ones_like(cap), cap / (self.norm(tensor) + self.config.epsilon))
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

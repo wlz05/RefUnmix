@@ -95,5 +95,5 @@ class Prior:
             return self.flow.metadata()
         return {"kind": self.mode, "probes": self.probes if self.mode != "off" else 0, "ticks": self.ticks, "seed": self.seed, "weights": self.weights, "probabilities": self.probabilities, "variance": self.variance, "evaluations": self.evaluations, "note": "Finite denoising consistency is not likelihood or quality."}
 
-# Author: Weiliang Zhu 2026
+# Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com
