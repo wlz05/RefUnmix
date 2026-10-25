@@ -151,6 +151,18 @@ def costs(rows):
         result[key] = {"mean": float(np.mean(values)), "median": float(np.median(values)), "p95": float(np.percentile(values, 95)), "sources": len(values)}
     return {"metrics": result, "scope": "Per-source seed averages; synchronized per-image inference excludes checkpoint loading and independent report scoring."}
 
+def coverage(rows):
+    # Count executed mechanisms separately from enabled switches.
+    reports = [row.get("report", {}) for row in rows if row.get("report", {}).get("method") == "path"]
+    result = {"requests": len(reports), "initialized": sum(report.get("initialization", {}).get("complete") is True for report in reports), "searched": sum(len(report.get("candidates", [])) > report.get("initialization", {}).get("evaluated", 0) for report in reports), "rawfallback": sum(report.get("fallback") is True for report in reports), "emptyprotection": sum(report.get("protectedvalid") is False for report in reports)}
+    for key in ("release", "rescue"):
+        records = [report.get(key, {}) for report in reports]
+        result[key] = {"enabled": sum(record.get("enabled") is True for record in records), "queried": sum(record.get("queries", 0) > 0 for record in records), "accepted": sum(record.get("accepted", 0) > 0 for record in records), "queries": sum(record.get("queries", 0) for record in records)}
+    heads = [key for report in reports for key in report.get("attainment", {}).get("bottlenecks", [])]
+    result["bottlenecks"] = {key: heads.count(key) for key in sorted(set(heads))}
+    result["scope"] = "All image-seed requests; counts describe execution rather than independent quality."
+    return result
+
 def sync(device):
     import torch
     if torch.cuda.is_available() and str(device).startswith("cuda"):
@@ -229,6 +241,7 @@ def execute(args, resources=None):
             del edited, session, mask
     payload = {"schema": 1, "split": args.split, "manifest": args.manifest, "oracle": args.oracle, "independentcheckpoint": independent, "controlcheckpoint": getattr(judge, "metadata", None), "reportcheckpoint": getattr(evaluation, "metadata", None), "evaluatornote": "Different CLIP weights remain shared-family diagnostics, not independent task evidence.", "metricnote": "Pixel, band, and paired errors are diagnostics, not official benchmark protocols.", "settings": settings, "seeds": seeds, "inputs": provenance, "reproducibility": snapshot(), "summary": summary(rows), "categories": {category: summary([row for row in rows if row["category"] == category]) for category in sorted({row["category"] for row in rows})}, "rows": rows}
     payload["cost"] = costs(rows)
+    payload["controller"] = coverage(rows)
     statuses = [row["report"].get("field", {}) for row in rows]
     payload["fields"] = {"requested": args.field, "requests": len(rows), "actual": {kind: sum(value.get("actual") == kind for value in statuses) for kind in sorted({value["actual"] for value in statuses if "actual" in value})}, "budgetfallback": sum(value.get("status") == "budget" for value in statuses), "budgetstopped": sum(bool(row["report"].get("budgetstopped")) for row in rows), "sourcefallback": sum(bool(row["report"].get("budgetstopped")) and row["report"].get("selected") == "source" for row in rows)}
     writejson(output / "summary.json", payload)

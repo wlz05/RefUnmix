@@ -40,6 +40,15 @@ def grouped(rows, field):
         result["psnr"] = {"mean": None, "count": finite + len(infinite), "infinite": len(infinite), "status": "positive infinity"}
     return result
 
+def coverage(rows):
+    # Keep undefined regions visible in every metric denominator.
+    metrics = sorted({key for row in rows for key in row.get("status", {})})
+    result = {}
+    for metric in metrics:
+        states = sorted({row.get("status", {}).get(metric, "missing status") for row in rows})
+        result[metric] = {state: {"rows": sum(row.get("status", {}).get(metric, "missing status") == state for row in rows), "sources": sorted({str(row["key"]) for row in rows if row.get("status", {}).get(metric, "missing status") == state})} for state in states}
+    return result
+
 def main():
     args = parser().parse_args()
     source = locate(Path("."), clean(args.input, "input"))
@@ -84,6 +93,7 @@ def main():
         output.append({"key": item.key, "seed": pair[1], "category": item.category, "image": row["image"], **result})
         print(json.dumps({"key": item.key, "seed": pair[1], "table": result["table"]}, allow_nan=False), flush=True)
     result = {"schema": 1, "protocol": "public PIE metric interface", "settings": vars(args), "inputsha256": hashlib.sha256(source.read_bytes()).hexdigest(), "backend": backend.metadata, "raw": grouped(output, "raw"), "table": grouped(output, "table"), "rows": output, "note": "Seeds are averaged per image; undefined and infinite PSNR values remain null with explicit status."}
+    result["coverage"] = coverage(output)
     writejson(destination, result)
 
 if __name__ == "__main__":

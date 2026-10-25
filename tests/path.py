@@ -242,9 +242,9 @@ class PathTests(unittest.TestCase):
         path = self.path()
         prior = Prior(path.session)
         result = select(path, lambda image: {"score": float(image.mean())}, torch.zeros_like(path.session.origin[:, :1]), prior)
-        self.assertTrue(result.report["fallback"])
         self.assertFalse(result.report["protectedvalid"])
-        self.assertEqual(prior.evaluations, 0)
+        self.assertEqual(result.report["damage"], 0.)
+        self.assertGreater(prior.evaluations, 0)
 
     def testrawfallback(self):
         path = self.path()
@@ -266,7 +266,7 @@ class PathTests(unittest.TestCase):
         self.assertEqual(session.limit.used, 5)
 
     def testmainpipeline(self):
-        args = common(argparse.ArgumentParser()).parse_args(["--clip", "clip", "--size", "16", "--candidates", "12", "--heldout", "--control"])
+        args = common(argparse.ArgumentParser()).parse_args(["--clip", "clip", "--size", "16", "--candidates", "12", "--prior", "rec", "--heldout", "--control"])
         image = Image.new("RGB", (16, 16), (96, 128, 160))
         mask = Image.new("L", (16, 16), 128)
         output, report, session = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args, mask)

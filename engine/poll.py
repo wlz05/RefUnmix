@@ -173,6 +173,8 @@ def select(path, score, weight, prior, config=None):
     config.validate()
     session = path.session
     damage, mass = protection(session.origin, weight)
+    if mass <= 0:
+        damage = lambda image: 0.
     rawlatent, rawimage = path.raw()
     raw = Candidate("raw", None, rawlatent, rawimage, feedback(score(rawimage)), damage(rawimage), feasible=True, complete=True)
     if config.archive:
@@ -190,15 +192,33 @@ def select(path, score, weight, prior, config=None):
     scales = np.array([config.scales.get(key, config.semanticscale) for key in names])
     candidates, history, visited = [], [], set()
     stopped = "candidate limit"
-    if mass <= 0 or raw.damage == 0 and config.selection == "protect":
+    if raw.damage == 0 and config.selection == "protect":
         return Result(rawimage, rawlatent, {"selected": "raw", "fallback": True, "protectedvalid": mass > 0, "reason": "No reducible protected damage.", "scores": raw.scores, "damage": raw.damage, "rawdamage": raw.damage, "evaluations": 1, "candidates": [], "constraintmet": True, "prior": {"queried": False}})
+    requested = (0, 1, 2) if config.axes == "all" else (0, 1) if config.axes == "field" else (2,) if config.axes == "path" else ()
     try:
         raw.prior = prior(rawlatent)
         raw.penalty, raw.objective = 0., raw.damage
-        path.initialize()
+        references = (0., 1.) if 2 in path.axes(requested) else (config.eta,)
+        path.initialize(references) if hasattr(path, "cost") else path.initialize()
     except Exhausted as error:
-        return Result(rawimage, rawlatent, {"selected": "raw", "fallback": True, "protectedvalid": True, "reason": str(error), "scores": raw.scores, "damage": raw.damage, "rawdamage": raw.damage, "evaluations": 1, "candidates": [], "constraintmet": True, "prior": prior.metadata(), "budget": session.limit.report() if session.limit is not None else None})
+        return Result(rawimage, rawlatent, {"selected": "raw", "fallback": True, "protectedvalid": mass > 0, "reason": str(error), "scores": raw.scores, "damage": raw.damage, "rawdamage": raw.damage, "evaluations": 1, "candidates": [], "constraintmet": True, "prior": prior.metadata(), "initialization": {"evaluated": 0, "complete": False}, "budget": session.limit.report() if session.limit is not None else None})
     cap = config.priorweight * raw.damage
+
+    def costs(point):
+        samples, calls = path.cost(point) if hasattr(path, "cost") else (0, 0)
+        extra = prior.cost() if hasattr(prior, "cost") else (0, 0)
+        return samples + extra[0], calls + extra[1]
+
+    def affordable(point, reserve=False):
+        limit = session.limit
+        if limit is None or not hasattr(path, "cost"):
+            return True
+        samples, calls = costs(point)
+        if reserve and (samples > 0 or calls > 0):
+            extra = prior.cost() if hasattr(prior, "cost") else (0, 0)
+            samples += 2 * (path.native.cost(0.) + extra[0])
+            calls += 2 * (path.native.queries() + extra[1])
+        return limit.used + samples <= limit.maximum and (limit.calls is None or limit.forwards + calls <= limit.calls)
 
     def complete(candidate):
         candidate.prior = prior(candidate.latent)
@@ -221,6 +241,8 @@ def select(path, score, weight, prior, config=None):
         point = path.canonical(tuple(min(limit, max(0., float(value))) for value, limit in zip(point, (2., 2., 1.))))
         if point in visited or len(candidates) >= config.candidates:
             return None
+        if session.limit is not None:
+            session.limit.require(*costs(point))
         visited.add(point)
         latent, pixels = path.candidate(point)
         scores = feedback(score(pixels))
@@ -264,11 +286,10 @@ def select(path, score, weight, prior, config=None):
         if config.selection == "attain":
             if candidate.taskgain > anchor.taskgain + config.gainloss:
                 return True
-            if candidate.taskgain < anchor.taskgain:
+            if candidate.taskgain < max(0., anchor.taskgain - config.gainloss):
                 return False
         return bool(candidate.objective < anchor.objective)
 
-    requested = (0, 1, 2) if config.axes == "all" else (0, 1) if config.axes == "field" else (2,) if config.axes == "path" else ()
     active = path.axes(requested)
     continuous = tuple(axis for axis in active if axis != 2 or path.native.continuous)
     initial = (0., .5, 1.) if 2 in active and path.native.continuous else (0., 1.) if 2 in active else (config.eta,)
@@ -279,7 +300,7 @@ def select(path, score, weight, prior, config=None):
     initialleverage = None
     generator = np.random.default_rng(path.seed ^ 0xC91)
     fixed = functional.interpolate(weight.detach().to(session.origin.device).double(), session.origin.shape[-2:], mode="bilinear", align_corners=False)
-    root = (fixed / mass).sqrt()
+    root = (fixed / mass).sqrt() if mass > 0 else torch.zeros_like(fixed)
     residuals = {}
 
     def residual(candidate):
@@ -287,16 +308,40 @@ def select(path, score, weight, prior, config=None):
             residuals[candidate.key] = ((candidate.image.double() - session.origin.double()) * root).detach().cpu().numpy().reshape(-1)
         return residuals[candidate.key]
 
+    middle = .5 if 2 in continuous else initial[0]
+    plan = [(1., 1., middle)]
+    if 2 in continuous:
+        plan.append((1., 1., 0.))
+    for axis in continuous:
+        if axis != 2:
+            point = [1., 1., middle]
+            point[axis] += radius
+            plan.append(tuple(point))
+    required = len(plan)
+    plan.extend((1., 1., eta) for eta in initial if eta != middle)
+    for axis in continuous:
+        if axis != 2:
+            point = [1., 1., middle]
+            point[axis] -= radius
+            plan.append(tuple(point))
+    initialization = {"planned": len(set(path.canonical(point) for point in plan)), "required": required, "evaluated": 0, "skipped": 0, "complete": False, "scope": "Independent directions precede optional symmetric probes; reserve two endpoint queries when affordable."}
+    initializing = True
     try:
-        for eta in initial:
-            visit((1., 1., eta))
-        middle = .5 if 2 in continuous else initial[0]
-        for axis in continuous:
-            if axis != 2:
-                for sign in (-1, 1):
-                    point = [1., 1., middle]
-                    point[axis] += sign * radius
-                    visit(point)
+        for index, point in enumerate(plan):
+            if session.limit is not None:
+                session.limit.require()
+            canonical = path.canonical(point)
+            if canonical in visited:
+                continue
+            optional = index >= required
+            reserved = config.candidates >= required + 2 and len(candidates) >= config.candidates - 2
+            if not affordable(canonical, optional) or optional and reserved:
+                initialization["skipped"] += 1
+                continue
+            visit(point)
+        initialization["evaluated"] = len(candidates)
+        initialization["complete"] = all(path.canonical(point) in visited for point in plan[:required])
+        initializing = False
         anchor = center()
         while len(candidates) < config.candidates and radius >= config.minimum and continuous:
             if anchor is None:
@@ -375,8 +420,26 @@ def select(path, score, weight, prior, config=None):
                 history.append({"kind": "model", "radius": radius, "model": model.metadata(), "certificate": certificate, "curvature": monitoring, "leverage": leverage, "reason": "No unvisited safeguarded proposal." if rescue else "No valid local proposal."})
                 radius *= .5
                 continue
+            budgetfallback = False
+            if not affordable(point):
+                # Reuse one cached endpoint when a joint query cannot fit.
+                fieldpoint, referencepoint = list(point), list(anchor.point)
+                fieldpoint[2], referencepoint[2] = anchor.point[2], point[2]
+                alternatives = [fieldpoint, referencepoint]
+                for axis in continuous:
+                    for sign in (-1, 1):
+                        trial = list(anchor.point)
+                        trial[axis] = min(1. if axis == 2 else 2., max(0., trial[axis] + sign * radius / model.root[list(model.active).index(axis)]))
+                        alternatives.append(trial)
+                point = next((path.canonical(value) for value in alternatives if path.canonical(value) not in visited and affordable(path.canonical(value))), None)
+                if point is None:
+                    stopped = "No unvisited candidate fits the remaining model budget."
+                    history.append({"kind": "budget", "radius": radius, "reason": stopped, "queried": False})
+                    break
+                budgetfallback, rescue, compensated, proposed = True, not repair, None, None
             current = visit(point)
             record = {"kind": "geometry" if repair else "compensation" if compensated is not None else "fallback" if rescue else "release" if proposed is not None and proposed["solver"].get("operator") == "release" else "trust", "radius": radius, "center": list(anchor.point), "point": list(point), "model": model.metadata(), "certificate": certificate, "curvature": monitoring, "leverage": leverage}
+            record["budgetfallback"] = budgetfallback
             if proposed is not None:
                 record["solver"] = proposed["solver"]
             if config.geometry == "latent":
@@ -385,16 +448,17 @@ def select(path, score, weight, prior, config=None):
                 record["reason"] = "Duplicate effective candidate."
                 radius *= .5
             elif repair:
-                if not anchor.feasible and current.feasible:
+                accepted = better(current, anchor)
+                if accepted:
                     anchor = current
-                record["accepted"] = False
+                record["accepted"] = accepted
                 record["reason"] = "Geometry query retained as a real response."
             else:
                 move = np.asarray(current.point)[model.active] - np.asarray(anchor.point)[model.active]
                 lastmove = move
                 predicted, semantic, penalty = model.prediction(move, None if config.priorcontrol == "soft" else cap)
                 observederror = guard.observe(model, move, residual(current), [current.scores[key] for key in names], scales, max(raw.damage, 1e-8))
-                record.update({"predicted": predicted, "actual": current.damage, "responseerror": float(np.linalg.norm(residual(current) - model.residual - model.response @ move)), "semanticerror": float(np.linalg.norm(np.array([current.scores[key] for key in names]) - semantic)), "observation": observederror, "piece": "compensated reference poll" if compensated is not None else "signed response poll" if rescue else proposed["piece"], "converged": None if rescue else proposed["converged"]})
+                record.update({"predicted": predicted, "actual": current.damage, "responseerror": float(np.linalg.norm(residual(current) - model.residual - model.response @ move)), "semanticerror": float(np.linalg.norm(np.array([current.scores[key] for key in names]) - semantic)), "observation": observederror, "piece": "cached endpoint poll" if budgetfallback else "compensated reference poll" if compensated is not None else "signed response poll" if rescue else proposed["piece"], "converged": None if rescue else proposed["converged"]})
                 if rescue:
                     accepted = better(current, anchor)
                     record.update({"accepted": accepted, "ratio": None, "reason": "Real response acceptance without a reliable model ratio."})
@@ -402,6 +466,8 @@ def select(path, score, weight, prior, config=None):
                         anchor = current
                         lastmove = None
                         guard.accepted()
+                    else:
+                        radius *= .5
                 elif anchor.feasible:
                     decrease = proposed["start"] - proposed["predicted"]
                     gainphase = proposed.get("phase") == "attainment"
@@ -442,15 +508,22 @@ def select(path, score, weight, prior, config=None):
             stopped = "minimum trust radius; empirical stagnation, not certified convergence"
     except Exhausted as error:
         stopped = str(error)
+        if initializing:
+            initialization["evaluated"] = len(candidates)
     feasible = [raw] + [candidate for candidate in candidates if candidate.feasible]
     selected, attainment = choose(feasible, config.gainloss, config.selection)
-    report = {"selected": selected.key, "point": list(selected.point) if selected.point else None, "fallback": selected is raw, "protectedvalid": True, "constraintmet": True, "reason": stopped, "scores": selected.scores, "rawscores": raw.scores, "damage": selected.damage, "rawdamage": raw.damage, "damagechange": selected.damage - raw.damage, "penalty": selected.penalty, "objective": selected.objective, "maximumpriorbias": cap if config.priorcontrol == "bounded" else None, "gain": sum(selected.scores.values()) - sum(raw.scores.values()), "evaluations": len(candidates) + 1, "candidates": [candidate.row() for candidate in candidates], "raw": raw.row(), "history": history, "active": list(continuous), "config": asdict(config), "prior": prior.metadata(), "path": path.metadata(), "backend": path.native.metadata(), "budget": session.limit.report() if session.limit is not None else None, "scope": "Minimum actual bounded-prior objective among evaluated feasible candidates."}
+    report = {"selected": selected.key, "point": list(selected.point) if selected.point else None, "fallback": selected is raw, "protectedvalid": mass > 0, "constraintmet": True, "reason": stopped, "scores": selected.scores, "rawscores": raw.scores, "damage": selected.damage, "rawdamage": raw.damage, "damagechange": selected.damage - raw.damage, "penalty": selected.penalty, "objective": selected.objective, "maximumpriorbias": cap if config.priorcontrol == "bounded" else None, "gain": sum(selected.scores.values()) - sum(raw.scores.values()), "evaluations": len(candidates) + 1, "candidates": [candidate.row() for candidate in candidates], "raw": raw.row(), "history": history, "active": list(continuous), "config": asdict(config), "prior": prior.metadata(), "path": path.metadata(), "backend": path.native.metadata(), "budget": session.limit.report() if session.limit is not None else None, "scope": "Minimum actual bounded-prior objective among evaluated feasible candidates."}
+    report["initialization"] = initialization
+    report["protection"] = {"active": mass > 0, "mass": mass, "scope": "Empty protection imposes zero damage and preserves semantic search."}
     report["curvature"] = guard.metadata()
     report["release"] = {"enabled": config.release and config.algorithm == "trust" and config.selection == "attain", "geometry": config.geometry, "queries": sum(row.get("kind") == "release" for row in history), "accepted": sum(row.get("kind") == "release" and row.get("accepted") is True for row in history), "scope": "Compensation proposals share protected-output verification and attainment selection."}
+    report["rescue"] = {"enabled": config.compensation, "queries": sum(row.get("kind") == "compensation" for row in history), "accepted": sum(row.get("kind") == "compensation" and row.get("accepted") is True for row in history), "scope": "Optional rescue probes are separate from the main release operator."}
     report["position"] = {"task": "Editing attainability under a fixed output protection budget", "method": "Frozen-generator inference-time reference-field control", "reference": "RefUnmix calibration is separate from the native raw editor", "coordinates": "Frequency amplitudes parameterize controls, not semantic categories", "cost": "Single-step backbones do not imply a single-query complete editor"}
     report["initialleverage"] = initialleverage
     report["radiusprofile"] = radiusinfo
     report["attainment"] = {**attainment, "goals": goals, "scales": {key: float(scales[names.index(key)]) for key in goals}, "retention": [key for key in names if key.startswith("retain")], "zero": "No weighted averaging of editing and retention requirements."}
+    changes = {key: (selected.scores[key] - raw.scores[key]) / scales[names.index(key)] for key in goals}
+    report["attainment"].update({"changes": changes, "bottlenecks": [key for key, value in changes.items() if value <= selected.taskgain + 1e-10]})
     report["commonpool"] = {mode: {"selected": chosen.key, **detail} for mode in ("attain", "protect") for chosen, detail in [choose(feasible, config.gainloss, mode)]}
     report["candidatearchive"] = {"enabled": config.archive, "images": len(candidates) + 1 if config.archive else 0, "scope": "Same-pool selector comparison; artifact labels never feed back into search."}
     report["scope"] = "Minimum actual bounded cost within the measured attainment band." if config.selection == "attain" else "Minimum actual bounded cost among evaluated feasible candidates."

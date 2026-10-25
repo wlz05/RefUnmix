@@ -393,7 +393,7 @@ class TrustTests(unittest.TestCase):
             self.assertFalse(report["backend"]["affine"])
 
     def testadapterpriorboundary(self):
-        args = common(argparse.ArgumentParser()).parse_args(["--clip", "clip", "--adapter", "native.py"])
+        args = common(argparse.ArgumentParser()).parse_args(["--clip", "clip", "--adapter", "native.py", "--prior", "ddpm"])
         with self.assertRaises(ValueError):
             validate(args)
         args.prior = "off"

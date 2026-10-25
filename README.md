@@ -186,10 +186,12 @@ These commands use `--prior off`. Optional consistency priors consume additional
 | `--maxsamples` | `64` | Maximum denoiser sample evaluations |
 | `--maxcalls` | unset | Optional limit on denoiser forward calls |
 | `--candidates` | `12` | Candidate-control budget; not an NFE count |
-| `--prior` | `ddpm` | Optional prior: ddpm, rec, flow, off |
+| `--prior` | `off` | Optional prior: ddpm, rec, flow, off |
 | `--algorithm` | `trust` | Trust-region, poll, or random control search |
 | `--geometry` | `output` | Compensation geometry: output, latent, attenuate |
 | `--axes` | `all` | Active control coordinates |
+| `--release` | on | Main protected-response reference-field compensation |
+| `--compensation` | off | Additional rescue probes after unreliable proposals |
 
 See `python -B RefUnmix/main.py --help` for all options. The report records the field used and the completed queries when a budget limit shortens execution.
 
@@ -259,7 +261,7 @@ RefUnmix achieves state-of-the-art image editing performance on **PIE-Bench**, w
 
 ### Baselines
 
-We compare against [ChordEdit](https://github.com/ChordEdit/ChordEdit), [SwiftEdit](https://github.com/Qualcomm-AI-research/SwiftEdit), and [FlowEdit](https://github.com/fallenshock/FlowEdit), covering one-step diffusion editing and inversion-free flow editing.
+We compare against [ChordEdit](https://github.com/ChordEdit/ChordEdit), [WhereEdit](https://github.com/Xi-Mu-Yu/WhereEdit), [PreciseEdit](https://arxiv.org/abs/2610.23535), [SwiftEdit](https://github.com/Qualcomm-AI-research/SwiftEdit), and [FlowEdit](https://github.com/fallenshock/FlowEdit), covering one-step diffusion editing and inversion-free flow editing.
 
 ### Evaluation Metrics
 
@@ -294,9 +296,31 @@ python -B RefUnmix/evidence.py --reference outputs/fieldtest/chordfull/summary.j
 
 For equal-budget comparisons, vary `--maxsamples` and report quality alongside forward calls, VAE decodes, latency, and peak memory. The built-in `chord` field is the field-level ablation; full ChordEdit comparisons use its original implementation.
 
+### Controller Ablations
+
+The main controller uses `--prior off --poststeps 1 --release --no-compensation --no-control --no-heldout`. Every suite shares this `full` configuration. `--release` enables the reference-field compensation operator; `--compensation` enables a separate rescue probe.
+
+| Suite | Intervention |
+|-------|--------------|
+| `release` | Main compensation versus the full joint QCQP proposal |
+| `leverage` | Additional rescue probes on or off |
+| `geometry` | Output, latent, or reference-only compensation geometry |
+| `budget` | Sample and call caps of 10, 12, 15, 20, and 30 |
+| `candidates` | Candidate caps of 8 and 24 under the same model budget |
+| `mechanism` | Continuation steps or decoder-only continuation |
+| `guidance` | CFG and guidance strength with a fixed prediction path |
+| `prior` | Explicit bounded, hard, and soft consistency priors |
+| `goals` | Global-direction, target-alignment, or joint editing goals |
+
+For a budget sweep, use the validation/test commands above with `--suite budget` and a new output directory. Validation recipes freeze the suite and seed set. Native step count, model-sample budget, and candidate count are separate controls. Changing the budget never changes the native sampler step count.
+
+Initialization acquires independent directions before adding symmetric probes. Optional probes reserve two endpoint queries and their enabled prior costs for subsequent control. Reports record initialization coverage, executed release and rescue queries, accepted proposals, and each semantic bottleneck in `summary.controller` and per-image reports. A switch being enabled does not imply that a corresponding query was executed.
+
 ### Independent Evaluation
 
 `evaluate.py` exports edited images and diagnostic scores. Official PIE scoring is run separately through `assess.py` with a metric adapter supplied via `--protocol`.
+
+Assessment exports metric-specific status counts and source lists in `coverage`. Empty protected regions remain undefined for preservation metrics; zero-error PSNR is recorded as positive infinity. Report each metric's valid denominator and its scaling alongside the complete request count.
 
 For independent task assessment, `report.py` creates annotation templates and `blind.py` exports anonymized comparisons. These assessments measure edit completion, preservation, and image quality after output selection, separately from the control scorer.
 
@@ -318,5 +342,9 @@ The suite covers field construction, control constraints, query accounting, imag
 Backbone parameters remain frozen throughout editing. Conditional contrasts at times 0.90 and 0.75 define the default field subspace; `--start` and `--delta` set these times. Endpoint probes fit a coupled inverse response within this subspace. The controller then adjusts the field and reference path using observed outputs.
 
 `--poststeps` sets the steps in each native continuation. `--maxsamples` and `--maxcalls` limit denoiser sample evaluations and forward calls, including optional probes and priors. The candidate budget is set independently by `--candidates`.
+
+The default sample cap is 64; the equal-budget experiments use explicit caps of 10, 12, 15, 20, and 30. Sample evaluations count conditioned branches, while forward calls count batches. Paper-reported batched NFE and sample evaluations are reported separately. At rank two, one noise draw, and one conditional step per endpoint, contrasts, field probes, the raw output, and the source reference require nine sample evaluations before initialization.
+
+Each candidate reserves all uncached endpoints and its optional prior before generation. When a joint update exceeds the remaining allowance, the controller tries an affordable update that reuses a cached field endpoint or reference and verifies the actual output. Only completed candidates enter final selection. Global edits with an empty protected region continue semantic search with zero protection cost.
 
 Inputs are converted to RGB with EXIF orientation applied consistently to images and masks. Deterministic execution is available through `--deterministic`; reports store the runtime settings and package versions.

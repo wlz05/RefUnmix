@@ -90,7 +90,7 @@ class GeometryTests(unittest.TestCase):
         self.assertFalse(controls["joint"]["release"])
         for name in ("output", "latent", "attenuated"):
             self.assertNotIn("candidates", controls[name])
-            self.assertNotIn("axes", controls[name])
+            self.assertEqual(controls[name]["axes"], "all")
 
     def testintegration(self):
         class Linear(Fake):

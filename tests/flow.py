@@ -256,10 +256,11 @@ class FlowTests(unittest.TestCase):
             Native(session, guidance=2.)
 
     def testcliarchitectureguard(self):
-        for options in (["--backbone", "flux"], ["--prior", "flow"], ["--backbone", "sd3", "--prior", "flow"], ["--backbone", "flux", "--prior", "off", "--localization", "attention"]):
+        for options in (["--backbone", "flux", "--prior", "ddpm"], ["--prior", "flow"], ["--backbone", "sd3", "--prior", "flow"], ["--backbone", "flux", "--prior", "off", "--localization", "attention"]):
             with self.assertRaises(ValueError):
                 validate(common(argparse.ArgumentParser()).parse_args(["--clip", "clip", *options]))
         validate(common(argparse.ArgumentParser()).parse_args(["--clip", "clip", "--backbone", "flux", "--prior", "flow", "--flowconsistency"]))
+        validate(common(argparse.ArgumentParser()).parse_args(["--clip", "clip", "--backbone", "flux"]))
 
     def testfullpipeline(self):
         for family in ("flux", "sd3"):

@@ -62,7 +62,7 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(diagnosis[name]["method"], "fixed")
             self.assertEqual(diagnosis[name]["eta"], eta)
             self.assertEqual(diagnosis[name]["prior"], "off")
-        self.assertNotIn("method", variants("core")["target"])
+        self.assertEqual(variants("core")["target"]["method"], "path")
         self.assertEqual(diagnosis["random"]["representation"], "random")
 
     def write(self, path, payload):

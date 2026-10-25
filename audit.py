@@ -86,6 +86,10 @@ def values(row):
             result["leverage:" + key] = float(np.mean(measured)) if measured else None
         result["leverage:trustedmodels"] = len(leverage)
         result["leverage:queries"] = sum(row.get("kind") == "compensation" for row in history)
+        result["path:initialqueries"] = report.get("initialization", {}).get("evaluated")
+        result["path:initialcomplete"] = int(report.get("initialization", {}).get("complete", False))
+        result["rescue:queries"] = report.get("rescue", {}).get("queries")
+        result["rescue:accepted"] = report.get("rescue", {}).get("accepted")
         initial = report.get("initialleverage") or {}
         for key in ("jointnovelty", "protectionuncancellable", "protectionresidual", "directionnorm", "damageslope", "damagecurvature"):
             if initial.get("geometryresolved") and initial.get("fittrusted"):

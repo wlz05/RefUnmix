@@ -55,12 +55,26 @@ class Path:
             self.hits += 1
         return self.references[eta]
 
-    def initialize(self):
+    def initialize(self, references=(0., 1.)):
         self.target()
-        self.zero(0.)
-        self.zero(1.)
+        if self.mode == "cfg":
+            return
+        for eta in references:
+            self.zero(eta)
         if self.mode == "random":
             self.randomize()
+
+    def cost(self, point):
+        # Reserve all uncached endpoints before a candidate query.
+        low, high, eta = point
+        endpoints = [] if (low, high) in self.fields else [0.]
+        if self.mode == "cfg":
+            if eta != 0:
+                endpoints.append(eta)
+        else:
+            needed = (0., 1.) if self.mode == "random" or self.mode == "mix" and eta not in {0., 1.} or self.native.affine and eta not in {0., 1.} else (eta,)
+            endpoints.extend(value for value in needed if value not in self.references and not (value == 0 and ((0., 0.) in self.fields or (low, high) == (0., 0.))))
+        return sum(self.native.cost(value) for value in endpoints), len(endpoints) * self.native.queries()
 
     def randomize(self):
         if self.direction is not None:
@@ -74,7 +88,7 @@ class Path:
         low, high, eta = point
         low = low if self.session.scale != 0 and torch.any(self.low != 0).item() else 1.
         high = high if self.session.scale != 0 and torch.any(self.high != 0).item() else 1.
-        if not self.session.cleanup or torch.equal(self.session.source, self.session.target) or self.native.cfg and self.native.guidance == 0 or self.native.affine and 0. in self.references and 1. in self.references and torch.equal(self.references[0.], self.references[1.]):
+        if not self.session.cleanup or torch.equal(self.session.source, self.session.target) or self.native.cfg and self.native.guidance == 0 or self.mode != "cfg" and self.native.affine and 0. in self.references and 1. in self.references and torch.equal(self.references[0.], self.references[1.]):
             eta = 0.
         return tuple(round(float(value), 12) for value in (low, high, eta))
 

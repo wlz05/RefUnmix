@@ -8,16 +8,16 @@ import json
 from pathlib import Path
 from data import clean, destination, locate
 from evaluate import datasetargs, evaluator, execute, items
-from run import common, jsonfile, load, writejson
+from run import common, jsonfile, load, validate, writejson
 from split import identities
 from engine.serial import read
 
-def variants(suite):
+def variants(suite, consistency="ddpm"):
+    # Freeze one main configuration across all ablation suites.
+    shared = {"field": "pullback", "fieldgeometry": "coupled", "method": "path", "axes": "all", "eta": 0., "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False, "representation": "latent", "selection": "attain", "geometry": "output", "algorithm": "trust", "release": True, "poststeps": 1, "cfg": False, "guidance": 1., "referencepath": "auto"}
     if suite == "alignment":
-        shared = {"field": "pullback", "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False, "representation": "latent", "selection": "attain", "geometry": "output", "algorithm": "trust", "release": True, "axes": "all"}
         return {"aligned": {**shared, "fieldgeometry": "coupled", "method": "raw"}, "scalar": {**shared, "fieldgeometry": "scalar", "method": "raw"}, "controlled": {**shared, "fieldgeometry": "coupled", "method": "path"}, "matched": {**shared, "fieldgeometry": "scalar", "method": "path"}}
     if suite == "fields":
-        shared = {"prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False, "representation": "latent", "selection": "attain", "geometry": "output", "algorithm": "trust"}
         result = {}
         for field in ("pullback", "chord", "instant", "average"):
             result[field + "raw"] = {**shared, "field": field, "fieldgeometry": "coupled", "method": "raw"}
@@ -26,9 +26,11 @@ def variants(suite):
         return result
     if suite == "diagnosis":
         fixed = {"method": "fixed", "axes": "none", "prior": "off", "heldout": False, "representation": "latent", "compensation": False, "frontier": False}
-        return {"raw": {"method": "raw", "prior": "off", "heldout": False, "compensation": False, "frontier": False}, "target": {**fixed, "eta": 0.}, "middle": {**fixed, "eta": .5}, "source": {**fixed, "eta": 1.}, "mixture": {**fixed, "eta": .5, "representation": "mix"}, "rgb": {**fixed, "eta": .5, "representation": "rgb"}, "random": {**fixed, "eta": .5, "representation": "random"}, "full": {}}
+        changes = {"raw": {"method": "raw"}, "target": {**fixed, "eta": 0.}, "middle": {**fixed, "eta": .5}, "source": {**fixed, "eta": 1.}, "mixture": {**fixed, "eta": .5, "representation": "mix"}, "rgb": {**fixed, "eta": .5, "representation": "rgb"}, "random": {**fixed, "eta": .5, "representation": "random"}, "full": {}}
+        return {key: {**shared, **value} for key, value in changes.items()}
     core = {"raw": {"method": "raw", "compensation": False, "frontier": False}, "target": {"axes": "none", "eta": 0.}, "source": {"axes": "none", "eta": 1.}, "eta": {"axes": "path"}, "field": {"axes": "field", "eta": 0.}, "full": {}}
-    extra = {"reference": {"rgb": {"representation": "rgb"}, "mixture": {"representation": "mix"}, "random": {"representation": "random"}, "conditional": {"representation": "cfg"}}, "prior": {"noprior": {"prior": "off"}, "hardprior": {"priorcontrol": "hard"}, "softprior": {"priorcontrol": "soft"}}, "search": {"poll": {"algorithm": "poll"}, "randomsearch": {"algorithm": "random"}, "unguarded": {"monitor": False}}, "mechanism": {"decoder": {"cleanup": False}, "multistep": {"poststeps": 5, "cfg": True, "referencepath": "prediction"}}, "guidance": {"cfgone": {"cfg": True, "guidance": 1., "referencepath": "prediction"}, "cfgtwo": {"cfg": True, "guidance": 2., "referencepath": "prediction"}, "cfgfour": {"cfg": True, "guidance": 4., "referencepath": "prediction"}}, "budget": {"small": {"candidates": 8}, "large": {"candidates": 24}}, "core": {}}
+    prior = {"prior": consistency, **({"flowconsistency": True} if consistency == "flow" else {})}
+    extra = {"reference": {"rgb": {"representation": "rgb"}, "mixture": {"representation": "mix"}, "random": {"representation": "random"}, "conditional": {"representation": "cfg"}}, "prior": {"noprior": {"prior": "off"}, "boundedprior": {**prior, "priorcontrol": "bounded"}, "hardprior": {**prior, "priorcontrol": "hard"}, "softprior": {**prior, "priorcontrol": "soft"}}, "search": {"poll": {"algorithm": "poll"}, "randomsearch": {"algorithm": "random"}, "unguarded": {"monitor": False}}, "mechanism": {"decoder": {"cleanup": False}, "multistep": {"poststeps": 5}}, "guidance": {"cfgone": {"cfg": True, "guidance": 1., "referencepath": "prediction"}, "cfgtwo": {"cfg": True, "guidance": 2., "referencepath": "prediction"}, "cfgfour": {"cfg": True, "guidance": 4., "referencepath": "prediction"}}, "budget": {name: {"maxsamples": count, "maxcalls": count} for name, count in (("ten", 10), ("twelve", 12), ("fifteen", 15), ("twenty", 20), ("thirty", 30))}, "candidates": {"small": {"candidates": 8}, "large": {"candidates": 24}}, "core": {}}
     if suite not in extra:
         if suite == "leverage":
             extra["leverage"] = {"compensated": {"compensation": True}, "uncompensated": {"compensation": False}}
@@ -42,15 +44,18 @@ def variants(suite):
             extra["geometry"] = {"output": {"release": True, "geometry": "output"}, "latent": {"release": True, "geometry": "latent"}, "attenuated": {"release": True, "geometry": "attenuate"}, "joint": {"release": False, "geometry": "output"}}
         elif suite == "solver":
             extra["solver"] = {"nocertificate": {"certificate": False}, "shortsolve": {"solversteps": 25, "certificatestep": 25}, "unguarded": {"monitor": False}}
+        elif suite == "goals":
+            extra["goals"] = {"targetonly": {"goals": ["target"]}, "globalonly": {"goals": ["global"]}}
         elif suite != "cost":
             raise ValueError("Unknown ablation suite.")
         else:
-            extra["cost"] = {"light": {"candidates": 3, "axes": "path", "prior": "off"}, "short": {"candidates": 7}, "noprior": {"prior": "off"}}
-    return {**core, **extra[suite]}
+            extra["cost"] = {"light": {"candidates": 3, "axes": "path", "prior": "off"}, "short": {"candidates": 7}}
+    return {key: {**shared, **value} for key, value in {**core, **extra[suite]}.items()}
 
 def settings(args):
     excluded = {"output", "manifest", "split", "limit", "seeds", "seed", "dataset", "mapping", "images", "recipe", "suite"}
     result = {key: value for key, value in vars(args).items() if key not in excluded}
+    result["seeds"] = sorted(set(getattr(args, "seeds", None) or [args.seed]))
     result["configuration"] = {key: jsonfile(getattr(args, key)) for key in ("constraints", "probabilities", "radiusprofile")}
     result["adapterhash"] = hashlib.sha256(locate(Path("."), clean(args.adapter, "adapter")).read_bytes()).hexdigest() if args.adapter else None
     root = Path(__file__).resolve().parent
@@ -63,7 +68,7 @@ def settings(args):
 def frozen(args, chosen):
     source = locate(Path("."), clean(args.recipe, "recipe"))
     payload = read(source)
-    if payload.get("schema") != 1 or payload.get("split") != "val" or not payload.get("variants") or payload.get("settings") != settings(args):
+    if payload.get("schema") != 1 or payload.get("split") != "val" or payload.get("suite") != args.suite or not payload.get("variants") or payload.get("settings") != settings(args):
         raise ValueError("Frozen tests require unchanged validation control settings.")
     # Keep test sources disjoint from the validation recipe.
     current = set(identities(chosen).values())
@@ -73,7 +78,7 @@ def frozen(args, chosen):
         if {getattr(item, field) for item in chosen if getattr(item, field)} & set(payload.get(field, [])):
             raise ValueError("Test families or source groups overlap validation.")
     controls = payload["variants"]
-    allowed = {"method", "axes", "eta", "representation", "prior", "priorcontrol", "algorithm", "cleanup", "poststeps", "cfg", "guidance", "referencepath", "candidates", "monitor", "compensation", "release", "geometry", "frontier", "certificate", "solversteps", "certificatestep", "heldout", "selection", "gainloss", "goals", "field", "fieldridge", "fieldprobe", "fieldradius", "fieldtolerance", "fieldgeometry", "control"}
+    allowed = {"method", "axes", "eta", "representation", "prior", "priorcontrol", "algorithm", "cleanup", "poststeps", "cfg", "guidance", "referencepath", "candidates", "maxsamples", "maxcalls", "monitor", "compensation", "release", "geometry", "frontier", "certificate", "solversteps", "certificatestep", "heldout", "selection", "gainloss", "goals", "field", "fieldridge", "fieldprobe", "fieldradius", "fieldtolerance", "fieldgeometry", "control", "flowconsistency"}
     if not isinstance(controls, dict) or any(not key.isalpha() or key != key.casefold() or not isinstance(value, dict) or value.keys() - allowed for key, value in controls.items()):
         raise ValueError("Frozen variants contain unsupported controls.")
     return controls
@@ -81,7 +86,7 @@ def frozen(args, chosen):
 def main():
     parser = datasetargs(common(argparse.ArgumentParser(description="Run frozen native reference and prior ablations.")))
     parser.set_defaults(split="val", output="./trials")
-    parser.add_argument("--suite", type=str.casefold, choices=("alignment", "fields", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "cost", "solver"), default="core")
+    parser.add_argument("--suite", type=str.casefold, choices=("alignment", "fields", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
     parser.add_argument("--recipe", default=None)
     args = parser.parse_args()
     if args.split not in {"val", "test"} or not args.manifest or args.method != "path":
@@ -90,8 +95,15 @@ def main():
         raise ValueError("Frozen trials require verified native weights; use external adapters separately.")
     if (args.split == "test") != bool(args.recipe):
         raise ValueError("Test trials require a frozen validation recipe.")
+    if args.suite == "prior" and args.backbone != "vp" and not args.flowconsistency:
+        raise ValueError("Flow prior trials require --flowconsistency before loading the backbone.")
     chosen = items(args)
-    controls = frozen(args, chosen) if args.recipe else variants(args.suite)
+    controls = frozen(args, chosen) if args.recipe else variants(args.suite, "flow" if args.backbone != "vp" else "ddpm")
+    for modification in controls.values():
+        current = deepcopy(args)
+        for key, value in modification.items():
+            setattr(current, key, value)
+        validate(current)
     output = destination(args.output, "output")
     if output.exists():
         raise FileExistsError(output)
@@ -113,7 +125,7 @@ def main():
         payload = execute(current, (editor, judge, evaluation, independent))
         results[label] = {"summary": payload["summary"], "cost": payload["cost"], "path": str(output / label / "summary.json"), "rows": len(payload["rows"])}
     if args.split == "val":
-        recipe = {"schema": 1, "split": "val", "settings": settings(args), "checkpoints": checkpoints, "variants": controls, "digests": identities(chosen), "group": sorted({item.group for item in chosen if item.group}), "family": sorted({item.family for item in chosen if item.family}), "manifestdigest": hashlib.sha256(locate(Path("."), clean(args.manifest, "manifest")).read_bytes()).hexdigest(), "note": "Configurations are frozen; no test-based winner is selected."}
+        recipe = {"schema": 1, "split": "val", "suite": args.suite, "settings": settings(args), "checkpoints": checkpoints, "variants": controls, "digests": identities(chosen), "group": sorted({item.group for item in chosen if item.group}), "family": sorted({item.family for item in chosen if item.family}), "manifestdigest": hashlib.sha256(locate(Path("."), clean(args.manifest, "manifest")).read_bytes()).hexdigest(), "note": "Configurations are frozen; no test-based winner is selected."}
         writejson(output / "recipe.json", recipe)
     writejson(output / "summary.json", {"schema": 1, "split": args.split, "settings": vars(args), "variants": results, "note": "Controller proxies and consistency remain diagnostics; use independent evidence."})
 

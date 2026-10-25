@@ -57,6 +57,10 @@ class Prior:
                 raise ValueError("Consistency weights must be finite and positive.")
             self.weights.append(weight)
 
+    def cost(self):
+        count = self.probes if self.mode != "off" else 0
+        return count, count
+
     @torch.no_grad()
     def __call__(self, latent, phase="prior"):
         # Reuse fixed probes across candidate comparisons.
