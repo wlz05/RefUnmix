@@ -12,25 +12,31 @@ from run import common, jsonfile, load, validate, writejson
 from split import identities
 from engine.serial import read
 from engine.protocol import changes, configuration, defaults, signature
+from engine.reproduce import digest
 
 def variants(suite, consistency="ddpm", base=None):
     # Freeze one main configuration across all ablation suites.
     shared = defaults(base)
     if suite == "alignment":
-        raw = {"method": "raw", "compensation": False, "frontier": False}
+        raw = {"method": "raw", "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False}
         return {"aligned": {**shared, **raw, "fieldgeometry": "coupled"}, "scalar": {**shared, **raw, "fieldgeometry": "scalar"}, "controlled": {**shared, "fieldgeometry": "coupled", "method": "path"}, "matched": {**shared, "fieldgeometry": "scalar", "method": "path"}}
     if suite == "fields":
         result = {}
         for field in ("pullback", "chord", "instant", "average"):
-            result[field + "raw"] = {**shared, "field": field, "method": "raw", "compensation": False, "frontier": False}
+            result[field + "raw"] = {**shared, "field": field, "method": "raw", "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False}
             result[field + "fixed"] = {**shared, "field": field, "method": "fixed", "axes": "none", "eta": 0., "prior": "off", "heldout": False, "compensation": False, "frontier": False}
             result[field + "full"] = {**shared, "field": field}
         return result
+    if suite == "null":
+        disabled = {"field": "zero", "fieldgeometry": "coupled", "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False, "representation": "latent"}
+        fixed = {**disabled, "method": "fixed", "axes": "none"}
+        changes = {"native": {**disabled, "method": "raw"}, "centered": {**fixed, "eta": 0.}, "condition": {**fixed, "eta": 1.}, "reference": {**disabled, "method": "path", "axes": "path", "release": False}, "raw": {"method": "raw", "compensation": False, "frontier": False}, "full": {}}
+        return {key: {**shared, **value} for key, value in changes.items()}
     if suite == "diagnosis":
         fixed = {"method": "fixed", "axes": "none", "prior": "off", "heldout": False, "representation": "latent", "compensation": False, "frontier": False}
-        changes = {"raw": {"method": "raw", "compensation": False, "frontier": False}, "target": {**fixed, "eta": 0.}, "middle": {**fixed, "eta": .5}, "source": {**fixed, "eta": 1.}, "mixture": {**fixed, "eta": .5, "representation": "mix"}, "rgb": {**fixed, "eta": .5, "representation": "rgb"}, "random": {**fixed, "eta": .5, "representation": "random"}, "full": {}}
+        changes = {"raw": {"method": "raw", "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False}, "target": {**fixed, "eta": 0.}, "middle": {**fixed, "eta": .5}, "source": {**fixed, "eta": 1.}, "mixture": {**fixed, "eta": .5, "representation": "mix"}, "rgb": {**fixed, "eta": .5, "representation": "rgb"}, "random": {**fixed, "eta": .5, "representation": "random"}, "full": {}}
         return {key: {**shared, **value} for key, value in changes.items()}
-    core = {"raw": {"method": "raw", "compensation": False, "frontier": False}, "target": {"axes": "none", "eta": 0.}, "source": {"axes": "none", "eta": 1.}, "eta": {"axes": "path"}, "field": {"axes": "field", "eta": 0.}, "full": {}}
+    core = {"raw": {"method": "raw", "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False}, "target": {"axes": "none", "eta": 0.}, "source": {"axes": "none", "eta": 1.}, "eta": {"axes": "path"}, "field": {"axes": "field", "eta": 0.}, "full": {}}
     prior = {"prior": consistency, **({"flowconsistency": True} if consistency == "flow" else {})}
     extra = {"reference": {"rgb": {"representation": "rgb"}, "mixture": {"representation": "mix"}, "random": {"representation": "random"}, "conditional": {"representation": "cfg"}}, "prior": {"noprior": {"prior": "off"}, "boundedprior": {**prior, "priorcontrol": "bounded"}, "hardprior": {**prior, "priorcontrol": "hard"}, "softprior": {**prior, "priorcontrol": "soft"}}, "search": {"poll": {"algorithm": "poll"}, "randomsearch": {"algorithm": "random"}, "unguarded": {"monitor": False}}, "mechanism": {"decoder": {"cleanup": False}, "multistep": {"poststeps": 5}}, "guidance": {"cfgone": {"cfg": True, "guidance": 1., "referencepath": "prediction"}, "cfgtwo": {"cfg": True, "guidance": 2., "referencepath": "prediction"}, "cfgfour": {"cfg": True, "guidance": 4., "referencepath": "prediction"}}, "budget": {name: {"maxsamples": count, "maxcalls": count} for name, count in (("ten", 10), ("twelve", 12), ("fifteen", 15), ("twenty", 20), ("thirty", 30))}, "candidates": {"small": {"candidates": 8}, "large": {"candidates": 24}}, "core": {}}
     if suite not in extra:
@@ -91,6 +97,8 @@ def frozen(args, chosen):
     payload = read(source)
     if payload.get("schema") != 1 or payload.get("split") != "val" or payload.get("suite") != args.suite or not payload.get("variants") or payload.get("settings") != settings(args):
         raise ValueError("Frozen tests require unchanged validation control settings.")
+    if not getattr(args, "manifest", None) or payload.get("manifestdigest") != digest(locate(Path("."), clean(args.manifest, "manifest"))):
+        raise ValueError("Frozen tests require the unchanged split manifest.")
     # Keep test sources disjoint from the validation recipe.
     current = set(identities(chosen).values())
     if current & set(payload.get("digests", {}).values()):
@@ -109,7 +117,7 @@ def frozen(args, chosen):
 def main():
     parser = datasetargs(common(argparse.ArgumentParser(description="Run frozen native reference and prior ablations.")))
     parser.set_defaults(split="val", output="./trials")
-    parser.add_argument("--suite", type=str.casefold, choices=("alignment", "fields", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
+    parser.add_argument("--suite", type=str.casefold, choices=("alignment", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
     parser.add_argument("--recipe", default=None)
     parser.add_argument("--dry", action="store_true", help="Print effective variants without loading data or checkpoints.")
     args = parser.parse_args()

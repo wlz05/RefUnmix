@@ -251,6 +251,13 @@ def execute(args, resources=None):
     payload["controller"] = coverage(rows)
     statuses = [row["report"].get("field", {}) for row in rows]
     payload["fields"] = {"requested": args.field, "requests": len(rows), "actual": {kind: sum(value.get("actual") == kind for value in statuses) for kind in sorted({value["actual"] for value in statuses if "actual" in value})}, "budgetfallback": sum(value.get("status") == "budget" for value in statuses), "budgetstopped": sum(bool(row["report"].get("budgetstopped")) for row in rows), "sourcefallback": sum(bool(row["report"].get("budgetstopped")) and row["report"].get("selected") == "source" for row in rows)}
+    measurements = []
+    for row in rows:
+        field = row["report"].get("field", {})
+        measured = {key: field.get(key) for key in ("rank", "actualfitmean", "relativefit", "responsecosine", "modelgapmean", "relativegap")}
+        measured.update({"input" + key: value for key, value in field.get("alignment", {}).items() if key != "scope"})
+        measurements.append({"key": row["key"], "metrics": measured})
+    payload["fields"]["diagnostics"] = summary(measurements)
     writejson(output / "summary.json", payload)
     return payload
 

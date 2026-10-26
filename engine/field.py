@@ -8,7 +8,46 @@ import torch
 from engine.limit import Exhausted
 from engine.session import number, tensor
 
-KINDS = ("pullback", "chord", "instant", "average")
+KINDS = ("pullback", "chord", "instant", "average", "zero")
+
+def norm(value):
+    scale = float(value.abs().max())
+    return scale * float((value / scale).square().sum().sqrt()) if scale > 0 else 0.
+
+def measure(displacement, request, prediction=None):
+    # Compare responses in the same clean latent units.
+    tensor(displacement)
+    tensor(request)
+    if displacement.shape != request.shape or displacement.device != request.device:
+        raise ValueError("Response diagnostics require matching latent geometry.")
+    actual, target = displacement.double(), request.double()
+    error = actual - target
+    targetnorm, actualnorm = norm(target), norm(actual)
+    errornorm = norm(error)
+    ratio = errornorm / targetnorm if targetnorm > 0 else None
+    cosine = float(((actual / actualnorm) * (target / targetnorm)).sum().clamp(-1, 1)) if min(targetnorm, actualnorm) > 0 else None
+    result = {"actualfit": float(error.square().sum()), "actualfitmean": float(error.square().mean()), "targetnorm": targetnorm, "responsenorm": actualnorm, "relativefit": ratio if ratio is not None and math.isfinite(ratio) else None, "responsecosine": cosine, "responsestatus": "zero request" if targetnorm == 0 else "zero response" if actualnorm == 0 else "measured"}
+    result["relativefitstatus"] = "zero request" if targetnorm == 0 else "finite" if math.isfinite(ratio) else "overflow"
+    if errornorm > 0 and (result["actualfit"] == 0 or result["actualfitmean"] == 0):
+        result.update({"actualfit": result["actualfit"] or None, "actualfitmean": None, "fitstatus": "underflow"})
+    else:
+        result["fitstatus"] = "finite"
+    if prediction is not None:
+        tensor(prediction)
+        if prediction.shape != actual.shape or prediction.device != actual.device:
+            raise ValueError("Predicted responses must match measured endpoints.")
+        gap = actual - prediction.double()
+        gapnorm = norm(gap)
+        ratio = gapnorm / targetnorm if targetnorm > 0 else None
+        result.update({"modelgap": float(gap.square().sum()), "modelgapmean": float(gap.square().mean()), "relativegap": ratio if ratio is not None and math.isfinite(ratio) else None})
+        result["relativegapstatus"] = "zero request" if targetnorm == 0 else "finite" if math.isfinite(ratio) else "overflow"
+        if gapnorm > 0 and (result["modelgap"] == 0 or result["modelgapmean"] == 0):
+            result.update({"modelgap": result["modelgap"] or None, "modelgapmean": None, "gapstatus": "underflow"})
+        else:
+            result["gapstatus"] = "finite"
+    if any(isinstance(value, float) and not math.isfinite(value) for value in result.values()):
+        raise ValueError("Response diagnostics exceed numerical range.")
+    return result
 
 @dataclass
 class Field:
@@ -18,24 +57,18 @@ class Field:
     request: torch.Tensor | None = None
     prediction: torch.Tensor | None = None
 
-    def observe(self, endpoint):
+    def observe(self, endpoint, reference=None, request=None):
         # Diagnose a paid endpoint without another generation query.
-        if endpoint is None or self.neutral is None or self.request is None:
+        neutral = self.neutral if reference is None else reference
+        target = self.request if request is None else request
+        if endpoint is None or neutral is None or target is None:
             return
         tensor(endpoint)
-        if endpoint.shape != self.neutral.shape or endpoint.device != self.neutral.device:
+        tensor(neutral)
+        if endpoint.shape != neutral.shape or endpoint.device != neutral.device:
             raise ValueError("Observed field endpoints must match the cached reference.")
-        for value in (self.request, self.prediction):
-            if value is not None and (tensor(value).shape != endpoint.shape or value.device != endpoint.device):
-                raise ValueError("Field diagnostics must share endpoint geometry.")
-        displacement = endpoint.double() - self.neutral.double()
-        error = displacement - self.request.double()
-        self.report["actualfit"] = float(error.square().sum())
-        self.report["actualfitmean"] = float(error.square().mean())
-        if self.prediction is not None:
-            self.report["modelgap"] = float((displacement - self.prediction.double()).square().sum())
-        if not all(math.isfinite(self.report[key]) for key in ("actualfit", "actualfitmean")) or not math.isfinite(self.report.get("modelgap", 0.)):
-            raise ValueError("Field diagnostics exceed numerical range.")
+        self.report.update(measure(endpoint.double() - neutral.double(), target, self.prediction))
+        self.report["observed"] = "Native field endpoint before reference control."
 
 def options(kind, ridge, probe, radius, tolerance, geometry="coupled"):
     if kind not in KINDS:
@@ -87,7 +120,7 @@ def solve(response, target, anchor, ridge=.05, radius=1.):
     if eigenvalues[0] <= 0:
         raise ValueError("Pullback normal equations must be positive definite.")
     rotated = vectors.T @ right
-    bound = radius * float(np.linalg.norm(anchor))
+    bound = radius * math.hypot(*anchor)
     if not math.isfinite(bound):
         raise ValueError("Pullback radius exceeds numerical range.")
     multiplier = 0.
@@ -95,11 +128,13 @@ def solve(response, target, anchor, ridge=.05, radius=1.):
         move = np.zeros_like(anchor)
     else:
         move = vectors @ (rotated / eigenvalues)
-        if np.linalg.norm(move) > bound:
-            lower, upper = 0., max(float(np.linalg.norm(right)) / bound, float(eigenvalues[-1]))
+        if math.hypot(*move) > bound:
+            lower, upper = 0., max(math.hypot(*right) / bound, float(eigenvalues[-1]))
+            if not math.isfinite(upper):
+                raise ValueError("Pullback boundary multipliers exceed numerical range.")
             for _ in range(100):
-                middle = (lower + upper) / 2
-                length = np.linalg.norm(rotated / (eigenvalues + middle))
+                middle = lower + (upper - lower) / 2
+                length = math.hypot(*(rotated / (eigenvalues + middle)))
                 if length > bound:
                     lower = middle
                 else:
@@ -111,9 +146,9 @@ def solve(response, target, anchor, ridge=.05, radius=1.):
     error = response @ coefficients - target
     after = float(error @ error)
     objective = after + damping * float(move @ move)
-    report = {"before": before, "after": after, "objective": objective, "damping": damping, "multiplier": multiplier, "condition": float(eigenvalues[-1] / eigenvalues[0]), "bound": bound, "movement": float(np.linalg.norm(move)), "coefficients": coefficients.tolist(), "anchor": anchor.tolist(), "gram": gram.tolist(), "scope": "Optimality concerns this measured linear response model, not the nonlinear generator or image quality."}
+    report = {"before": before, "after": after, "objective": objective, "damping": damping, "multiplier": multiplier, "condition": float(eigenvalues[-1] / eigenvalues[0]), "bound": bound, "movement": math.hypot(*move), "coefficients": coefficients.tolist(), "anchor": anchor.tolist(), "gram": gram.tolist(), "scope": "Optimality concerns this measured linear response model, not the nonlinear generator or image quality."}
     report["correction"] = move.tolist()
-    if not np.isfinite(coefficients).all() or any(not math.isfinite(value) for value in (before, after, objective, report["condition"])):
+    if not np.isfinite(coefficients).all() or any(not math.isfinite(value) for value in (before, after, objective, multiplier, bound, damping, report["movement"], report["condition"])):
         raise ValueError("Pullback solution exceeds numerical range.")
     if objective > before + 1e-9 * max(1., before):
         raise RuntimeError("Pullback solve increased its convex objective.")
@@ -125,6 +160,8 @@ def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, prob
     start, delta = number(start, "Field time", 0, 1), number(delta, "Field interval", 0, 1)
     if start <= 0 or delta >= start:
         raise ValueError("Field times require zero <= delta < start <= one.")
+    if kind == "zero":
+        return Field(torch.zeros_like(session.anchor, dtype=torch.float32), {"requested": kind, "actual": kind, "times": [], "status": "constructed", "probes": 0, "space": "clean latent displacement", "scope": "Explicit zero field; native target and reference conditions remain active."})
     if kind == "chord":
         return Field(tensor(session.field(start, delta)).detach().clone(), {"requested": kind, "actual": kind, "times": [start] if delta == 0 else [start, start - delta], "status": "constructed", "probes": 0})
     first = tensor(session.difference(session.editor.index(start))).detach().clone()
@@ -189,6 +226,11 @@ def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, prob
         diagnostics["appliedcoefficients"] = coefficients.tolist()
         diagnostics["appliedafter"] = float(applied @ applied)
         diagnostics["appliedcorrection"] = (coefficients - anchor).tolist()
+        length = float(np.linalg.norm(coefficients))
+        cosine = float(np.clip(coefficients @ anchor / (length * projectionnorm), -1, 1)) if length > 0 else None
+        correction = coefficients - anchor
+        perpendicular = correction - anchor * float(correction @ anchor) / projectionnorm ** 2
+        report["alignment"] = {"fieldnorm": length, "normratio": length / projectionnorm, "cosine": cosine, "angle": math.degrees(math.acos(cosine)) if cosine is not None else None, "orthogonalratio": float(np.linalg.norm(perpendicular)) / projectionnorm, "singularratio": singular[-1] / singular[0] if rank > 1 else None, "scope": "Input geometry relative to the projected mean request; not semantic correctness."}
         value = torch.from_numpy((basis @ coefficients).reshape(request.shape)).to(device=request.device, dtype=torch.float32)
         tensor(value)
         report.update({"probes": rank + 1, "calls": session.calls - before[0], "samples": session.samples - before[1], "model": diagnostics, "neutralcached": True})

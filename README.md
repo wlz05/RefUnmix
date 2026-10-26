@@ -432,13 +432,14 @@ Check the complete twelve-arm field plan before loading data or checkpoints:
 python -B RefUnmix/trial.py --suite fields --manifest outputs/split.json --split val --model models --clip clip --device cuda:0 --precision fp32 --seed 42 --seeds 42 52 3047 3407 --field pullback --method path --release --no-compensation --prior off --poststeps 1 --candidates 12 --maxsamples 64 --maxcalls 64 --dry
 ```
 
-The printed `design.main` is `pullbackfull`, whose `changes` must be empty. Each arm lists its effective settings, configuration hash, and changes relative to the supplied main configuration. The run stops before model loading if the full arm differs. Dry runs describe the current plan; actual test runs still verify the frozen recipe, checkpoints, and disjoint sources. Regenerate validation recipes after updating the code.
+The printed `design.main` is `pullbackfull`, whose `changes` must be empty. Each arm lists its effective settings, configuration hash, and changes relative to the supplied main configuration. The run stops before model loading if the full arm differs. Dry runs describe the current plan; actual test runs still verify the frozen recipe, unchanged split manifest, checkpoints, and disjoint sources. Configuration hashes also bind the contents of supplied constraint, probability, and radius-profile JSON files. Regenerate validation recipes after updating the code.
 
 Main and variant summaries save `controlsignature`; suite summaries save the complete `design`. Matching hashes identify matching control settings. Seeds, input identities, code hashes, checkpoint hashes, and split membership are recorded separately and must also match for a repeated run. The 256-cap mechanism diagnostic therefore has a different budget signature from the 64-cap main run.
 
 | Suite | Intervention | Sample/call cap |
 |-------|--------------|----------------|
 | `fields` | Four fields with raw, fixed-reference, and full control | 64 |
+| `null` | Explicit zero-field continuation, centering, and condition recovery | 64 |
 | `alignment` | Coupled and scalar norm-matched field construction | 64 |
 | `core` | Guarded field and reference coordinate controls | 64 |
 | `release` | Main reference-field compensation versus joint QCQP | 64 |
@@ -472,6 +473,17 @@ Four fields with raw, fixed-reference, and full control. Named outputs: `pullbac
 python -B RefUnmix/trial.py --dataset data --mapping mapping_file.json --images annotation_images --manifest outputs/split.json --split val --suite fields --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/fieldsval
 python -B RefUnmix/trial.py --dataset data --mapping mapping_file.json --images annotation_images --manifest outputs/split.json --split test --suite fields --recipe outputs/fieldsval/recipe.json --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/fieldstest
 ```
+
+#### Null
+
+`zero` is an explicit field intervention, independent of the input scale. Named outputs are `native` (target-conditioned zero-field endpoint), `centered` (VAE source reconstruction), `condition` (source anchor plus the target/source zero-field difference), `reference` (adaptive zero-field reference control), `raw` (the supplied main field without control), and `full` (the unchanged main method). Fixed interventions are exported directly. The shared localization contrast remains charged; zero-field arms do not pay pullback probe costs, so actual costs differ under the common cap.
+
+~~~bash
+python -B RefUnmix/trial.py --dataset data --mapping mapping_file.json --images annotation_images --manifest outputs/split.json --split val --suite null --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/nullval
+python -B RefUnmix/trial.py --dataset data --mapping mapping_file.json --images annotation_images --manifest outputs/split.json --split test --suite null --recipe outputs/nullval/recipe.json --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/nulltest
+~~~
+
+`centered` is generally a VAE reconstruction rather than the exact input pixels. `condition` retains a conditional effect despite its zero input field. These cases isolate different operations and should not be combined into one no-field label.
 
 #### Alignment
 
@@ -660,6 +672,22 @@ python -B RefUnmix/evidence.py --reference outputs/releasetest/joint/summary.jso
 ```
 
 Inspect `fields.actual`, `fields.budgetfallback`, and `summary.controller` together with image quality. Per-image reports record the backend step count, initialization state, actual release/rescue queries and acceptances, semantic bottlenecks, and budget termination. Named switches describe configuration; the query counters show execution. The evidence commands export paired diagnostics; independent task annotations can be attached with `--taskreference` and `--taskcomparison`.
+
+### Endpoint Response Diagnostics
+
+Run matched endpoint diagnostics for the coupled field, its norm-matched scalar control, and the uncorrected average field:
+
+~~~bash
+python -B RefUnmix/probe.py --image input.png --source "a blue shirt" --target "a striped shirt" --model models --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --poststeps 1 --prior off --field pullback --fieldgeometry coupled --withfield --etas 0 1 --maxsamples 64 --maxcalls 64 --output outputs/probecoupled
+python -B RefUnmix/probe.py --image input.png --source "a blue shirt" --target "a striped shirt" --model models --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --poststeps 1 --prior off --field pullback --fieldgeometry scalar --withfield --etas 0 1 --maxsamples 64 --maxcalls 64 --output outputs/probescalar
+python -B RefUnmix/probe.py --image input.png --source "a blue shirt" --target "a striped shirt" --model models --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --poststeps 1 --prior off --field average --fieldgeometry coupled --withfield --etas 0 1 --maxsamples 64 --maxcalls 64 --output outputs/probeaverage
+~~~
+
+`field.relativefit` is the response-error norm divided by the request norm; `responsecosine` measures their direction agreement. `relativegap` compares the true response with the measured linear prediction, normalized by the request norm. `alignment` records input angle, norm ratio, orthogonal correction, and the retained singular-value ratio. Undefined directions and zero denominators are null; numerical underflow and overflow have explicit status fields.
+
+These diagnostics use the native field endpoint before reference control. Pullback runs already save them from paid endpoints; evaluation summaries aggregate available values by request before averaging, and `audit.py` includes them in paired comparisons. The probe command adds source-condition endpoints for mechanism analysis and reports its complete cost. Response fit is evaluated separately from final editing quality.
+
+Native probes use raw mode with priors and controller diagnostics disabled. Discrete reference paths require `--etas 0 1`. Raw inference rejects ignored prior or controller switches, and held-out consistency requires an enabled prior.
 
 ### Official PIE Metrics
 

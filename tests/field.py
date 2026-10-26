@@ -247,7 +247,7 @@ class FieldTests(unittest.TestCase):
         from run import run
         from session import editor
         args = common(argparse.ArgumentParser()).parse_args(["--method", "fixed", "--field", "average", "--axes", "none", "--size", "16", "--prior", "off", "--maxsamples", "5"])
-        output, report, session = run(editor(), None, Image.new("RGB", (16, 16)), "source", "target", args)
+        output, report, session = run(editor(), None, Image.new("RGB", (16, 16)), "source", "target long", args)
         self.assertEqual(output.shape, session.origin.shape)
         self.assertEqual(report["selected"], "raw")
         self.assertTrue(report["budgetstopped"])

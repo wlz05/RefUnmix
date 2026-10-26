@@ -26,6 +26,9 @@ def values(row):
     report = row.get("report", {})
     result = {"seconds": row.get("seconds"), "vram": row.get("vram")}
     result.update({"metric:" + key: value for key, value in row.get("metrics", {}).items()})
+    field = report.get("field", {})
+    result.update({"field:" + key: field.get(key) for key in ("rank", "actualfitmean", "relativefit", "responsecosine", "modelgapmean", "relativegap")})
+    result.update({"field:input" + key: value for key, value in field.get("alignment", {}).items() if key != "scope"})
     for key in ("gain", "damagechange", "evaluations"):
         result["selection:" + key] = report.get(key)
     for key in ("interactionenergy", "interactionratio", "damageinteraction", "damageoverlap", "damagenonlinear"):

@@ -52,7 +52,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(plan["variants"]["pullbackfull"]["settings"][key], getattr(args, key))
 
     def testallsuites(self):
-        suites = ("alignment", "fields", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals")
+        suites = ("alignment", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals")
         for suite in suites:
             args = self.args()
             args.suite = suite
@@ -109,10 +109,10 @@ class ProtocolTests(unittest.TestCase):
 
     def testtamperedrecipe(self):
         args = self.args()
-        args.suite, args.recipe = "core", "recipe.json"
-        payload = {"schema": 1, "split": "val", "suite": "core", "settings": settings(args), "variants": variants("core", base=args), "digests": {}}
+        args.suite, args.recipe, args.manifest = "core", "recipe.json", "split.json"
+        payload = {"schema": 1, "split": "val", "suite": "core", "settings": settings(args), "variants": variants("core", base=args), "digests": {}, "manifestdigest": "manifest"}
         payload["variants"]["full"]["prior"] = "rec"
-        with patch("trial.locate"), patch("trial.read", return_value=payload), patch("trial.identities", return_value={}):
+        with patch("trial.locate"), patch("trial.read", return_value=payload), patch("trial.identities", return_value={}), patch("trial.digest", return_value="manifest"):
             with self.assertRaisesRegex(ValueError, "declared ablation"):
                 frozen(args, [])
 

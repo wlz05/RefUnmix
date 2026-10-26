@@ -22,6 +22,8 @@ def main():
     parser.add_argument("--withfield", action="store_true")
     parser.add_argument("--etas", nargs="+", type=float, default=[0., .5, 1.])
     args = parser.parse_args()
+    if args.method != "raw" or args.prior != "off" or args.heldout or args.control or args.compensation or args.frontier:
+        raise ValueError("Native probes require raw mode without prior or controller switches.")
     output = destination(args.output)
     if output.exists():
         raise FileExistsError(output)
@@ -32,6 +34,8 @@ def main():
     session = editor.prepare(readimage(args.image), args.source, args.target, args.seed, args.noise, args.end, args.cleanup, args.scale)
     session.limit = limit
     native = adapter(args.adapter, session) if args.adapter else create(session, args.poststeps, args.guidance, args.cfg, args.referencepath)
+    if not native.continuous and any(eta not in {0., 1.} for eta in args.etas):
+        raise ValueError("Discrete references require --etas 0 1.")
     zero = torch.zeros_like(session.anchor)
     if args.withfield and not getattr(native, "fields", True):
         raise ValueError("This native generator lacks a legitimate field adapter.")
@@ -42,7 +46,10 @@ def main():
     if field is not None:
         if not getattr(native, "fields", True):
             raise ValueError("This native generator lacks a legitimate field adapter.")
-        endpoints.update({"sourcefield": native.endpoint(field, 1.), "targetfield": native.endpoint(field)})
+        if session.scale == 0 or not torch.any(field != 0).item():
+            endpoints.update({"sourcefield": endpoints["sourcezero"], "targetfield": endpoints["targetzero"]})
+        else:
+            endpoints.update({"sourcefield": native.endpoint(field, 1.), "targetfield": native.endpoint(field)})
     condition = endpoints["targetzero"] - endpoints["sourcezero"]
     bias = endpoints["sourcezero"] - session.anchor
     values = {"bias": float(bias.double().square().mean().sqrt()), "condition": float(condition.double().square().mean().sqrt())}
@@ -52,10 +59,11 @@ def main():
         values.update({"field": float(effect.double().square().mean().sqrt()), "interaction": float(interaction.double().square().mean().sqrt()), "identityerror": float((endpoints["targetfield"] - session.anchor - bias - condition - effect - interaction).abs().max())})
         first = session.difference(session.editor.index(args.start))
         second = first if args.delta == 0 else session.difference(session.editor.index(args.start - args.delta))
-        request = session.scale * (first.double() + second.double()) / 2
+        request = constructed.request if constructed.request is not None else session.scale * ((first.double() + second.double()) / 2).float().double()
         displacement = endpoints["targetfield"].double() - endpoints["targetzero"].double()
         values["endpointfit"] = float((displacement - request).square().mean())
         values["requestnorm"] = float(request.norm())
+        constructed.observe(endpoints["targetfield"], endpoints["targetzero"], request)
     references = []
     if native.continuous:
         for eta in sorted(set(args.etas)):
@@ -66,7 +74,9 @@ def main():
     output.mkdir(parents=True)
     for name, image in images.items():
         image.save(output / (name + ".png"))
-    payload = {"schema": 1, "field": constructed.report if constructed is not None else None, "mechanism": values, "references": references, "backend": native.metadata(), "stats": session.stats(), "scope": "Matched native-condition diagnostics; no deletion or editing-quality claim without the original computation graph."}
+    from engine.protocol import signature
+    from engine.reproduce import digest, snapshot
+    payload = {"schema": 1, "settings": vars(args), "controlsignature": signature(args), "inputsha256": digest(args.image), "modelcheckpoint": getattr(editor, "metadata", None), "reproducibility": snapshot(), "field": constructed.report if constructed is not None else None, "mechanism": values, "references": references, "backend": native.metadata(), "stats": session.stats(), "scope": "Matched native-condition diagnostics; response fitting and image quality are evaluated separately."}
     writejson(output / "summary.json", payload)
     print(json.dumps(payload, allow_nan=False))
 

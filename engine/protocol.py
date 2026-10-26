@@ -19,6 +19,12 @@ def configuration(args):
     for key in ("model", "clip", "adapter", "constraints", "probabilities", "radiusprofile"):
         if values.get(key) is not None:
             values[key] = PurePosixPath(str(values[key]).replace("\\", "/")).as_posix()
+    paths = {key: values[key] for key in ("constraints", "probabilities", "radiusprofile") if values.get(key) is not None}
+    if paths:
+        from pathlib import Path
+        from data import clean, locate
+        from engine.reproduce import digest
+        values["configurationhashes"] = {key: digest(locate(Path("."), clean(value, key))) for key, value in paths.items()}
     return values
 
 def changes(reference, comparison):

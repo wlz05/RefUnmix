@@ -6,6 +6,13 @@ from engine.session import number, tensor
 from engine.wavelet import split
 from engine.endpoint import design
 
+def coordinates(point, bounded=True):
+    try:
+        low, high, eta = point
+    except (TypeError, ValueError) as error:
+        raise ValueError("Control points need three finite numeric coordinates.") from error
+    return tuple(number(value, label, 0 if bounded else None, limit if bounded else None) for value, label, limit in zip((low, high, eta), ("low", "high", "eta"), (2., 2., 1.)))
+
 class Path:
     def __init__(self, native, base, mode="latent", seed=42, neutral=None):
         tensor(base)
@@ -15,6 +22,7 @@ class Path:
             raise ValueError("Unknown reference path representation.")
         self.native, self.session, self.base, self.mode = native, native.session, base.detach().clone(), mode
         self.low, self.high = split(base)
+        self.empty = self.session.scale == 0 or not torch.any(self.base != 0).item()
         self.fields, self.references, self.pixels = {}, {}, {}
         if neutral is not None:
             tensor(neutral)
@@ -34,7 +42,10 @@ class Path:
         key = (low, high)
         if key not in self.fields:
             self.phase()
-            self.fields[key] = self.native.endpoint(low * self.low + high * self.high)
+            zero = self.empty or low == high == 0
+            self.fields[key] = self.references[0.] if zero and 0. in self.references else self.native.endpoint(low * self.low + high * self.high)
+            if zero:
+                self.references[0.] = self.fields[(0., 0.)] = self.fields[key]
         else:
             self.hits += 1
         return self.fields[key]
@@ -66,14 +77,15 @@ class Path:
 
     def cost(self, point):
         # Reserve all uncached endpoints before a candidate query.
-        low, high, eta = point
-        endpoints = [] if (low, high) in self.fields else [0.]
+        low, high, eta = coordinates(point, False)
+        zero = self.empty or low == high == 0
+        endpoints = [] if (low, high) in self.fields or zero and 0. in self.references else [0.]
         if self.mode == "cfg":
             if eta != 0:
                 endpoints.append(eta)
         else:
             needed = (0., 1.) if self.mode == "random" or self.mode == "mix" and eta not in {0., 1.} or self.native.affine and eta not in {0., 1.} else (eta,)
-            endpoints.extend(value for value in needed if value not in self.references and not (value == 0 and ((0., 0.) in self.fields or (low, high) == (0., 0.))))
+            endpoints.extend(value for value in needed if value not in self.references and not (value == 0 and ((0., 0.) in self.fields or zero)))
         return sum(self.native.cost(value) for value in endpoints), len(endpoints) * self.native.queries()
 
     def randomize(self):
@@ -85,7 +97,7 @@ class Path:
         self.direction = random * delta.double().norm().to(random.dtype) / random.double().norm().clamp_min(1e-30).to(random.dtype)
 
     def canonical(self, point):
-        low, high, eta = point
+        low, high, eta = coordinates(point, False)
         low = low if self.session.scale != 0 and torch.any(self.low != 0).item() else 1.
         high = high if self.session.scale != 0 and torch.any(self.high != 0).item() else 1.
         if not self.session.cleanup or torch.equal(self.session.source, self.session.target) or self.native.cfg and self.native.guidance == 0 or self.mode != "cfg" and self.native.affine and 0. in self.references and 1. in self.references and torch.equal(self.references[0.], self.references[1.]):
@@ -124,9 +136,7 @@ class Path:
 
     def candidate(self, point):
         # Decode every visited finite amplitude candidate.
-        if len(point) != 3:
-            raise ValueError("Path candidates need three control coordinates.")
-        point = (number(point[0], "low", 0, 2), number(point[1], "high", 0, 2), number(point[2], "eta", 0, 1))
+        point = coordinates(point)
         if self.session.limit is not None:
             self.session.limit.require()
         latent = self.latent(point)

@@ -45,7 +45,7 @@ def common(parser):
     parser.add_argument("--noise", type=positive, default=1)
     parser.add_argument("--start", type=float, default=.90)
     parser.add_argument("--delta", type=float, default=.15)
-    parser.add_argument("--field", type=str.casefold, choices=("pullback", "chord", "instant", "average"), default="pullback")
+    parser.add_argument("--field", type=str.casefold, choices=("pullback", "chord", "instant", "average", "zero"), default="pullback")
     parser.add_argument("--fieldridge", type=float, default=.05)
     parser.add_argument("--fieldprobe", type=float, default=.25)
     parser.add_argument("--fieldradius", type=float, default=1.)
@@ -275,6 +275,10 @@ def validate(args):
     options(args.field, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry)
     if args.field != "chord" and args.method not in {"path", "raw", "fixed"}:
         raise ValueError("Historical methods require --field chord; current fields use path/raw/fixed modes.")
+    if args.method == "raw" and (args.prior != "off" or args.heldout or args.control):
+        raise ValueError("Raw outputs require --prior off without held-out or controller diagnostics.")
+    if args.heldout and args.prior == "off":
+        raise ValueError("Held-out consistency requires an enabled prior.")
     if args.compensation and args.method != "path":
         raise ValueError("Compensation probes belong only to adaptive path control.")
     if args.compensation and args.algorithm != "trust":
@@ -387,7 +391,8 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
             constructed = build(session, native, args.field, args.start, args.delta, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry)
             base, neutral = constructed.value, constructed.neutral
             metadata["field"] = constructed.report
-            limit.require(native.cost(0.), native.queries())
+            cached = neutral is not None and (session.scale == 0 or not base.ne(0).any().item())
+            limit.require(0 if cached else native.cost(0.), 0 if cached else native.queries())
         except Exhausted as error:
             return stopped(session, metadata, args.method, error, judge=judge, initial=initialstats)
     else:

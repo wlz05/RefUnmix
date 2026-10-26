@@ -238,6 +238,8 @@ def select(path, score, weight, prior, config=None):
         candidate.complete = True
 
     def visit(point):
+        if len(point) != 3 or any(not math.isfinite(float(value)) for value in point):
+            raise ValueError("Proposed controls must contain three finite coordinates.")
         point = path.canonical(tuple(min(limit, max(0., float(value))) for value, limit in zip(point, (2., 2., 1.))))
         if point in visited or len(candidates) >= config.candidates:
             return None

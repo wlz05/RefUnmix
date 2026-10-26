@@ -45,7 +45,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(validate(args), Config())
 
     def testmainidentity(self):
-        suites = ("core", "reference", "prior", "search", "guidance", "budget", "candidates", "mechanism", "cost", "release", "geometry", "solver", "attainment", "leverage", "frontier", "diagnosis", "goals")
+        suites = ("null", "core", "reference", "prior", "search", "guidance", "budget", "candidates", "mechanism", "cost", "release", "geometry", "solver", "attainment", "leverage", "frontier", "diagnosis", "goals")
         reference = variants("core")["full"]
         for suite in suites:
             self.assertEqual(variants(suite)["full"], reference)
@@ -83,9 +83,9 @@ class ControllerTests(unittest.TestCase):
 
     def testfrozenidentity(self):
         args = self.args()
-        args.suite, args.recipe = "core", "recipe.json"
-        payload = {"schema": 1, "split": "val", "suite": "core", "settings": settings(args), "variants": variants("core"), "digests": {}}
-        with patch("trial.locate", return_value=File("recipe.json")), patch("trial.read", return_value=payload), patch("trial.identities", return_value={}):
+        args.suite, args.recipe, args.manifest = "core", "recipe.json", "split.json"
+        payload = {"schema": 1, "split": "val", "suite": "core", "settings": settings(args), "variants": variants("core"), "digests": {}, "manifestdigest": "manifest"}
+        with patch("trial.locate", return_value=File("recipe.json")), patch("trial.read", return_value=payload), patch("trial.identities", return_value={}), patch("trial.digest", return_value="manifest"):
             self.assertEqual(frozen(args, []), variants("core"))
             args.seed = 52
             with self.assertRaises(ValueError):
