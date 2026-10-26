@@ -11,6 +11,7 @@ from data import clean, destination, locate
 from engine.format import read as pixels
 from engine.reproduce import digest, seed, snapshot
 from engine.serial import read as readjson, write as publish
+from engine.protocol import defaults, signature
 
 def positive(value):
     number = int(value)
@@ -159,6 +160,7 @@ def common(parser):
     parser.add_argument("--probes", type=nonnegative, default=0)
     parser.add_argument("--trust", type=str.casefold, choices=("fixed", "curvature"), default="fixed")
     parser.add_argument("--maps", type=nonnegative, default=0)
+    parser.set_defaults(**defaults())
     return parser
 
 def localization(args):
@@ -362,6 +364,7 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
     pixels = session.origin.detach().float().cpu().contiguous().numpy()
     metadata = {"settings": dict(vars(args)), "source": source, "target": target, "imagesha256": hashlib.sha256(pixels.tobytes()).hexdigest(), "imageshape": list(pixels.shape), "imagehashformat": "fitted RGB float32 NCHW", "masksha256": hashlib.sha256(mask.convert("L").tobytes()).hexdigest() if mask is not None else None, "modelcheckpoint": getattr(editor, "metadata", None), "controlcheckpoint": getattr(judge, "metadata", None), "checkpointverification": "Weight hashes are recorded when local checkpoints are loaded."}
     metadata["reproducibility"] = snapshot()
+    metadata["controlsignature"] = signature(args)
     metadata["controlactive"] = judge is not None and args.method not in {"raw", "fixed", "base"}
     metadata["configuration"] = {key: jsonfile(getattr(args, key, None)) for key in ("constraints", "probabilities", "radiusprofile")}
     adapterfile = getattr(args, "adapter", None)

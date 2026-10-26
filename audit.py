@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 from data import clean, locate
 from run import writejson
+from engine.protocol import changes
 
 def read(path):
     from engine.serial import read as readjson
@@ -90,6 +91,12 @@ def values(row):
         result["path:initialcomplete"] = int(report.get("initialization", {}).get("complete", False))
         result["rescue:queries"] = report.get("rescue", {}).get("queries")
         result["rescue:accepted"] = report.get("rescue", {}).get("accepted")
+        for key in ("considered", "eligible", "proposed", "budgetblocked"):
+            result["rescue:" + key] = report.get("rescue", {}).get(key)
+        for key in ("evaluations", "positiveexcess", "penalized", "vetoed"):
+            result["prior:" + key] = report.get("prioractivity", {}).get(key)
+        if isinstance(report.get("prioractivity", {}).get("selectionchanged"), bool):
+            result["prior:selectionchanged"] = int(report["prioractivity"]["selectionchanged"])
         initial = report.get("initialleverage") or {}
         for key in ("jointnovelty", "protectionuncancellable", "protectionresidual", "directionnorm", "damageslope", "damagecurvature"):
             if initial.get("geometryresolved") and initial.get("fittrusted"):
@@ -197,6 +204,27 @@ def paired(left, right, repeats=2000, seed=42):
     provenance = all(all(key in row.get("report", {}) for key in ("source", "target", "imagesha256", "masksha256")) for row in [*left, *right])
     return {"direction": "comparison minus reference", "bootstrap": "source-grouped percentile intervals; not corrected for multiple comparisons", "provenancecomplete": provenance, "repeats": repeats, "seed": seed, "metrics": result}
 
+def agreement(left, right):
+    # Check exact output equality instead of rounded metric equality.
+    first = {(str(row["key"]), int(row["seed"])): row for row in left}
+    second = {(str(row["key"]), int(row["seed"])): row for row in right}
+    if len(first) != len(left) or len(second) != len(right) or first.keys() != second.keys() or not first:
+        raise ValueError("Output agreement requires complete unique matched requests.")
+    result = {"pairs": len(first), "hashed": 0, "identical": 0, "different": 0, "missinghash": 0, "samecandidatepath": 0, "recordedcandidatepath": 0}
+    for key, row in first.items():
+        other = second[key]
+        hashes = row.get("resultsha256"), other.get("resultsha256")
+        valid = all(isinstance(value, str) and len(value) == 64 and all(letter in "0123456789abcdef" for letter in value) for value in hashes)
+        result["hashed" if valid else "missinghash"] += 1
+        if valid:
+            result["identical" if hashes[0] == hashes[1] else "different"] += 1
+        reports = row.get("report", {}), other.get("report", {})
+        if all(isinstance(report.get("candidates"), list) for report in reports):
+            result["recordedcandidatepath"] += 1
+            result["samecandidatepath"] += [value.get("point") for value in reports[0]["candidates"]] == [value.get("point") for value in reports[1]["candidates"]]
+    result["scope"] = "Stored PNG hashes and visited coordinates; equal aggregate scores do not imply equal images."
+    return result
+
 def main():
     parser = argparse.ArgumentParser(description="Audit measured interactions and paired held-out outcomes.")
     parser.add_argument("--summary", required=True)
@@ -212,6 +240,11 @@ def main():
         if reference.get("split") != comparison.get("split") or reference.get("oracle") != comparison.get("oracle"):
             raise ValueError("Paired summaries must use the same split and mask protocol.")
         result["paired"] = paired(reference["rows"], comparison["rows"], args.repeats, args.seed)
+        result["agreement"] = agreement(reference["rows"], comparison["rows"])
+        identities = [payload.get("controlsignature") for payload in (reference, comparison)]
+        result["configuration"] = {"recorded": all(isinstance(value, dict) and isinstance(value.get("settings"), dict) for value in identities)}
+        if result["configuration"]["recorded"]:
+            result["configuration"].update({"reference": identities[0]["sha256"], "comparison": identities[1]["sha256"], "changes": changes(identities[0]["settings"], identities[1]["settings"])})
     if args.output:
         output = clean(args.output, "output")
         if output.exists():

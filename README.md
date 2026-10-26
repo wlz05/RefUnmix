@@ -424,7 +424,17 @@ python -B RefUnmix/doctor.py --dataset data --mapping mapping_file.json --images
 
 Run each validation command first. Its test command reads that suite's `recipe.json` with the same seed set, code, checkpoints, precision, and base options. Use a new output directory for every run; outputs are not overwritten. If an existing official manifest is available, use that manifest consistently instead of creating a custom split.
 
-Each suite applies its named changes internally. Keep the shared command flags unchanged between its validation and test runs. `full` uses the main controller configuration. In `fields`, that configuration is named `pullbackfull`; in `alignment`, it is named `controlled`.
+Each suite inherits the supplied main configuration and applies its named interventions. Keep the shared command flags unchanged between its validation and test runs. `full` uses the same effective controls as the main run. In the default `fields` suite it is named `pullbackfull`; in `alignment` it is named `controlled`. Explicit settings such as native steps, reference path, prior, and rescue are preserved in the full arm.
+
+Check the complete twelve-arm field plan before loading data or checkpoints:
+
+```bash
+python -B RefUnmix/trial.py --suite fields --manifest outputs/split.json --split val --model models --clip clip --device cuda:0 --precision fp32 --seed 42 --seeds 42 52 3047 3407 --field pullback --method path --release --no-compensation --prior off --poststeps 1 --candidates 12 --maxsamples 64 --maxcalls 64 --dry
+```
+
+The printed `design.main` is `pullbackfull`, whose `changes` must be empty. Each arm lists its effective settings, configuration hash, and changes relative to the supplied main configuration. The run stops before model loading if the full arm differs. Dry runs describe the current plan; actual test runs still verify the frozen recipe, checkpoints, and disjoint sources. Regenerate validation recipes after updating the code.
+
+Main and variant summaries save `controlsignature`; suite summaries save the complete `design`. Matching hashes identify matching control settings. Seeds, input identities, code hashes, checkpoint hashes, and split membership are recorded separately and must also match for a repeated run. The 256-cap mechanism diagnostic therefore has a different budget signature from the 64-cap main run.
 
 | Suite | Intervention | Sample/call cap |
 |-------|--------------|----------------|
@@ -561,6 +571,21 @@ Explicit bounded, hard, and soft DDPM consistency. Named outputs: `noprior`, `bo
 python -B RefUnmix/trial.py --dataset data --mapping mapping_file.json --images annotation_images --manifest outputs/split.json --split val --suite prior --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/priorval
 python -B RefUnmix/trial.py --dataset data --mapping mapping_file.json --images annotation_images --manifest outputs/split.json --split test --suite prior --recipe outputs/priorval/recipe.json --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/priortest
 ```
+
+#### Verify Optional Mechanisms
+
+The main method uses `--release --no-compensation --prior off`. `release` implements protected-response reference-field compensation. The `compensation` switch enables an additional recovery probe only when the regular proposal needs a fallback and the fitted response is trusted. `prior` adds separately charged consistency probes. Their effects are measured by the `leverage` and `prior` suites; they are not required by the main configuration.
+
+Compare those suites after the test runs:
+
+```bash
+python -B RefUnmix/audit.py --summary outputs/leveragetest/uncompensated/summary.json --compare outputs/leveragetest/compensated/summary.json --output outputs/rescueaudit.json
+python -B RefUnmix/audit.py --summary outputs/priortest/noprior/summary.json --compare outputs/priortest/boundedprior/summary.json --output outputs/prioraudit.json
+```
+
+`configuration.changes` checks the intended intervention. `agreement` counts exact matching PNG hashes and matching visited coordinates; equal rounded averages do not establish equal outputs. The per-request `rescue` record separates considered, eligible, proposed, budget-blocked, queried, accepted, and finally selected probes, with skipped reasons. The per-request `prioractivity` records evaluations, positive excess, penalties, hard vetoes, and whether removing the prior changes selection on the same observed pool. Summary coverage retains missing activity records separately.
+
+With attainment-first selection, a finite bounded prior cannot change a unique winner in the attainment band. A prior can therefore be evaluated and assign nonzero penalties without changing the selected image. The same-pool comparison isolates selection; separate on/off runs also measure changed query trajectories and probe cost. Exact matching outputs count as zero output effect for that intervention.
 
 #### Guidance
 

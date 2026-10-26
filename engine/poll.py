@@ -298,6 +298,7 @@ def select(path, score, weight, prior, config=None):
     guard = Guard(config.curvature, config.responseerror, config.hessian, config.damping, config.critical, config.monitor)
     lastmove = None
     initialleverage = None
+    rescuetrace = {"considered": 0, "eligible": 0, "proposed": 0, "budgetblocked": 0, "skipped": {}}
     generator = np.random.default_rng(path.seed ^ 0xC91)
     fixed = functional.interpolate(weight.detach().to(session.origin.device).double(), session.origin.shape[-2:], mode="bilinear", align_corners=False)
     root = (fixed / mass).sqrt() if mass > 0 else torch.zeros_like(fixed)
@@ -414,7 +415,19 @@ def select(path, score, weight, prior, config=None):
             if config.monitor and not repair and not rescue and (proposed is None or not proposed["converged"] or float(np.linalg.norm(proposed["move"] * model.root)) <= config.critical or path.canonical(proposed["point"]) in visited):
                 guard.amplify()
                 rescue = True
-            compensated = probe(model, leverage, [row.point for row in observed], radius, lower, scales, raw.damage, config.damagescale) if config.compensation and rescue and not repair else None
+            compensated = None
+            if config.compensation:
+                rescuetrace["considered"] += 1
+                reason = "unresolved geometry" if repair else "regular proposal available" if not rescue else "untrusted fit" if not leverage.get("fittrusted") else None
+                if reason is None:
+                    rescuetrace["eligible"] += 1
+                    compensated = probe(model, leverage, [row.point for row in observed], radius, lower, scales, raw.damage, config.damagescale)
+                    if compensated is None:
+                        reason = "no improving unvisited direction"
+                    else:
+                        rescuetrace["proposed"] += 1
+                if reason is not None:
+                    rescuetrace["skipped"][reason] = rescuetrace["skipped"].get(reason, 0) + 1
             point = geometry(model, [row.point for row in observed], radius) if repair else compensated if compensated is not None else fallback(model, [row.point for row in observed], radius, lastmove) if rescue else proposed["point"] if proposed is not None else None
             if point is None:
                 history.append({"kind": "model", "radius": radius, "model": model.metadata(), "certificate": certificate, "curvature": monitoring, "leverage": leverage, "reason": "No unvisited safeguarded proposal." if rescue else "No valid local proposal."})
@@ -422,6 +435,8 @@ def select(path, score, weight, prior, config=None):
                 continue
             budgetfallback = False
             if not affordable(point):
+                if compensated is not None:
+                    rescuetrace["budgetblocked"] += 1
                 # Reuse one cached endpoint when a joint query cannot fit.
                 fieldpoint, referencepoint = list(point), list(anchor.point)
                 fieldpoint[2], referencepoint[2] = anchor.point[2], point[2]
@@ -439,6 +454,7 @@ def select(path, score, weight, prior, config=None):
                 budgetfallback, rescue, compensated, proposed = True, not repair, None, None
             current = visit(point)
             record = {"kind": "geometry" if repair else "compensation" if compensated is not None else "fallback" if rescue else "release" if proposed is not None and proposed["solver"].get("operator") == "release" else "trust", "radius": radius, "center": list(anchor.point), "point": list(point), "model": model.metadata(), "certificate": certificate, "curvature": monitoring, "leverage": leverage}
+            record["candidate"] = current.key if current is not None else None
             record["budgetfallback"] = budgetfallback
             if proposed is not None:
                 record["solver"] = proposed["solver"]
@@ -517,7 +533,9 @@ def select(path, score, weight, prior, config=None):
     report["protection"] = {"active": mass > 0, "mass": mass, "scope": "Empty protection imposes zero damage and preserves semantic search."}
     report["curvature"] = guard.metadata()
     report["release"] = {"enabled": config.release and config.algorithm == "trust" and config.selection == "attain", "geometry": config.geometry, "queries": sum(row.get("kind") == "release" for row in history), "accepted": sum(row.get("kind") == "release" and row.get("accepted") is True for row in history), "scope": "Compensation proposals share protected-output verification and attainment selection."}
-    report["rescue"] = {"enabled": config.compensation, "queries": sum(row.get("kind") == "compensation" for row in history), "accepted": sum(row.get("kind") == "compensation" and row.get("accepted") is True for row in history), "scope": "Optional rescue probes are separate from the main release operator."}
+    report["rescue"] = {**rescuetrace, "enabled": config.compensation, "queries": sum(row.get("kind") == "compensation" for row in history), "accepted": sum(row.get("kind") == "compensation" and row.get("accepted") is True for row in history), "selected": any(row.get("kind") == "compensation" and row.get("candidate") == selected.key for row in history), "scope": "Optional rescue probes are separate from the main release operator."}
+    from engine.activity import prior as prioractivity
+    report["prioractivity"] = prioractivity(raw, candidates, selected, config, prior.metadata(), getattr(prior, "mode", "off" if raw.prior is None else "unknown"))
     report["position"] = {"task": "Editing attainability under a fixed output protection budget", "method": "Frozen-generator inference-time reference-field control", "reference": "RefUnmix calibration is separate from the native raw editor", "coordinates": "Frequency amplitudes parameterize controls, not semantic categories", "cost": "Single-step backbones do not imply a single-query complete editor"}
     report["initialleverage"] = initialleverage
     report["radiusprofile"] = radiusinfo

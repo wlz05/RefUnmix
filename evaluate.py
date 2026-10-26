@@ -15,6 +15,7 @@ from split import select
 from engine.format import fit, read
 from engine.reproduce import digest, snapshot
 from engine.serial import read as readjson
+from engine.protocol import signature
 
 def datasetargs(parser):
     parser.add_argument("--dataset", default="./pie")
@@ -158,6 +159,11 @@ def coverage(rows):
     for key in ("release", "rescue"):
         records = [report.get(key, {}) for report in reports]
         result[key] = {"enabled": sum(record.get("enabled") is True for record in records), "queried": sum(record.get("queries", 0) > 0 for record in records), "accepted": sum(record.get("accepted", 0) > 0 for record in records), "queries": sum(record.get("queries", 0) for record in records)}
+    records = [report["prioractivity"] for report in reports if "prioractivity" in report]
+    result["prior"] = {"recorded": len(records), "missing": len(reports) - len(records), "enabled": sum(record.get("enabled") is True for record in records), "queried": sum(record.get("evaluations", 0) > 0 for record in records), "penalized": sum(record.get("penalized", 0) > 0 for record in records), "vetoed": sum(record.get("vetoed", 0) > 0 for record in records), "selectionchanged": sum(record.get("selectionchanged") is True for record in records), "reasons": {reason: sum(record.get("reason") == reason for record in records) for reason in sorted({record["reason"] for record in records})}}
+    records = [report.get("rescue", {}) for report in reports]
+    result["rescueactivity"] = {key: sum(record.get(key, 0) for record in records) for key in ("considered", "eligible", "proposed", "budgetblocked")}
+    result["rescueactivity"]["selected"] = sum(record.get("selected") is True for record in records)
     heads = [key for report in reports for key in report.get("attainment", {}).get("bottlenecks", [])]
     result["bottlenecks"] = {key: heads.count(key) for key in sorted(set(heads))}
     result["scope"] = "All image-seed requests; counts describe execution rather than independent quality."
@@ -241,6 +247,7 @@ def execute(args, resources=None):
             del edited, session, mask
     payload = {"schema": 1, "split": args.split, "manifest": args.manifest, "oracle": args.oracle, "independentcheckpoint": independent, "controlcheckpoint": getattr(judge, "metadata", None), "reportcheckpoint": getattr(evaluation, "metadata", None), "evaluatornote": "Different CLIP weights remain shared-family diagnostics, not independent task evidence.", "metricnote": "Pixel, band, and paired errors are diagnostics, not official benchmark protocols.", "settings": settings, "seeds": seeds, "inputs": provenance, "reproducibility": snapshot(), "summary": summary(rows), "categories": {category: summary([row for row in rows if row["category"] == category]) for category in sorted({row["category"] for row in rows})}, "rows": rows}
     payload["cost"] = costs(rows)
+    payload["controlsignature"] = signature(argparse.Namespace(**settings))
     payload["controller"] = coverage(rows)
     statuses = [row["report"].get("field", {}) for row in rows]
     payload["fields"] = {"requested": args.field, "requests": len(rows), "actual": {kind: sum(value.get("actual") == kind for value in statuses) for kind in sorted({value["actual"] for value in statuses if "actual" in value})}, "budgetfallback": sum(value.get("status") == "budget" for value in statuses), "budgetstopped": sum(bool(row["report"].get("budgetstopped")) for row in rows), "sourcefallback": sum(bool(row["report"].get("budgetstopped")) and row["report"].get("selected") == "source" for row in rows)}

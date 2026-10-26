@@ -11,22 +11,24 @@ from evaluate import datasetargs, evaluator, execute, items
 from run import common, jsonfile, load, validate, writejson
 from split import identities
 from engine.serial import read
+from engine.protocol import changes, configuration, defaults, signature
 
-def variants(suite, consistency="ddpm"):
+def variants(suite, consistency="ddpm", base=None):
     # Freeze one main configuration across all ablation suites.
-    shared = {"field": "pullback", "fieldgeometry": "coupled", "method": "path", "axes": "all", "eta": 0., "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False, "representation": "latent", "selection": "attain", "geometry": "output", "algorithm": "trust", "release": True, "poststeps": 1, "cfg": False, "guidance": 1., "referencepath": "auto"}
+    shared = defaults(base)
     if suite == "alignment":
-        return {"aligned": {**shared, "fieldgeometry": "coupled", "method": "raw"}, "scalar": {**shared, "fieldgeometry": "scalar", "method": "raw"}, "controlled": {**shared, "fieldgeometry": "coupled", "method": "path"}, "matched": {**shared, "fieldgeometry": "scalar", "method": "path"}}
+        raw = {"method": "raw", "compensation": False, "frontier": False}
+        return {"aligned": {**shared, **raw, "fieldgeometry": "coupled"}, "scalar": {**shared, **raw, "fieldgeometry": "scalar"}, "controlled": {**shared, "fieldgeometry": "coupled", "method": "path"}, "matched": {**shared, "fieldgeometry": "scalar", "method": "path"}}
     if suite == "fields":
         result = {}
         for field in ("pullback", "chord", "instant", "average"):
-            result[field + "raw"] = {**shared, "field": field, "fieldgeometry": "coupled", "method": "raw"}
-            result[field + "fixed"] = {**shared, "field": field, "fieldgeometry": "coupled", "method": "fixed", "axes": "none", "eta": 0.}
-            result[field + "full"] = {**shared, "field": field, "fieldgeometry": "coupled", "method": "path", "axes": "all", "release": True}
+            result[field + "raw"] = {**shared, "field": field, "method": "raw", "compensation": False, "frontier": False}
+            result[field + "fixed"] = {**shared, "field": field, "method": "fixed", "axes": "none", "eta": 0., "prior": "off", "heldout": False, "compensation": False, "frontier": False}
+            result[field + "full"] = {**shared, "field": field}
         return result
     if suite == "diagnosis":
         fixed = {"method": "fixed", "axes": "none", "prior": "off", "heldout": False, "representation": "latent", "compensation": False, "frontier": False}
-        changes = {"raw": {"method": "raw"}, "target": {**fixed, "eta": 0.}, "middle": {**fixed, "eta": .5}, "source": {**fixed, "eta": 1.}, "mixture": {**fixed, "eta": .5, "representation": "mix"}, "rgb": {**fixed, "eta": .5, "representation": "rgb"}, "random": {**fixed, "eta": .5, "representation": "random"}, "full": {}}
+        changes = {"raw": {"method": "raw", "compensation": False, "frontier": False}, "target": {**fixed, "eta": 0.}, "middle": {**fixed, "eta": .5}, "source": {**fixed, "eta": 1.}, "mixture": {**fixed, "eta": .5, "representation": "mix"}, "rgb": {**fixed, "eta": .5, "representation": "rgb"}, "random": {**fixed, "eta": .5, "representation": "random"}, "full": {}}
         return {key: {**shared, **value} for key, value in changes.items()}
     core = {"raw": {"method": "raw", "compensation": False, "frontier": False}, "target": {"axes": "none", "eta": 0.}, "source": {"axes": "none", "eta": 1.}, "eta": {"axes": "path"}, "field": {"axes": "field", "eta": 0.}, "full": {}}
     prior = {"prior": consistency, **({"flowconsistency": True} if consistency == "flow" else {})}
@@ -52,8 +54,27 @@ def variants(suite, consistency="ddpm"):
             extra["cost"] = {"light": {"candidates": 3, "axes": "path", "prior": "off"}, "short": {"candidates": 7}}
     return {key: {**shared, **value} for key, value in {**core, **extra[suite]}.items()}
 
+def design(args, controls):
+    # Verify the full arm before loading checkpoints.
+    validate(args)
+    label = args.field + "full" if args.suite == "fields" else "controlled" if args.suite == "alignment" and args.fieldgeometry == "coupled" else "matched" if args.suite == "alignment" else "full"
+    if label not in controls:
+        raise ValueError("The ablation suite has no matching main reference.")
+    reference = configuration(args)
+    rows = {}
+    for name, modification in controls.items():
+        current = deepcopy(args)
+        for key, value in modification.items():
+            setattr(current, key, value)
+        validate(current)
+        identity = signature(current)
+        rows[name] = {**identity, "changes": changes(reference, identity["settings"])}
+    if rows[label]["changes"]:
+        raise ValueError("The full ablation differs from the main configuration: " + ", ".join(rows[label]["changes"]))
+    return {"main": label, "controlsignature": signature(args), "variants": rows}
+
 def settings(args):
-    excluded = {"output", "manifest", "split", "limit", "seeds", "seed", "dataset", "mapping", "images", "recipe", "suite"}
+    excluded = {"output", "manifest", "split", "limit", "seeds", "seed", "dataset", "mapping", "images", "recipe", "suite", "dry"}
     result = {key: value for key, value in vars(args).items() if key not in excluded}
     result["seeds"] = sorted(set(getattr(args, "seeds", None) or [args.seed]))
     result["configuration"] = {key: jsonfile(getattr(args, key)) for key in ("constraints", "probabilities", "radiusprofile")}
@@ -81,6 +102,8 @@ def frozen(args, chosen):
     allowed = {"method", "axes", "eta", "representation", "prior", "priorcontrol", "algorithm", "cleanup", "poststeps", "cfg", "guidance", "referencepath", "candidates", "maxsamples", "maxcalls", "monitor", "compensation", "release", "geometry", "frontier", "certificate", "solversteps", "certificatestep", "heldout", "selection", "gainloss", "goals", "field", "fieldridge", "fieldprobe", "fieldradius", "fieldtolerance", "fieldgeometry", "control", "flowconsistency"}
     if not isinstance(controls, dict) or any(not key.isalpha() or key != key.casefold() or not isinstance(value, dict) or value.keys() - allowed for key, value in controls.items()):
         raise ValueError("Frozen variants contain unsupported controls.")
+    if controls != variants(args.suite, "flow" if getattr(args, "backbone", "vp") != "vp" else "ddpm", args):
+        raise ValueError("Frozen variants differ from the declared ablation design.")
     return controls
 
 def main():
@@ -88,6 +111,7 @@ def main():
     parser.set_defaults(split="val", output="./trials")
     parser.add_argument("--suite", type=str.casefold, choices=("alignment", "fields", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
     parser.add_argument("--recipe", default=None)
+    parser.add_argument("--dry", action="store_true", help="Print effective variants without loading data or checkpoints.")
     args = parser.parse_args()
     if args.split not in {"val", "test"} or not args.manifest or args.method != "path":
         raise ValueError("Native trials require path mode and a grouped val/test manifest.")
@@ -97,13 +121,14 @@ def main():
         raise ValueError("Test trials require a frozen validation recipe.")
     if args.suite == "prior" and args.backbone != "vp" and not args.flowconsistency:
         raise ValueError("Flow prior trials require --flowconsistency before loading the backbone.")
+    controls = variants(args.suite, "flow" if args.backbone != "vp" else "ddpm", args)
+    plan = design(args, controls)
+    if args.dry:
+        print(json.dumps({"schema": 1, "design": plan, "scope": "Declared controls only; no data or frozen recipe has been verified."}, indent=2, allow_nan=False))
+        return
     chosen = items(args)
-    controls = frozen(args, chosen) if args.recipe else variants(args.suite, "flow" if args.backbone != "vp" else "ddpm")
-    for modification in controls.values():
-        current = deepcopy(args)
-        for key, value in modification.items():
-            setattr(current, key, value)
-        validate(current)
+    if args.recipe:
+        controls = frozen(args, chosen)
     output = destination(args.output, "output")
     if output.exists():
         raise FileExistsError(output)
@@ -123,11 +148,13 @@ def main():
         for key, value in modification.items():
             setattr(current, key, value)
         payload = execute(current, (editor, judge, evaluation, independent))
-        results[label] = {"summary": payload["summary"], "cost": payload["cost"], "path": str(output / label / "summary.json"), "rows": len(payload["rows"])}
+        if payload["controlsignature"]["sha256"] != plan["variants"][label]["sha256"]:
+            raise RuntimeError("Executed control settings differ from the checked ablation plan.")
+        results[label] = {"summary": payload["summary"], "cost": payload["cost"], "controller": payload["controller"], "controlsignature": payload["controlsignature"], "changes": plan["variants"][label]["changes"], "path": str(output / label / "summary.json"), "rows": len(payload["rows"])}
     if args.split == "val":
         recipe = {"schema": 1, "split": "val", "suite": args.suite, "settings": settings(args), "checkpoints": checkpoints, "variants": controls, "digests": identities(chosen), "group": sorted({item.group for item in chosen if item.group}), "family": sorted({item.family for item in chosen if item.family}), "manifestdigest": hashlib.sha256(locate(Path("."), clean(args.manifest, "manifest")).read_bytes()).hexdigest(), "note": "Configurations are frozen; no test-based winner is selected."}
         writejson(output / "recipe.json", recipe)
-    writejson(output / "summary.json", {"schema": 1, "split": args.split, "settings": vars(args), "variants": results, "note": "Controller proxies and consistency remain diagnostics; use independent evidence."})
+    writejson(output / "summary.json", {"schema": 1, "split": args.split, "settings": vars(args), "design": plan, "variants": results, "note": "Controller proxies and consistency remain diagnostics; use independent evidence."})
 
 if __name__ == "__main__":
     main()
