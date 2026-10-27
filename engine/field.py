@@ -96,9 +96,10 @@ def temporal(matrix, value, tolerance=1e-6):
         raise ValueError("Temporal decomposition requires one or two finite contrast columns.")
     if not 0 < number(tolerance, "Temporal rank tolerance") < 1:
         raise ValueError("Temporal rank tolerance must be between zero and one.")
-    nonzero = bool(np.any(value != 0))
-    scale = max(float(np.abs(matrix).max()), float(np.abs(value).max()))
-    matrix, value = (item / scale if scale else item for item in (matrix, value))
+    scales = np.max(np.abs(matrix), axis=0)
+    targetscale = float(np.max(np.abs(value)))
+    matrix = matrix / np.where(scales > 0, scales, 1.)
+    value = value / targetscale if targetscale else value
     coefficients, _, rank, _ = np.linalg.lstsq(matrix, value, rcond=None)
     candidates = [np.zeros(matrix.shape[1])]
     if np.all(coefficients >= 0):
@@ -111,15 +112,42 @@ def temporal(matrix, value, tolerance=1e-6):
         candidates.append(candidate)
     nonnegative = min(candidates, key=lambda item: math.hypot(*(matrix @ item - value)))
     length = math.hypot(*value)
-    if length == 0 and nonzero:
+    spanratio = math.hypot(*(matrix @ coefficients - value)) / length if length else None
+    coneratio = math.hypot(*(matrix @ nonnegative - value)) / length if length else None
+    span = spanratio ** 2 if spanratio is not None else None
+    cone = coneratio ** 2 if coneratio is not None else None
+    spanstatus = "zero field" if span is None else "underflow" if span == 0 and spanratio > 0 else "finite"
+    conestatus = "zero field" if cone is None else "underflow" if cone == 0 and coneratio > 0 else "finite"
+
+    def restore(weights):
+        # Restore coefficient units without intermediate overflow.
+        restored = []
+        for weight, scale in zip(weights, scales):
+            if weight == 0 or targetscale == 0:
+                restored.append(0.)
+                continue
+            if scale == 0:
+                raise ValueError("A zero temporal column has a nonzero coefficient.")
+            first, exponent = math.frexp(float(weight))
+            second, targetexponent = math.frexp(targetscale)
+            divisor, columnexponent = math.frexp(float(scale))
+            try:
+                coefficient = math.ldexp(first * second / divisor, exponent + targetexponent - columnexponent)
+            except OverflowError as error:
+                raise ValueError("Temporal coefficients exceed numerical range.") from error
+            if coefficient == 0 or not math.isfinite(coefficient):
+                raise ValueError("Temporal coefficients exceed numerical range.")
+            restored.append(coefficient)
+        return np.asarray(restored)
+
+    coefficients, nonnegative = restore(coefficients), restore(nonnegative)
+    try:
+        strength = math.fsum(nonnegative)
+    except OverflowError as error:
+        raise ValueError("Temporal mixture strength exceeds numerical range.") from error
+    if not math.isfinite(strength) or any(item is not None and not math.isfinite(item) for item in (span, cone)):
         raise ValueError("Temporal decomposition exceeds numerical range.")
-    span = (math.hypot(*(matrix @ coefficients - value)) / length) ** 2 if length else None
-    cone = (math.hypot(*(matrix @ nonnegative - value)) / length) ** 2 if length else None
-    strength = float(nonnegative.sum())
-    result = {"rank": int(rank), "coefficients": coefficients.tolist(), "nonnegativeweights": nonnegative.tolist(), "spanerror": span, "coneerror": cone, "nonnegative": cone <= tolerance ** 2 if cone is not None else None, "strength": strength, "weight": float(nonnegative[-1] / strength) if strength > 0 and len(nonnegative) == 2 else None, "status": "measured" if length else "zero field", "scope": "Input temporal-family membership, separate from output response and task completion."}
-    if any(not math.isfinite(number) for item in (coefficients, nonnegative) for number in item) or any(number is not None and not math.isfinite(number) for number in (span, cone, strength)):
-        raise ValueError("Temporal decomposition exceeds numerical range.")
-    return result
+    return {"rank": int(rank), "coefficients": coefficients.tolist(), "nonnegativeweights": nonnegative.tolist(), "spanerror": None if spanstatus == "underflow" else span, "coneerror": None if conestatus == "underflow" else cone, "spanstatus": spanstatus, "conestatus": conestatus, "nonnegative": coneratio <= tolerance if coneratio is not None else None, "strength": strength, "weight": float(nonnegative[-1] / strength) if strength > 0 and len(nonnegative) == 2 else None, "status": "measured" if length else "zero field", "scope": "Column-scaled input-family membership, separate from output response and task completion."}
 
 def orthogonal(values, tolerance=1e-6):
     # Keep only resolved directions in clean latent units.

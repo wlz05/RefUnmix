@@ -109,22 +109,29 @@ def settings(args):
 def frozen(args, chosen):
     source = locate(Path("."), clean(args.recipe, "recipe"))
     payload = read(source)
-    if payload.get("schema") != 1 or payload.get("split") != "val" or payload.get("suite") != args.suite or not payload.get("variants") or payload.get("settings") != settings(args):
+    if not isinstance(payload, dict) or type(payload.get("schema")) is not int or payload.get("schema") != 1 or payload.get("split") != "val" or payload.get("suite") != args.suite or not payload.get("variants") or json.dumps(payload.get("settings"), sort_keys=True, allow_nan=False) != json.dumps(settings(args), sort_keys=True, allow_nan=False):
         raise ValueError("Frozen tests require unchanged validation control settings.")
     if not getattr(args, "manifest", None) or payload.get("manifestdigest") != digest(locate(Path("."), clean(args.manifest, "manifest"))):
         raise ValueError("Frozen tests require the unchanged split manifest.")
     # Keep test sources disjoint from the validation recipe.
+    bindings = payload.get("digests", {})
+    if not isinstance(bindings, dict) or any(not isinstance(key, str) or not isinstance(value, str) or not value for key, value in bindings.items()):
+        raise ValueError("Frozen source digests must be named nonempty strings.")
     current = set(identities(chosen).values())
-    if current & set(payload.get("digests", {}).values()):
+    if current & set(bindings.values()):
         raise ValueError("Test images overlap validation sources.")
     for field in ("family", "group"):
-        if {getattr(item, field) for item in chosen if getattr(item, field)} & set(payload.get(field, [])):
+        known = payload.get(field, [])
+        if not isinstance(known, list) or any(not isinstance(value, str) or not value for value in known):
+            raise ValueError("Frozen source groups and families must be string lists.")
+        if {getattr(item, field) for item in chosen if getattr(item, field)} & set(known):
             raise ValueError("Test families or source groups overlap validation.")
     controls = payload["variants"]
-    allowed = {"method", "axes", "eta", "representation", "prior", "priorcontrol", "algorithm", "cleanup", "poststeps", "cfg", "guidance", "referencepath", "candidates", "maxsamples", "maxcalls", "monitor", "compensation", "release", "geometry", "frontier", "certificate", "solversteps", "certificatestep", "heldout", "selection", "gainloss", "goals", "field", "fieldridge", "fieldprobe", "fieldradius", "fieldtolerance", "fieldgeometry", "control", "flowconsistency"}
-    if not isinstance(controls, dict) or any(not key.isalpha() or key != key.casefold() or not isinstance(value, dict) or value.keys() - allowed for key, value in controls.items()):
+    declared = variants(args.suite, "flow" if getattr(args, "backbone", "vp") != "vp" else "ddpm", args)
+    allowed = {key for value in declared.values() for key in value}
+    if not isinstance(controls, dict) or any(not isinstance(key, str) or not key.isascii() or not key.isalpha() or key != key.casefold() or not isinstance(value, dict) or value.keys() - allowed for key, value in controls.items()):
         raise ValueError("Frozen variants contain unsupported controls.")
-    if controls != variants(args.suite, "flow" if getattr(args, "backbone", "vp") != "vp" else "ddpm", args):
+    if json.dumps(controls, sort_keys=True, allow_nan=False) != json.dumps(declared, sort_keys=True, allow_nan=False):
         raise ValueError("Frozen variants differ from the declared ablation design.")
     return controls
 

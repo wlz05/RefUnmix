@@ -9,7 +9,7 @@ from engine.adapter import load as adapter
 from engine.limit import Budget
 from engine.native import create
 from engine.field import build
-from engine.session import toimage
+from engine.session import rms, toimage
 from run import common, load, readimage, writejson
 
 def main():
@@ -50,13 +50,13 @@ def main():
             endpoints.update({"sourcefield": endpoints["sourcezero"], "targetfield": endpoints["targetzero"]})
         else:
             endpoints.update({"sourcefield": native.endpoint(field, 1.), "targetfield": native.endpoint(field)})
-    condition = endpoints["targetzero"] - endpoints["sourcezero"]
-    bias = endpoints["sourcezero"] - session.anchor
-    values = {"bias": float(bias.double().square().mean().sqrt()), "condition": float(condition.double().square().mean().sqrt())}
+    condition = endpoints["targetzero"].double() - endpoints["sourcezero"].double()
+    bias = endpoints["sourcezero"].double() - session.anchor.double()
+    values = {"bias": rms(bias), "condition": rms(condition)}
     if field is not None:
-        effect = endpoints["sourcefield"] - endpoints["sourcezero"]
-        interaction = endpoints["targetfield"] - endpoints["sourcefield"] - condition
-        values.update({"field": float(effect.double().square().mean().sqrt()), "interaction": float(interaction.double().square().mean().sqrt()), "identityerror": float((endpoints["targetfield"] - session.anchor - bias - condition - effect - interaction).abs().max())})
+        effect = endpoints["sourcefield"].double() - endpoints["sourcezero"].double()
+        interaction = endpoints["targetfield"].double() - endpoints["sourcefield"].double() - condition
+        values.update({"field": rms(effect), "interaction": rms(interaction), "identityerror": float((endpoints["targetfield"].double() - session.anchor.double() - bias - condition - effect - interaction).abs().max())})
         first = session.difference(session.editor.index(args.start))
         second = first if args.delta == 0 else session.difference(session.editor.index(args.start - args.delta))
         request = constructed.request if constructed.request is not None else session.scale * ((first.double() + second.double()) / 2).float().double()
@@ -68,8 +68,8 @@ def main():
     if native.continuous:
         for eta in sorted(set(args.etas)):
             latent = endpoints["targetzero"] if eta == 0 else endpoints["sourcezero"] if eta == 1 else native.endpoint(zero, eta)
-            affine = (1 - eta) * endpoints["targetzero"] + eta * endpoints["sourcezero"]
-            references.append({"eta": eta, "nonaffinity": float((latent - affine).double().square().mean().sqrt())})
+            affine = (1 - eta) * endpoints["targetzero"].double() + eta * endpoints["sourcezero"].double()
+            references.append({"eta": eta, "nonaffinity": rms(latent.double() - affine)})
     images = {name: toimage(session.decode(value)) for name, value in endpoints.items()}
     output.mkdir(parents=True)
     for name, image in images.items():

@@ -14,9 +14,14 @@ from engine.reference import center, decomposition
 from engine.format import orient as alignment
 
 def number(value, label, minimum=None, maximum=None):
-    if not isinstance(value, Real) or isinstance(value, bool) or not isfinite(float(value)):
+    if not isinstance(value, Real) or isinstance(value, bool):
         raise ValueError(f"{label} must be finite.")
-    result = float(value)
+    try:
+        result = float(value)
+    except OverflowError as error:
+        raise ValueError(f"{label} exceeds numerical range.") from error
+    if not isfinite(result):
+        raise ValueError(f"{label} must be finite.")
     if minimum is not None and result < minimum or maximum is not None and result > maximum:
         raise ValueError(f"{label} is outside its supported range.")
     return result
@@ -40,6 +45,12 @@ def tensor(value, channels=None):
     if not value.is_floating_point() or not torch.isfinite(value).all().item():
         raise ValueError("Tensor values must be finite floating point numbers.")
     return value
+
+def rms(value):
+    # Keep diagnostics stable across latent scales.
+    value = tensor(value).double()
+    scale = float(value.abs().max())
+    return scale * float((value / scale).square().mean().sqrt()) if scale > 0 else 0.
 
 def toimage(pixels):
     values = tensor(pixels, 3).detach().float().clamp(0, 1)

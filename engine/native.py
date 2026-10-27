@@ -78,7 +78,7 @@ class Native:
             raise ValueError("Native fields must match the source latent.")
         if session.limit is not None:
             session.limit.require(self.cost(eta), self.queries())
-        latent = session.anchor.float() + session.scale * field.float()
+        latent = tensor(session.anchor.float() + session.scale * field.float())
         if not session.cleanup:
             self.endpoints += 1
             return latent
@@ -87,7 +87,7 @@ class Native:
         else:
             alpha = session.editor.alphas[self.ticks[0]].sqrt()
             sigma = (1 - session.editor.alphas[self.ticks[0]]).sqrt()
-            state = alpha * latent + sigma * session.noises[:1].float()
+            state = tensor(alpha * latent + sigma * session.noises[:1].float())
             for index, tick in enumerate(self.ticks):
                 clean = self.predict(state, tick, eta, noisy=True)
                 if index + 1 == len(self.ticks):
@@ -99,7 +99,7 @@ class Native:
                     raise ValueError("DDIM continuation requires positive noise scales.")
                 epsilon = (state - alpha * clean) / sigma
                 following = session.editor.alphas[self.ticks[index + 1]]
-                state = following.sqrt() * clean + (1 - following).sqrt() * epsilon
+                state = tensor(following.sqrt() * clean + (1 - following).sqrt() * epsilon)
         tensor(result)
         self.endpoints += 1
         return result.detach().clone()

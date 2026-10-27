@@ -773,7 +773,7 @@ cd RefUnmix
 python -B -m unittest discover -s tests -p '*.py' -q
 ```
 
-The suite covers field construction, control constraints, query accounting, image formats, and dataset conversion.
+The suite covers field construction, control constraints, query accounting, image formats, dataset conversion, and validation-to-test recipe replay. Temporal diagnostics distinguish numerical underflow from an exact fit.
 
 ---
 
@@ -788,3 +788,5 @@ The default sample cap is 64; the equal-budget experiments use explicit caps of 
 Each candidate reserves all uncached endpoints and its optional prior before generation. When a joint update exceeds the remaining allowance, the controller tries an affordable update that reuses a cached field endpoint or reference and verifies the actual output. Only completed candidates enter final selection. Global edits with an empty protected region continue semantic search with zero protection cost.
 
 Inputs are converted to RGB with EXIF orientation applied consistently to images and masks. Deterministic execution is available through `--deterministic`; reports store the runtime settings and package versions.
+
+Invalid budgets are rejected before checkpoints load. Nonfinite endpoints are rejected before caching, and diagnostic failures restore the previous accounting stage. Reports require finite numbers and string object keys; publication is atomic and never overwrites an existing result.

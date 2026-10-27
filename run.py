@@ -275,7 +275,9 @@ def saveartifacts(session, root):
 
 def validate(args):
     from engine.field import options
+    from engine.limit import Budget
     from engine.session import number
+    Budget(args.maxsamples, args.maxcalls, args.seconds)
     options(args.field, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry, args.fieldweight, args.fieldshrink)
     if args.field == "ect" and (args.backbone != "vp" or args.delta != 0):
         raise ValueError("ECT transport requires --backbone vp and --delta 0.")

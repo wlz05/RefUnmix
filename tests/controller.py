@@ -598,6 +598,168 @@ class BoundaryTests(unittest.TestCase):
             finally:
                 os.chdir(origin)
 
+class RobustnessTests(unittest.TestCase):
+    def args(self, *flags):
+        return common(argparse.ArgumentParser()).parse_args(["--clip", "clip", "--size", "16", *flags])
+
+    def recipe(self, suite="temporal"):
+        args = self.args()
+        args.suite, args.recipe, args.manifest = suite, "recipe.json", "split.json"
+        controls = variants(suite, base=args)
+        payload = {"schema": 1, "split": "val", "suite": suite, "settings": settings(args), "variants": controls, "digests": {}, "manifestdigest": "manifest"}
+        return args, payload
+
+    def recover(self, args, payload):
+        with patch("trial.locate", return_value=File("recipe.json")), patch("trial.read", return_value=payload), patch("trial.identities", return_value={}), patch("trial.digest", return_value="manifest"):
+            return frozen(args, [])
+
+    def testtemporalrecipe(self):
+        args, payload = self.recipe()
+        self.assertEqual(self.recover(args, payload), variants("temporal", base=args))
+
+    def testallrecipes(self):
+        for suite in ("alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"):
+            with self.subTest(suite=suite):
+                args, payload = self.recipe(suite)
+                self.assertEqual(self.recover(args, payload), payload["variants"])
+
+    def testrecipestructure(self):
+        args, _ = self.recipe()
+        for payload in (None, [], [1], "recipe", 1):
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                self.recover(args, payload)
+
+    def testrecipebindings(self):
+        for key, value in (("digests", []), ("digests", {"image": None}), ("group", "group"), ("family", {"family": 1})):
+            args, payload = self.recipe("core")
+            payload[key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                self.recover(args, payload)
+
+    def testrecipetypes(self):
+        args, payload = self.recipe("core")
+        payload["variants"] = deepcopy(payload["variants"])
+        payload["variants"]["full"]["guidance"] = True
+        with self.assertRaises(ValueError):
+            self.recover(args, payload)
+
+    def testrecipesettings(self):
+        args, payload = self.recipe("core")
+        payload["settings"]["guidance"] = True
+        with self.assertRaises(ValueError):
+            self.recover(args, payload)
+
+    def testfixedprior(self):
+        with self.assertRaises(ValueError):
+            validate(self.args("--method", "fixed", "--axes", "none", "--prior", "ddpm"))
+
+    def testbudgettypes(self):
+        for changes in ({"seconds": "1"}, {"seconds": []}, {"seconds": 10 ** 400}, {"started": float("nan")}, {"started": 10 ** 400}, {"used": -1}, {"forwards": True}, {"phase": None}, {"stages": []}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                Budget(**changes)
+
+    def testnumberrange(self):
+        from engine.session import number
+        with self.assertRaises(ValueError):
+            number(10 ** 400, "scale")
+
+    def testbudgetpreload(self):
+        from run import load
+        for key, value in (("maxsamples", 0), ("maxcalls", 0), ("seconds", -1)):
+            args = self.args()
+            setattr(args, key, value)
+            with self.subTest(key=key), patch("engine.session.Editor.load") as checkpoint:
+                with self.assertRaises(ValueError):
+                    load(args)
+                checkpoint.assert_not_called()
+
+    def testbudgetatomic(self):
+        budget = Budget()
+        budget.phase = []
+        with self.assertRaises(ValueError):
+            budget.consume(1)
+        self.assertEqual((budget.used, budget.forwards), (0, 0))
+        budget.phase, budget.stages = "front", {"front": {"samples": 0}}
+        with self.assertRaises(ValueError):
+            budget.consume(1)
+        self.assertEqual((budget.used, budget.forwards), (0, 0))
+
+    def testtemporalrange(self):
+        from engine.field import temporal
+        report = temporal([[1e-200, -1e-200]], [1.])
+        self.assertTrue(report["nonnegative"])
+        self.assertLess(report["coneerror"], 1e-20)
+        np.testing.assert_allclose(report["nonnegativeweights"], [1e200, 0.])
+
+    def testtemporalunderflow(self):
+        from engine.field import temporal
+        report = temporal([[1.], [0.]], [1., 1e-200], tolerance=1e-250)
+        for key in ("span", "cone"):
+            self.assertIsNone(report[key + "error"])
+            self.assertEqual(report[key + "status"], "underflow")
+        self.assertFalse(report["nonnegative"])
+
+    def testtemporalcoefficients(self):
+        from engine.field import temporal
+        for matrix, value in (([[1e-300]], [1e300]), ([[1e300]], [1e-300]), ([[1e-308, 0.], [0., 1e-308]], [1., 1.])):
+            with self.subTest(matrix=matrix, value=value), self.assertRaises(ValueError):
+                temporal(matrix, value)
+
+    def testrmsrange(self):
+        class Precise(Linear):
+            def endpoint(self, value, eta=0.):
+                return super().endpoint(value.double(), eta)
+
+        for value in (1e-200, 1e200):
+            session = Session()
+            native = Precise(session, matrix=value * torch.eye(4, dtype=torch.float64))
+            native.offset = torch.full((4,), value, dtype=torch.float64)
+            result = Path(native, torch.ones_like(session.anchor)).mechanism()
+            self.assertAlmostEqual(result["latent"]["bias"] / value, 1.)
+
+    def testnativeoverflow(self):
+        session = editor().prepare(Image.new("RGB", (16, 16)), "source", "target long", cleanup=False, scale=1e30)
+        native = Native(session)
+        with self.assertRaises(ValueError):
+            native.endpoint(torch.full_like(session.anchor, 1e30))
+        self.assertEqual((native.endpoints, session.samples), (0, 0))
+
+    def testnativestate(self):
+        session = editor().prepare(Image.new("RGB", (16, 16)), "source", "target long")
+        session.noises.fill_(3e38)
+        native = Native(session, steps=2)
+        with self.assertRaises(ValueError):
+            native.endpoint(torch.full_like(session.anchor, 3e38))
+        self.assertEqual((native.endpoints, session.samples), (0, 0))
+
+    def testmechanismphase(self):
+        for maximum in (1, 8):
+            session = editor().prepare(Image.new("RGB", (16, 16)), "source", "target long")
+            base = session.field(.9, .15)
+            session.limit = Budget(maximum, phase="prior")
+            path = Path(Native(session), base)
+            if maximum == 1:
+                from engine.limit import Exhausted
+                with self.assertRaises(Exhausted):
+                    path.mechanism()
+            else:
+                path.mechanism()
+            self.assertEqual(session.limit.phase, "prior")
+
+    def testjsonkeys(self):
+        from engine.serial import write
+        with tempfile.TemporaryDirectory() as folder:
+            path = File(folder) / "reports" / "result.json"
+            with self.assertRaises(ValueError):
+                write(path, {"rows": [{1: "first", "1": "second"}]})
+            self.assertFalse(path.parent.exists())
+
+    def testjsoninput(self):
+        from engine.serial import loads
+        for value in (None, 1, b"{}", []):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                loads(value)
+
 if __name__ == "__main__":
     unittest.main()
 

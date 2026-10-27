@@ -22,14 +22,18 @@ def finite(value):
     if isinstance(value, float) and not math.isfinite(value):
         raise ValueError("JSON numbers must be finite.")
     if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            raise ValueError("JSON object keys must be strings.")
         for child in value.values():
             finite(child)
-    elif isinstance(value, list):
+    elif isinstance(value, (list, tuple)):
         for child in value:
             finite(child)
     return value
 
 def loads(value):
+    if not isinstance(value, str):
+        raise ValueError("JSON input must be UTF-8 text.")
     return finite(json.loads(value.lstrip("\ufeff"), object_pairs_hook=pairs, parse_constant=constant))
 
 def read(path):
@@ -43,6 +47,7 @@ def write(path, payload):
     # Publish complete reports without overwriting existing results.
     path = Path(path)
     content = json.dumps(payload, indent=2, ensure_ascii=True, allow_nan=False) + "\n"
+    finite(payload)
     if path.exists():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)

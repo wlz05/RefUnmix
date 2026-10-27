@@ -228,19 +228,19 @@ class Native(Original):
             raise ValueError("Flow fields or reference coordinates are invalid.")
         if session.limit is not None:
             session.limit.require(self.cost(eta), self.queries())
-        clean = session.anchor.float() + session.scale * field.float()
+        clean = tensor(session.anchor.float() + session.scale * field.float())
         if not session.cleanup:
             self.endpoints += 1
             return clean
         embeddings, weights = self.conditions(eta)
         count = len(weights)
         start = self.sigmas[0]
-        state = (1 - start) * clean + start * session.noises[:1].float()
+        state = tensor((1 - start) * clean + start * session.noises[:1].float())
         for index in range(self.steps):
             sigma = float(self.sigmas[index])
             output = session.velocity(state.expand(count, -1, -1, -1), sigma, embeddings)
             velocity = sum((weight * row[None] for weight, row in zip(weights, output)), torch.zeros_like(state))
-            state = state + (self.sigmas[index + 1] - self.sigmas[index]) * velocity
+            state = tensor(state + (self.sigmas[index + 1] - self.sigmas[index]) * velocity)
         self.endpoints += 1
         return tensor(state).detach().clone()
 

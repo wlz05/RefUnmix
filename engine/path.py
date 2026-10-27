@@ -2,7 +2,7 @@
 # RefUnmix: Endpoint-Aligned Fields for Protected Image Editing
 
 import torch
-from engine.session import number, tensor
+from engine.session import number, rms, tensor
 from engine.wavelet import split
 from engine.endpoint import design
 
@@ -159,24 +159,24 @@ class Path:
 
     def mechanism(self, decoded=False):
         # Separate reconstruction, condition, field, and interaction.
-        self.phase()
-        zero, target, field = self.zero(1.), self.zero(0.), self.target()
         previous = self.session.limit.phase if self.session.limit is not None else None
-        if self.session.limit is not None:
-            self.session.limit.phase = "diagnostic"
         try:
+            self.phase()
+            zero, target, field = self.zero(1.), self.zero(0.), self.target()
+            if self.session.limit is not None:
+                self.session.limit.phase = "diagnostic"
             sourcefield = self.native.endpoint(self.base, 1.)
-            values = {"bias": zero - self.session.anchor, "condition": target - zero, "field": sourcefield - zero, "interaction": field - sourcefield - target + zero}
-            residual = field - self.session.anchor - sum(values.values(), torch.zeros_like(field))
-            report = {"latent": {key: float(value.double().square().mean().sqrt()) for key, value in values.items()}, "identityerror": float(residual.abs().max()), "pathzero": float(values["condition"].abs().max()) <= 1e-8, "reference": {"targetremoved": "bias and condition", "sourceremoved": "bias"}, "cost": "Fourth endpoint is diagnostic, not controller input."}
+            values = {"bias": zero.double() - self.session.anchor.double(), "condition": target.double() - zero.double(), "field": sourcefield.double() - zero.double(), "interaction": field.double() - sourcefield.double() - target.double() + zero.double()}
+            residual = field.double() - self.session.anchor.double() - sum(values.values(), torch.zeros_like(field, dtype=torch.float64))
+            report = {"latent": {key: rms(value) for key, value in values.items()}, "identityerror": float(residual.abs().max()), "pathzero": float(values["condition"].abs().max()) <= 1e-8, "reference": {"targetremoved": "bias and condition", "sourceremoved": "bias"}, "cost": "Fourth endpoint is diagnostic, not controller input."}
             report["design"] = design(("sourcezero", "targetzero", "sourcefield", "targetfield"))
             if decoded:
                 images = {"sourcezero": self.session.decode(zero), "targetzero": self.session.decode(target), "sourcefield": self.session.decode(sourcefield), "targetfield": self.session.decode(field)}
-                bias = images["sourcezero"] - self.session.origin
-                condition = images["targetzero"] - images["sourcezero"]
-                effect = images["sourcefield"] - images["sourcezero"]
-                interaction = images["targetfield"] - images["sourcefield"] - images["targetzero"] + images["sourcezero"]
-                report["rgb"] = {key: float(value.double().square().mean().sqrt()) for key, value in {"bias": bias, "condition": condition, "field": effect, "interaction": interaction}.items()}
+                bias = images["sourcezero"].double() - self.session.origin.double()
+                condition = images["targetzero"].double() - images["sourcezero"].double()
+                effect = images["sourcefield"].double() - images["sourcezero"].double()
+                interaction = images["targetfield"].double() - images["sourcefield"].double() - images["targetzero"].double() + images["sourcezero"].double()
+                report["rgb"] = {key: rms(value) for key, value in {"bias": bias, "condition": condition, "field": effect, "interaction": interaction}.items()}
                 report["rgbcondition"] = report["rgb"]["condition"]
                 report["decoded"] = True
                 self.images.update({key: image.clamp(0, 1) for key, image in images.items()})
@@ -189,7 +189,7 @@ class Path:
     def metadata(self):
         count = len(self.fields) - int((0., 0.) in self.fields)
         observed = [name for name, known in (("sourcezero", 1. in self.references), ("targetzero", 0. in self.references), ("targetfield", (1., 1.) in self.fields)) if known]
-        return {"mode": self.mode, "fields": count, "references": len(self.references), "cachehits": self.hits, "conditionrms": float((self.references[0.] - self.references[1.]).double().square().mean().sqrt()) if 0. in self.references and 1. in self.references else None, "affineequivalence": self.mode == "mix" and self.native.affine, "design": design(observed), "scope": "Latent frequencies are controls, not semantic partitions."}
+        return {"mode": self.mode, "fields": count, "references": len(self.references), "cachehits": self.hits, "conditionrms": rms(self.references[0.].double() - self.references[1.].double()) if 0. in self.references and 1. in self.references else None, "affineequivalence": self.mode == "mix" and self.native.affine, "design": design(observed), "scope": "Latent frequencies are controls, not semantic partitions."}
 
 # Author: Weiliang Zhu
 # Email: wlzchina05@gmail.com

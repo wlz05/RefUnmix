@@ -186,6 +186,24 @@ class FlowTests(unittest.TestCase):
             Native(session, steps=2).endpoint(torch.zeros_like(session.anchor))
         self.assertEqual(session.samples, 0)
 
+    def testrawoverflow(self):
+        for family in ("flux", "sd3"):
+            session = self.session(family, cleanup=False, scale=1e30)
+            native = Native(session)
+            with self.subTest(family=family), self.assertRaises(ValueError):
+                native.endpoint(torch.full_like(session.anchor, 1e30))
+            self.assertEqual((native.endpoints, session.samples), (0, 0))
+
+    def testintegrationoverflow(self):
+        session = self.session()
+        session.noises.fill_(3e38)
+        native = Native(session, steps=2)
+        with patch.object(session.editor, "velocity", return_value=torch.full_like(session.anchor, -3e38)):
+            with self.assertRaises(ValueError):
+                native.endpoint(torch.full_like(session.anchor, 3e38))
+        self.assertEqual(native.endpoints, 0)
+        self.assertEqual(session.samples, 1)
+
     def testpriorformula(self):
         session = self.session()
         prior = Prior(session, probes=3, mode="flow")
