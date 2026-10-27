@@ -6,6 +6,8 @@ import contextlib
 from copy import deepcopy
 import io
 import json
+from pathlib import Path
+import shlex
 import unittest
 from unittest.mock import patch
 import numpy as np
@@ -18,7 +20,7 @@ from engine.judge import ClipJudge
 from engine.poll import Candidate, Config, select
 from engine.protocol import configuration, signature
 from evaluate import coverage, datasetargs
-from run import common, parser, run
+from run import common, parser, run, validate
 from trial import design, frozen, main, settings, variants
 from session import Clip, Processor, editor
 from trust import Expensive, Fake
@@ -132,6 +134,46 @@ class ProtocolTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "no manifest or validation recipe"):
                     main()
             load.assert_not_called()
+
+    def testdocumentedplans(self):
+        from evaluate import main as evaluatemain
+        from trial import settings
+        original = argparse.ArgumentParser.parse_args
+        parsed = []
+
+        class Parsed(BaseException):
+            pass
+
+        def capture(parser, *values, **options):
+            parsed.append(original(parser, *values, **options))
+            raise Parsed()
+
+        lines = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(encoding="utf-8").splitlines()
+        commands = [shlex.split(line) for line in lines if line.startswith(("python -B RefUnmix/evaluate.py", "python -B RefUnmix/trial.py"))]
+        executions = []
+        for command in commands:
+            entry = evaluatemain if Path(command[2]).stem == "evaluate" else main
+            with patch("sys.argv", command[2:]), patch.object(argparse.ArgumentParser, "parse_args", capture), self.assertRaises(Parsed):
+                entry()
+            executions.append((entry, parsed[-1]))
+        reference = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64)
+        validate(reference)
+        benchmark = [args for entry, args in executions if entry is main and args.split == "all" and not args.dry]
+        self.assertEqual(len(benchmark), 21)
+        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 186)
+        for args in benchmark:
+            plan = design(args, variants(args.suite, base=args))
+            expected = deepcopy(reference)
+            if args.suite == "mechanism":
+                expected.maxsamples = expected.maxcalls = 256
+            self.assertEqual(plan["controlsignature"], signature(expected))
+            self.assertEqual((args.batch, args.device, args.precision, args.seeds), (3, "cuda:0", "fp32", [42, 52, 3047, 3407]))
+            self.assertIsNone(args.manifest)
+            self.assertIsNone(args.recipe)
+        validation = next(args for entry, args in executions if entry is main and args.split == "val")
+        testing = next(args for entry, args in executions if entry is main and args.split == "test")
+        self.assertEqual(settings(validation), settings(testing))
+        self.assertEqual(Path(testing.recipe), Path(validation.output) / "recipe.json")
 
     def testrenderidentity(self):
         first = self.args()

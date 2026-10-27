@@ -234,7 +234,7 @@ Experiments use **one NVIDIA GeForce RTX 4090** and seeds **42, 52, 3047, and 34
 
 `cuda:0` means the first GPU visible to the process. A scheduler's `CUDA_VISIBLE_DEVICES` setting remaps physical GPU indices within that process.
 
-Dataset partitions remain fixed across seeds. Dataset inference defaults to `--batch 3`; `--batch 4` runs four independent image-seed requests when memory permits. Requests share one backbone and control model. Compatible VP predictions are combined into shared forwards; Flow velocity calls remain serialized while VAE calls can be combined.
+Dataset partitions remain fixed across seeds. Dataset inference defaults to `--batch 3`; `--batch 4` runs four independent image-seed requests when memory permits. Requests share one backbone and control model. Compatible VP predictions are combined into shared forwards; Flow velocity calls remain serialized while VAE calls can be combined. Jobs are ordered by source and then seed, so a concurrent group can include several seeds of the same source image.
 
 Use `--batch 1` for standalone latency, strict `--deterministic` runs, attention-hook localization, or external adapters. The main 4090 configuration uses the VP backbone in fp32. Flow backends load their complete checkpoints into GPU memory; request batching does not reduce resident weight memory.
 
@@ -400,7 +400,9 @@ Download the [pretrained models](#pretrained-models) into `models/` and `clip/`.
 python -B RefUnmix/doctor.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --report outputs/benchmarkcheck.json
 ```
 
-A process loads one shared backbone and one control scorer. Conditional predictions and native field/reference endpoints are cached in memory within each image-seed request and reused by that request's candidates. These caches are released when the request group finishes. Generation writes the selected PNGs, per-request reports, and `summary.json`; official scoring reads these saved outputs. Each run uses a new output directory.
+For the complete PIE release, the preflight report has `dataset.total = 700`, `dataset.inspected = 700`, and `dataset.complete = true`.
+
+A process loads one shared backbone and one control scorer. Conditional predictions and native field/reference endpoints are cached in memory within each image-seed request and reused by that request's candidates. Each ablation arm and each validation/test run starts fresh request caches. They are released when the request group finishes; `recipe.json` stores configuration metadata, not cached predictions. Generation writes the selected PNGs, per-request reports, and `summary.json`; official scoring reads these saved outputs. Each run uses a new output directory.
 
 #### 3. Frozen Models and Sample Selection
 
@@ -410,21 +412,21 @@ Every PIE main or benchmark ablation arm processes the same complete mapping and
 
 #### 4. Optional Development Validation and Configuration Selection
 
-For development on a dataset with official validation/test partitions, first convert its local export and retain the released partition tags. This Emu Edit example reads a saved Hugging Face dataset containing the official validation and test partitions:
+For development on a dataset with official validation/test partitions, first convert its local export and retain the released partition tags. This Emu Edit example requires `datasets` and reads a local DatasetDict saved with [save_to_disk](https://huggingface.co/docs/datasets/package_reference/main_classes#datasets.DatasetDict.save_to_disk), containing both official validation and test partitions:
 
 ```bash
 python -B RefUnmix/prepare.py --kind emu --input raw/emu --dataset raw --output development
 python -B RefUnmix/split.py --dataset development --mapping mapping.json --images images --protocol official --output outputs/development.json
 ```
 
-Evaluate the declared configurations on `val`, choose one global configuration from its aggregate development results, and keep that configuration fixed for `test`. This selects control settings, such as the field rule, continuation length, and model allowance. The pretrained checkpoint stays the same. The following pair runs the complete `core` ablation design on each official partition:
+The following pair evaluates the complete `core` design on the official validation partition and then replays that design on the official test partition. Run validation first. If selecting one global variant, record its name from the validation aggregate before running test; its final result is `outputs/developmenttest/<variant>/summary.json`. The pretrained checkpoint stays the same:
 
 ```bash
 python -B RefUnmix/trial.py --batch 3 --dataset development --mapping mapping.json --images images --manifest outputs/development.json --split val --suite core --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/developmentval
 python -B RefUnmix/trial.py --batch 3 --dataset development --mapping mapping.json --images images --manifest outputs/development.json --split test --recipe outputs/developmentval/recipe.json --suite core --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/developmenttest
 ```
 
-The validation run saves `recipe.json`, which records all declared variants and their shared configuration. The test command replays those variants; it does not automatically select a winning model. The PIE-Bench commands below directly evaluate the fixed main configuration and predeclared variants on all 700 requests.
+The validation run saves `recipe.json` with every declared variant, code and checkpoint identities, seed set, and shared configuration. The test command replays the same matrix. Keep the model paths, mapping, official manifest, code revision, batch width, seeds, and base control options identical between these commands; only the split, output, and recipe argument change. To study different time, field, prior, or budget settings, run a new validation/test pair in a new output tree. The PIE-Bench commands below directly evaluate the fixed main configuration and predeclared variants on all 700 requests.
 
 #### 5. Final Generation and Official Scoring
 
@@ -454,6 +456,18 @@ Evaluation follows the PIE-Bench protocol in [ChordEdit](https://arxiv.org/abs/2
 
 Efficiency is reported as denoiser evaluations, forward calls, VAE decodes, runtime in seconds, and peak GPU memory. Field and controller comparisons use matched evaluation budgets.
 
+### Choosing Three or Four Concurrent Requests
+
+Run one dataset command at a time on the single RTX 4090. `--batch` schedules independent image-seed requests inside that process. Use the same width for each compared method and each arm in a suite.
+
+| Configuration | Default | Four-request alternative |
+|---------------|---------|--------------------------|
+| Dataset preflight and generation | `--batch 3` | `--batch 4` |
+| Result prefix | `outputs/` | `outputs/four/` |
+| Development recipe | `outputs/developmentval/recipe.json` | `outputs/four/developmentval/recipe.json` |
+
+For the four-request alternative, replace `--batch 3` with `--batch 4` throughout the selected workflow and replace the `outputs/` prefix in its output, recipe, and subsequent assessment input paths with `outputs/four/`. Keep data and model paths unchanged. Start a fresh validation run at that width before its test replay. Sample/call limits and the twelve-candidate cap remain per request; batch width does not change the budget or the four seeds.
+
 ### Main Experiments: All 700 PIE-Bench Requests
 
 Run the following commands from `workspace/` in one process on one RTX 4090. The command profile uses FP32, `cuda:0`, and seeds **42 52 3047 3407**. Keep the same backbone, control checkpoint, precision, and input files across compared runs. Current paper experiments use `evaluate.py` and `trial.py`.
@@ -480,7 +494,7 @@ python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.j
 python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 15 --maxcalls 15 --output outputs/matched
 ```
 
-With the complete release, each command exports **2,800 image-seed outputs from 700 requests**. `--split all` evaluates every mapped request; it does not use a split manifest. The 64- and 15-sample outputs belong to different budget settings. Report their actual sample evaluations, calls, and runtime alongside quality. The budget suite below also covers 10, 12, 20, and 30.
+With the complete release, each command exports **2,800 image-seed outputs from 700 requests**. The inference summary contains 2,800 `rows`; each benchmark suite records `variants.<name>.rows = 2800` for every arm. `--split all` evaluates every mapped request; it does not use a split manifest. The 64- and 15-sample outputs belong to different budget settings. Report their actual sample evaluations, calls, and runtime alongside quality. The budget suite below also covers 10, 12, 20, and 30.
 
 [evaluate.py](evaluate.py) saves images, per-image JSON reports, `summary.cost`, `summary.controller`, and diagnostic scores. Run [assess.py](assess.py) after generation for the official PIE metric table.
 
@@ -768,7 +782,7 @@ python -B RefUnmix/assess.py --input outputs/fieldstest/pullbackfull/summary.jso
 
 Score other variants with the same command by changing only `--input` and `--output`. The input is a variant's inference summary, not the suite-level summary. Official scoring requires 512 x 512 source images, outputs, and annotation geometry. Omitting `--protocol` runs pixel-only scoring and leaves perceptual and CLIP metrics unavailable.
 
-Assessments contain `raw`, scaled `table`, and metric-specific `coverage`. MSE, LPIPS, and DINO structure distance use x1,000; SSIM uses x100; PSNR is in dB. Empty protected regions remain undefined for preservation metrics; zero-error PSNR is recorded as positive infinity. Report each metric's valid denominator, alongside all 700 requests and four seeds.
+Assessments contain `raw`, scaled `table`, and metric-specific `coverage`. MSE, LPIPS, and DINO structure distance use x1,000; SSIM uses x100; PSNR is in dB. Empty protected regions remain undefined for preservation metrics; zero-error PSNR is recorded as positive infinity. The scorer averages seeds within each request key, then averages those request scores. Report each metric's valid denominator, alongside all 700 requests and four seeds.
 
 ### Independent Task Assessment
 
@@ -799,7 +813,7 @@ cd RefUnmix
 python -B -m unittest discover -s tests -p '*.py' -q
 ```
 
-The suite covers field construction, control constraints, query accounting, image formats, dataset conversion, complete-benchmark ablations, and validation-to-test recipe replay. Temporal diagnostics distinguish numerical underflow from an exact fit.
+The suite covers field construction, control constraints, query accounting, image formats, dataset conversion, README experiment plans, complete-benchmark ablations, and official validation-to-test replay at batch widths three and four. Temporal diagnostics distinguish numerical underflow from an exact fit.
 
 For the focused parallel checks, run from the checkout root:
 

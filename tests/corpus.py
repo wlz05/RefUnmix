@@ -73,6 +73,16 @@ class CorpusTests(unittest.TestCase):
             with self.subTest(partition=value), self.assertRaises(ValueError):
                 normalize("emu", "row", self.emu(split=value))
 
+    def teststoragetags(self):
+        for tag in ("val", "validation", "dev"):
+            result = normalize("emu", "row", self.emu(storage_split=tag))
+            self.assertEqual(result["partition"], "val")
+        for tag in ("train", "test"):
+            with self.subTest(tag=tag), self.assertRaisesRegex(ValueError, "disagree"):
+                normalize("emu", "row", self.emu(storage_split=tag))
+        result = normalize("emu", "row", self.emu(split="", storage_split="validation"))
+        self.assertEqual(result["partition"], "val")
+
     def testmagic(self):
         row = {"img_id": "SESSION", "turn_index": 2, "source_img": "source.png", "target_img": "target.png", "instruction": "Add stripes.", "storage_split": "dev"}
         override = {"session-2": {"source": "A shirt.", "target": "A striped shirt."}}
@@ -417,6 +427,44 @@ class CorpusTests(unittest.TestCase):
         item = Record("a", Path("raw/source.png"), Path("source.png"), "A.", "B.", "Edit.")
         with self.assertRaises(ValueError):
             official([item])
+
+    def testofficialreplay(self):
+        from engine.judge import ClipJudge
+        from session import Clip, Processor, editor
+        from trial import main as trialmain
+        self.dump([self.emu(input_caption="source", output_caption="target long"), self.emu(image="target.png", input_caption="source", output_caption="target long", split="test", idx=1)])
+        with patch("sys.argv", ["prepare.py", "--kind", "emu", "--input", "raw/annotations.json", "--dataset", "raw", "--output", "prepared"]), contextlib.redirect_stdout(io.StringIO()):
+            main()
+        with patch("sys.argv", ["split.py", "--dataset", "prepared", "--mapping", "mapping.json", "--images", "images", "--protocol", "official", "--output", "split.json"]), contextlib.redirect_stdout(io.StringIO()):
+            splitmain()
+        subsets = json.loads(Path("split.json").read_text(encoding="utf-8"))["subsets"]
+        self.assertEqual(subsets, {"train": [], "val": ["val-0"], "test": ["test-1"]})
+        for width in (3, 4):
+            backend, judge = editor(), ClipJudge(Clip(), Processor())
+            backend.metadata["weights"], judge.metadata["weights"] = "backbone", "control"
+            shared = ["trial.py", "--dataset", "prepared", "--mapping", "mapping.json", "--images", "images", "--manifest", "split.json", "--suite", "core", "--size", "16", "--clip", "clip", "--batch", str(width), "--seed", "42", "--seeds", "42", "52", "3047", "3407", "--maxsamples", "64", "--maxcalls", "64"]
+            validation, testing = f"val{width}", f"test{width}"
+            for subset, output in (("val", validation), ("test", testing)):
+                arguments = [*shared, "--split", subset, "--output", output]
+                if subset == "test":
+                    arguments.extend(["--recipe", validation + "/recipe.json"])
+                with self.subTest(width=width, subset=subset), patch("sys.argv", arguments), patch("trial.load", return_value=(backend, judge)), contextlib.redirect_stdout(io.StringIO()):
+                    trialmain()
+                suite = json.loads(Path(output, "summary.json").read_text(encoding="utf-8"))
+                self.assertEqual(len(suite["variants"]), 6)
+                for label in suite["variants"]:
+                    payload = json.loads(Path(output, label, "summary.json").read_text(encoding="utf-8"))
+                    self.assertEqual({row["key"] for row in payload["rows"]}, set(subsets[subset]))
+                    self.assertEqual({row["seed"] for row in payload["rows"]}, {42, 52, 3047, 3407})
+                    self.assertEqual(len(payload["rows"]), 4)
+                    self.assertTrue(payload["execution"]["accounting"]["matched"])
+                    self.assertTrue(all(row["report"]["stats"]["samples"] <= 64 for row in payload["rows"]))
+            self.assertFalse(Path(testing, "recipe.json").exists())
+            arguments = [*shared, "--batch", "4" if width == 3 else "3", "--split", "test", "--recipe", validation + "/recipe.json", "--output", "mismatched"]
+            with patch("sys.argv", arguments), patch("trial.load") as load:
+                with self.assertRaisesRegex(ValueError, "unchanged validation"):
+                    trialmain()
+            load.assert_not_called()
 
     def testreshuffle(self):
         item = Record("a", Path("raw/source.png"), Path("source.png"), "A.", "B.", "Edit.", partition="test")

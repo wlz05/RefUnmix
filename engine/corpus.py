@@ -147,9 +147,12 @@ def normalize(kind, key, record, overrides=None, split=None):
     if isinstance(row.get("data"), list):
         raise ValueError("Flatten multiturn records with session groups first.")
     native = pick(row, ("officialsplit", "partition", "split"))
-    if native is None and not config["partition"]:
-        native = pick(row, ("storagesplit",))
     native = partition(native)
+    if not config["partition"]:
+        stored = partition(pick(row, ("storagesplit",)))
+        if native and stored and native != stored:
+            raise ValueError("Saved dataset partitions disagree with official row tags.")
+        native = native or stored
     declared = partition(split)
     if declared and native and declared != native:
         raise ValueError("Explicit partitions cannot override official row tags.")
