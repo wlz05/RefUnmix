@@ -5,10 +5,34 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import math
+import os
 from pathlib import Path
+import sys
 import numpy as np
 from PIL import Image
-from data import clean, locate
+from data import clean, destination, locate
+
+def storage(value):
+    # Keep downloaded metric assets inside the working directory.
+    root = destination(value, "cache")
+    parts = {"HF_HOME": "huggingface", "HF_HUB_CACHE": "huggingface/hub", "HF_ASSETS_CACHE": "huggingface/assets", "HF_XET_CACHE": "huggingface/xet", "TORCH_HOME": "torch", "XDG_CACHE_HOME": "."}
+    paths = {key: locate(root, Path(part)).as_posix() for key, part in parts.items()}
+    hub = locate(root, Path("torch/hub")).as_posix()
+    legacy = {"HUGGINGFACE_HUB_CACHE": paths["HF_HUB_CACHE"], "HUGGINGFACE_ASSETS_CACHE": paths["HF_ASSETS_CACHE"], "TRANSFORMERS_CACHE": paths["HF_HUB_CACHE"], "PYTORCH_TRANSFORMERS_CACHE": paths["HF_HUB_CACHE"], "PYTORCH_PRETRAINED_BERT_CACHE": paths["HF_HUB_CACHE"]}
+    import torch
+    root.mkdir(parents=True, exist_ok=True)
+    for key in legacy:
+        os.environ.pop(key, None)
+    os.environ.update(paths)
+    # Redirect cache constants when a caller already imported the libraries.
+    for name in ("huggingface_hub.constants", "transformers.utils.hub", "transformers.file_utils"):
+        module = sys.modules.get(name)
+        if module is not None:
+            for key, path in {**paths, **legacy, "default_cache_path": paths["HF_HUB_CACHE"], "hf_cache_home": paths["HF_HOME"]}.items():
+                if hasattr(module, key):
+                    setattr(module, key, path)
+    torch.hub.set_dir(hub)
+    return {"root": root.as_posix(), "huggingface": paths["HF_HUB_CACHE"], "torch": hub}
 
 def inputs(origin, edited, mask):
     if not isinstance(origin, Image.Image) or not isinstance(edited, Image.Image) or origin.size != edited.size:
@@ -39,7 +63,8 @@ class Protocol:
         self.calculator, self.metadata = calculator, metadata or {"backend": "pixel-only", "complete": False}
 
     @classmethod
-    def load(cls, path=None, device="cpu", network=False):
+    def load(cls, path=None, device="cpu", network=False, cache="./cache/metrics"):
+        clean(cache, "cache")
         if path is None:
             return cls()
         source = locate(Path("."), clean(path, "protocol"))
@@ -47,6 +72,7 @@ class Protocol:
             raise FileNotFoundError("Protocol must point to the official Python metric implementation.")
         if not network:
             raise ValueError("The external backend may download pretrained assets; pass --network explicitly or use pixel-only mode.")
+        cached = storage(cache)
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         spec = importlib.util.spec_from_file_location("benchmarkmetrics", source)
         module = importlib.util.module_from_spec(spec)
@@ -55,7 +81,7 @@ class Protocol:
         names = ("calculate_psnr", "calculate_mse", "calculate_lpips", "calculate_ssim", "calculate_structure_distance", "calculate_clip_similarity")
         if any(not callable(getattr(calculator, name, None)) for name in names):
             raise ValueError("Metric backend does not implement the required public interface.")
-        return cls(calculator, {"backend": str(source), "sha256": digest, "complete": True, "networkauthorized": True, "device": str(device)})
+        return cls(calculator, {"backend": str(source), "sha256": digest, "complete": True, "networkauthorized": True, "device": str(device), "cache": cached})
 
     def evaluate(self, origin, edited, mask, target):
         import torch

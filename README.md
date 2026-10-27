@@ -259,6 +259,7 @@ workspace/
 |-- RefUnmix/           # Source checkout
 |-- models/             # Frozen backbone checkpoint
 |-- clip/               # Frozen control checkpoint
+|-- cache/metrics/      # Downloaded metric weights and repositories
 |-- data/
 |   |-- mapping_file.json
 |   `-- annotation_images/
@@ -403,6 +404,8 @@ python -B RefUnmix/doctor.py --batch 3 --dataset data --mapping mapping_file.jso
 For the complete PIE release, the preflight report has `dataset.total = 700`, `dataset.inspected = 700`, and `dataset.complete = true`.
 
 A process loads one shared backbone and one control scorer. Conditional predictions and native field/reference endpoints are cached in memory within each image-seed request and reused by that request's candidates. Each ablation arm and each validation/test run starts fresh request caches. They are released when the request group finishes; `recipe.json` stores configuration metadata, not cached predictions. Generation writes the selected PNGs, per-request reports, and `summary.json`; official scoring reads these saved outputs. Each run uses a new output directory.
+
+Downloaded metric weights use `cache/metrics/`, with Hugging Face assets under `huggingface/` and PyTorch Hub assets under `torch/`. The scoring process routes inherited cache settings to this relative directory before loading the official calculator. Reuse this cache across runs or copy it with the workspace when moving machines. The generator and control scorer continue to load their local `models/` and `clip/` checkpoints.
 
 #### 3. Frozen Models and Sample Selection
 
@@ -772,12 +775,12 @@ Save the [PIE-Bench metric calculator](https://github.com/cure-lab/PnPInversion/
 python -m pip install torchmetrics lpips
 ```
 
-The official calculator loads CLIP, LPIPS, and DINO assets. `--network` enables that external backend, including its first-use downloads. Generation remains separate from postselection scoring.
+The official calculator loads CLIP, LPIPS, and DINO assets. `--network` enables that external backend, including its first-use downloads; `--cache cache/metrics` stores those assets under the workspace using the [Hugging Face cache settings](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables) and PyTorch Hub directory. This cache is shared by the three- and four-request workflows. Generation remains separate from postselection scoring.
 
 ```bash
-python -B RefUnmix/assess.py --input outputs/main/summary.json --dataset data --mapping mapping_file.json --images annotation_images --protocol protocol/metrics.py --device cuda:0 --network --output outputs/mainmetrics.json
-python -B RefUnmix/assess.py --input outputs/matched/summary.json --dataset data --mapping mapping_file.json --images annotation_images --protocol protocol/metrics.py --device cuda:0 --network --output outputs/matchedmetrics.json
-python -B RefUnmix/assess.py --input outputs/fieldstest/pullbackfull/summary.json --dataset data --mapping mapping_file.json --images annotation_images --protocol protocol/metrics.py --device cuda:0 --network --output outputs/fieldmetrics.json
+python -B RefUnmix/assess.py --input outputs/main/summary.json --dataset data --mapping mapping_file.json --images annotation_images --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/mainmetrics.json
+python -B RefUnmix/assess.py --input outputs/matched/summary.json --dataset data --mapping mapping_file.json --images annotation_images --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/matchedmetrics.json
+python -B RefUnmix/assess.py --input outputs/fieldstest/pullbackfull/summary.json --dataset data --mapping mapping_file.json --images annotation_images --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/fieldmetrics.json
 ```
 
 Score other variants with the same command by changing only `--input` and `--output`. The input is a variant's inference summary, not the suite-level summary. Official scoring requires 512 x 512 source images, outputs, and annotation geometry. Omitting `--protocol` runs pixel-only scoring and leaves perceptual and CLIP metrics unavailable.

@@ -1,14 +1,19 @@
 # -*- coding: utf-8 -*-
 # RefUnmix: Endpoint-Aligned Fields for Protected Image Editing
 
+import contextlib
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import numpy as np
 from PIL import Image
-from engine.metrics import Protocol, pixels
+import torch
+from engine.metrics import Protocol, pixels, storage
 from assess import grouped, main
 
 class Calculator:
@@ -45,6 +50,71 @@ class MetricTests(unittest.TestCase):
         values = np.zeros((4, 4), dtype=np.uint8)
         values[:2] = 255
         self.mask = Image.fromarray(values)
+
+    @contextlib.contextmanager
+    def workspace(self):
+        origin = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ), patch.object(torch.hub, "_hub_dir", None):
+            previous = str(Path(directory) / "previous")
+            os.environ.update({key: previous for key in ("HF_HOME", "HF_HUB_CACHE", "TORCH_HOME", "TRANSFORMERS_CACHE")})
+            modules = {name: SimpleNamespace(HF_HOME=previous, HF_HUB_CACHE=previous, TRANSFORMERS_CACHE=previous, default_cache_path=previous) for name in ("huggingface_hub.constants", "transformers.utils.hub", "transformers.file_utils")}
+            with patch.dict(sys.modules, modules):
+                os.chdir(directory)
+                try:
+                    yield modules
+                finally:
+                    os.chdir(origin)
+
+    def teststorage(self):
+        with self.workspace() as modules:
+            result = storage("cache/metrics")
+            self.assertEqual(result, {"root": "cache/metrics", "huggingface": "cache/metrics/huggingface/hub", "torch": "cache/metrics/torch/hub"})
+            self.assertEqual(torch.hub.get_dir(), result["torch"])
+            self.assertTrue(Path(result["root"]).is_dir())
+            self.assertNotIn("TRANSFORMERS_CACHE", os.environ)
+            for module in modules.values():
+                self.assertEqual(module.HF_HUB_CACHE, result["huggingface"])
+                self.assertEqual(module.TRANSFORMERS_CACHE, result["huggingface"])
+            for key in ("HF_HOME", "HF_HUB_CACHE", "HF_ASSETS_CACHE", "HF_XET_CACHE", "TORCH_HOME", "XDG_CACHE_HOME"):
+                self.assertFalse(Path(os.environ[key]).is_absolute())
+            self.assertEqual(storage("cache/metrics"), result)
+
+    def teststorageinvalid(self):
+        with self.workspace():
+            before = dict(os.environ)
+            for path in (str(Path.cwd() / "cache"), "../cache", ".", ""):
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    storage(path)
+            self.assertEqual(dict(os.environ), before)
+            self.assertFalse(Path("cache").exists())
+
+    def teststoragefile(self):
+        with self.workspace():
+            Path("cache").write_text("occupied", encoding="utf-8")
+            before = dict(os.environ)
+            with self.assertRaises(FileExistsError):
+                storage("cache")
+            self.assertEqual(dict(os.environ), before)
+
+    def testcachedbackend(self):
+        with self.workspace():
+            methods = ("psnr", "mse", "lpips", "ssim", "structure_distance", "clip_similarity")
+            code = "import os\nclass MetricsCalculator:\n def __init__(self, device):\n  self.cache = os.environ['HF_HUB_CACHE']\n"
+            code += "".join(" def calculate_" + name + "(self, *args): return 1.0\n" for name in methods)
+            Path("protocol.py").write_text(code, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "network"):
+                Protocol.load("protocol.py", cache="cache/metrics")
+            self.assertFalse(Path("cache").exists())
+            result = Protocol.load("protocol.py", network=True, cache="cache/metrics")
+            self.assertEqual(result.calculator.cache, "cache/metrics/huggingface/hub")
+            self.assertEqual(result.metadata["cache"]["root"], "cache/metrics")
+
+    def testpixelcache(self):
+        with self.workspace(), patch("engine.metrics.storage") as cache:
+            result = Protocol.load(cache="cache/metrics")
+            self.assertFalse(result.metadata["complete"])
+            cache.assert_not_called()
+            self.assertFalse(Path("cache").exists())
 
     def testdenominator(self):
         raw, status = pixels(self.origin, self.edited, self.mask)

@@ -24,6 +24,7 @@ def parser():
     result.add_argument("--protocol", default=None)
     result.add_argument("--device", default="cpu")
     result.add_argument("--network", action="store_true")
+    result.add_argument("--cache", default="./cache/metrics", help="Relative directory for downloaded metric assets.")
     result.add_argument("--output", default="./assessment.json")
     return result
 
@@ -61,7 +62,7 @@ def main():
     items = {item.key: item for item in records(args.dataset, args.mapping, args.images)}
     if any(item.benchmark != "pie" for item in items.values()):
         raise ValueError("This scoring interface implements the PIE protocol only.")
-    backend = Protocol.load(args.protocol, args.device, args.network)
+    backend = Protocol.load(args.protocol, args.device, args.network, cache=args.cache)
     output, seen = [], set()
     for row in payload["rows"]:
         pair = (str(row["key"]), int(row["seed"]))
