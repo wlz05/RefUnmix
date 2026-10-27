@@ -23,7 +23,9 @@ def parser():
     result.add_argument("--images", default="./annotation_images")
     result.add_argument("--protocol", default=None)
     result.add_argument("--device", default="cpu")
-    result.add_argument("--network", action="store_true")
+    mode = result.add_mutually_exclusive_group()
+    mode.add_argument("--network", action="store_true")
+    mode.add_argument("--offline", action="store_true", help="Load the external calculator from complete local caches.")
     result.add_argument("--cache", default="./cache/metrics", help="Relative directory for downloaded metric assets.")
     result.add_argument("--output", default="./assessment.json")
     return result
@@ -62,7 +64,7 @@ def main():
     items = {item.key: item for item in records(args.dataset, args.mapping, args.images)}
     if any(item.benchmark != "pie" for item in items.values()):
         raise ValueError("This scoring interface implements the PIE protocol only.")
-    backend = Protocol.load(args.protocol, args.device, args.network, cache=args.cache)
+    backend = Protocol.load(args.protocol, args.device, args.network, cache=args.cache, offline=args.offline)
     output, seen = [], set()
     for row in payload["rows"]:
         pair = (str(row["key"]), int(row["seed"]))

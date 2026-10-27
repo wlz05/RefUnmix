@@ -5,6 +5,7 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import socket
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -13,7 +14,7 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 import torch
-from engine.metrics import Protocol, pixels, storage
+from engine.metrics import Protocol, connection, pixels, relocate, storage
 from assess import grouped, main
 
 class Calculator:
@@ -115,6 +116,77 @@ class MetricTests(unittest.TestCase):
             self.assertFalse(result.metadata["complete"])
             cache.assert_not_called()
             self.assertFalse(Path("cache").exists())
+
+    def testofflineconnection(self):
+        original, extended, lookup = socket.socket.connect, socket.socket.connect_ex, socket.getaddrinfo
+        with self.assertRaisesRegex(RuntimeError, "Offline metric assets"):
+            with connection(True):
+                socket.getaddrinfo("example.invalid", 443)
+        self.assertIs(socket.socket.connect, original)
+        self.assertIs(socket.socket.connect_ex, extended)
+        self.assertIs(socket.getaddrinfo, lookup)
+        with self.assertRaises(ValueError):
+            Protocol.load(network=True, offline=True)
+
+    def testabsolutesnapshot(self):
+        with self.workspace():
+            hub = Path("cache/metrics/huggingface/hub")
+            repository = hub / "models--example--probe"
+            blob = repository / "blobs" / ("b" * 64)
+            blob.parent.mkdir(parents=True)
+            blob.write_bytes(b"portable weights")
+            link = repository / "snapshots" / ("1" * 40) / "config.json"
+            link.parent.mkdir(parents=True)
+            link.write_bytes(b"stale link")
+            target = str(Path.cwd() / "previous" / blob.name)
+            for previous in (target, "Z:\\previous\\blobs\\" + blob.name):
+                with patch.object(Path, "is_symlink", lambda path: path == link), patch("engine.metrics.os.readlink", return_value=previous):
+                    self.assertEqual(relocate(hub), 1)
+                self.assertEqual(link.read_bytes(), blob.read_bytes())
+                self.assertEqual(relocate(hub), 0)
+            self.assertFalse(list(link.parent.glob("*.tmp")))
+
+    def testmissingblob(self):
+        with self.workspace():
+            hub = Path("cache/metrics/huggingface/hub")
+            link = hub / "models--example--probe" / "snapshots" / "revision" / "config.json"
+            link.parent.mkdir(parents=True)
+            link.write_bytes(b"stale link")
+            with patch.object(Path, "is_symlink", lambda path: path == link), patch("engine.metrics.os.readlink", return_value="Z:\\previous\\blobs\\missing"):
+                with self.assertRaisesRegex(FileNotFoundError, "matching local blob"):
+                    storage("cache/metrics", True)
+            self.assertEqual(link.read_bytes(), b"stale link")
+
+    def testofflinecachetransfer(self):
+        with self.workspace():
+            home = Path.cwd()
+            Path("origin").mkdir()
+            os.chdir("origin")
+            storage("cache/metrics")
+            hub = Path(torch.hub.get_dir())
+            repository = hub / "example_probe_main"
+            repository.mkdir(parents=True)
+            (hub / "checkpoints").mkdir()
+            torch.save({"value": torch.tensor(7)}, hub / "checkpoints" / "probe.pth")
+            (repository / "hubconf.py").write_text("import torch\ndef model():\n return torch.hub.load_state_dict_from_url('https://example.invalid/probe.pth', file_name='probe.pth', map_location='cpu', weights_only=True)\n", encoding="utf-8")
+            Path("cache/metrics/huggingface/hub").mkdir(parents=True)
+            Path("cache/metrics/huggingface/hub/probe.json").write_text("{}", encoding="utf-8")
+            code = "import os\nfrom pathlib import Path\nimport torch\nclass MetricsCalculator:\n def __init__(self, device):\n  self.value = torch.hub.load('example/probe:main', 'model', trust_repo=True)['value']\n  assert (Path(os.environ['HF_HUB_CACHE']) / 'probe.json').is_file()\n"
+            code += "".join(" def calculate_" + name + "(self, *args): return 1.0\n" for name in ("psnr", "mse", "lpips", "ssim", "structure_distance", "clip_similarity"))
+            Path("protocol.py").write_text(code, encoding="utf-8")
+            os.chdir(home)
+            Path("origin").rename("server")
+            os.chdir("server")
+            result = Protocol.load("protocol.py", offline=True, cache="cache/metrics")
+            self.assertEqual(int(result.calculator.value), 7)
+            self.assertFalse(result.metadata["networkauthorized"])
+            self.assertTrue(result.metadata["offline"])
+            self.assertEqual(result.evaluate(self.origin, self.edited, None, "target")["raw"]["whole"], 1.)
+            Path("cache/metrics/torch/hub/checkpoints/probe.pth").unlink()
+            original = socket.getaddrinfo
+            with self.assertRaisesRegex(RuntimeError, "Offline metric assets"):
+                Protocol.load("protocol.py", offline=True, cache="cache/metrics")
+            self.assertIs(socket.getaddrinfo, original)
 
     def testdenominator(self):
         raw, status = pixels(self.origin, self.edited, self.mask)

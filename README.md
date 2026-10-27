@@ -775,7 +775,7 @@ Save the [PIE-Bench metric calculator](https://github.com/cure-lab/PnPInversion/
 python -m pip install torchmetrics lpips
 ```
 
-The official calculator loads CLIP, LPIPS, and DINO assets. `--network` enables that external backend, including its first-use downloads; `--cache cache/metrics` stores those assets under the workspace using the [Hugging Face cache settings](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables) and PyTorch Hub directory. This cache is shared by the three- and four-request workflows. Generation remains separate from postselection scoring.
+The official calculator loads CLIP, LPIPS, and DINO assets. Use `--network` to populate or update `cache/metrics`, then use `--offline` to score with the completed cache. These modes are mutually exclusive. The relative cache uses the [Hugging Face cache settings](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables) and PyTorch Hub directory, and is shared by the three- and four-request workflows. Generation remains separate from postselection scoring.
 
 ```bash
 python -B RefUnmix/assess.py --input outputs/main/summary.json --dataset data --mapping mapping_file.json --images annotation_images --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/mainmetrics.json
@@ -786,6 +786,18 @@ python -B RefUnmix/assess.py --input outputs/fieldstest/pullbackfull/summary.jso
 Score other variants with the same command by changing only `--input` and `--output`. The input is a variant's inference summary, not the suite-level summary. Official scoring requires 512 x 512 source images, outputs, and annotation geometry. Omitting `--protocol` runs pixel-only scoring and leaves perceptual and CLIP metrics unavailable.
 
 Assessments contain `raw`, scaled `table`, and metric-specific `coverage`. MSE, LPIPS, and DINO structure distance use x1,000; SSIM uses x100; PSNR is in dB. Empty protected regions remain undefined for preservation metrics; zero-error PSNR is recorded as positive infinity. The scorer averages seeds within each request key, then averages those request scores. Report each metric's valid denominator, alongside all 700 requests and four seeds.
+
+### Reuse the Metric Cache After Moving
+
+Copy the complete `cache/metrics/` tree with the workspace. Retain Hugging Face repository `refs/`, `snapshots/`, and `blobs/`, plus the PyTorch Hub repository directories and `checkpoints/`. Keep relative symlinks intact or copy their resolved file contents. Absolute snapshot links from the old machine are replaced with local blob copies when the matching blobs are present.
+
+From the new workspace root, run the same Python command with `--offline` and a fresh assessment output:
+
+```bash
+python -B RefUnmix/assess.py --input outputs/main/summary.json --dataset data --mapping mapping_file.json --images annotation_images --protocol protocol/metrics.py --device cuda:0 --offline --cache cache/metrics --output outputs/mainoffline.json
+```
+
+Offline scoring reads cached assets and blocks network connections during calculator loading and scoring. Missing assets stop the run; populate the cache with `--network` before copying it. The saved assessment records its cache paths and offline mode. Pixel-only scoring needs neither flag and creates no metric cache.
 
 ### Independent Task Assessment
 

@@ -2,18 +2,78 @@
 # RefUnmix: Endpoint-Aligned Fields for Protected Image Editing
 
 from __future__ import annotations
+from contextlib import contextmanager
 import hashlib
 import importlib.util
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+import shutil
+import socket
 import sys
+import tempfile
 import numpy as np
 from PIL import Image
 from data import clean, destination, locate
 
-def storage(value):
+def relocate(hub):
+    # Replace stale absolute snapshot links with local blob copies.
+    hub = Path(hub)
+    repaired = 0
+    for snapshots in hub.glob("*--*/snapshots"):
+        repository = snapshots.parent
+        if not snapshots.resolve().is_relative_to(hub.resolve()):
+            raise ValueError("Metric snapshot directories must stay inside their cache.")
+        for link in snapshots.rglob("*"):
+            if not link.is_symlink():
+                continue
+            target = os.readlink(link)
+            absolute = Path(target).is_absolute() or bool(PureWindowsPath(target).drive)
+            if not absolute:
+                if not link.exists() or not link.resolve().is_relative_to(repository.resolve()):
+                    raise FileNotFoundError("A metric snapshot link is incomplete; copy its repository blobs.")
+                continue
+            token = str(target).replace("\\", "/").rsplit("/", 1)[-1]
+            blob = repository / "blobs" / token
+            if not token or not blob.is_file() or not blob.resolve().is_relative_to(repository.resolve()) or not link.parent.resolve().is_relative_to(snapshots.resolve()):
+                raise FileNotFoundError("A relocated metric snapshot needs its matching local blob.")
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=link.parent, suffix=".tmp", delete=False) as output, blob.open("rb") as source:
+                    temporary = Path(output.name)
+                    shutil.copyfileobj(source, output)
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(temporary, link)
+                repaired += 1
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+    return repaired
+
+@contextmanager
+def connection(offline):
+    if not offline:
+        yield
+        return
+    original, extended = socket.socket.connect, socket.socket.connect_ex
+    lookup = socket.getaddrinfo
+
+    def blocked(*args, **kwargs):
+        raise RuntimeError("Offline metric assets are incomplete; populate the cache with --network first.")
+
+    socket.socket.connect = socket.socket.connect_ex = blocked
+    socket.getaddrinfo = blocked
+    try:
+        yield
+    finally:
+        socket.socket.connect, socket.socket.connect_ex = original, extended
+        socket.getaddrinfo = lookup
+
+def storage(value, offline=False):
     # Keep downloaded metric assets inside the working directory.
+    if not isinstance(offline, bool):
+        raise ValueError("Offline cache mode must be boolean.")
     root = destination(value, "cache")
     parts = {"HF_HOME": "huggingface", "HF_HUB_CACHE": "huggingface/hub", "HF_ASSETS_CACHE": "huggingface/assets", "HF_XET_CACHE": "huggingface/xet", "TORCH_HOME": "torch", "XDG_CACHE_HOME": "."}
     paths = {key: locate(root, Path(part)).as_posix() for key, part in parts.items()}
@@ -21,14 +81,16 @@ def storage(value):
     legacy = {"HUGGINGFACE_HUB_CACHE": paths["HF_HUB_CACHE"], "HUGGINGFACE_ASSETS_CACHE": paths["HF_ASSETS_CACHE"], "TRANSFORMERS_CACHE": paths["HF_HUB_CACHE"], "PYTORCH_TRANSFORMERS_CACHE": paths["HF_HUB_CACHE"], "PYTORCH_PRETRAINED_BERT_CACHE": paths["HF_HUB_CACHE"]}
     import torch
     root.mkdir(parents=True, exist_ok=True)
+    relocate(Path(paths["HF_HUB_CACHE"]))
     for key in legacy:
         os.environ.pop(key, None)
     os.environ.update(paths)
+    os.environ.update({"HF_HUB_OFFLINE": "1" if offline else "0", "TRANSFORMERS_OFFLINE": "1" if offline else "0"})
     # Redirect cache constants when a caller already imported the libraries.
     for name in ("huggingface_hub.constants", "transformers.utils.hub", "transformers.file_utils"):
         module = sys.modules.get(name)
         if module is not None:
-            for key, path in {**paths, **legacy, "default_cache_path": paths["HF_HUB_CACHE"], "hf_cache_home": paths["HF_HOME"]}.items():
+            for key, path in {**paths, **legacy, "default_cache_path": paths["HF_HUB_CACHE"], "hf_cache_home": paths["HF_HOME"], "HF_HUB_OFFLINE": offline, "_is_offline_mode": offline}.items():
                 if hasattr(module, key):
                     setattr(module, key, path)
     torch.hub.set_dir(hub)
@@ -63,25 +125,28 @@ class Protocol:
         self.calculator, self.metadata = calculator, metadata or {"backend": "pixel-only", "complete": False}
 
     @classmethod
-    def load(cls, path=None, device="cpu", network=False, cache="./cache/metrics"):
+    def load(cls, path=None, device="cpu", network=False, cache="./cache/metrics", offline=False):
         clean(cache, "cache")
+        if not isinstance(offline, bool) or not isinstance(network, bool) or offline and network:
+            raise ValueError("Choose exactly one external metric mode: --network or --offline.")
         if path is None:
             return cls()
         source = locate(Path("."), clean(path, "protocol"))
         if source.suffix != ".py" or not source.is_file():
             raise FileNotFoundError("Protocol must point to the official Python metric implementation.")
-        if not network:
-            raise ValueError("The external backend may download pretrained assets; pass --network explicitly or use pixel-only mode.")
-        cached = storage(cache)
+        if not network and not offline:
+            raise ValueError("The external backend requires --network or --offline; pixel-only mode needs neither.")
+        cached = storage(cache, offline)
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         spec = importlib.util.spec_from_file_location("benchmarkmetrics", source)
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        calculator = module.MetricsCalculator(device)
+        with connection(offline):
+            spec.loader.exec_module(module)
+            calculator = module.MetricsCalculator(device)
         names = ("calculate_psnr", "calculate_mse", "calculate_lpips", "calculate_ssim", "calculate_structure_distance", "calculate_clip_similarity")
         if any(not callable(getattr(calculator, name, None)) for name in names):
             raise ValueError("Metric backend does not implement the required public interface.")
-        return cls(calculator, {"backend": str(source), "sha256": digest, "complete": True, "networkauthorized": True, "device": str(device), "cache": cached})
+        return cls(calculator, {"backend": str(source), "sha256": digest, "complete": True, "networkauthorized": network, "offline": offline, "device": str(device), "cache": cached})
 
     def evaluate(self, origin, edited, mask, target):
         import torch
@@ -97,7 +162,7 @@ class Protocol:
                 for attribute in vars(backend).values():
                     if callable(getattr(attribute, "reset", None)):
                         attribute.reset()
-                with torch.no_grad():
+                with torch.no_grad(), connection(self.metadata.get("offline", False)):
                     value = float(getattr(backend, name)(*args))
                 if not math.isfinite(value):
                     raise RuntimeError("A defined official metric returned a nonfinite value: " + name)
