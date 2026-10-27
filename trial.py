@@ -9,7 +9,7 @@ from pathlib import Path
 from data import clean, destination, locate
 from evaluate import datasetargs, evaluator, execute, items
 from run import common, jsonfile, load, validate, writejson
-from split import identities
+from split import identities, pixels
 from engine.serial import read
 from engine.protocol import changes, configuration, defaults, signature
 from engine.reproduce import digest
@@ -113,13 +113,25 @@ def frozen(args, chosen):
         raise ValueError("Frozen tests require unchanged validation control settings.")
     if not getattr(args, "manifest", None) or payload.get("manifestdigest") != digest(locate(Path("."), clean(args.manifest, "manifest"))):
         raise ValueError("Frozen tests require the unchanged split manifest.")
+    if getattr(args, "dataset", None) is not None:
+        mapping = locate(locate(Path("."), clean(args.dataset, "dataset")), clean(args.mapping, "mapping"))
+        if payload.get("mappingdigest") != digest(mapping):
+            raise ValueError("Frozen tests require the unchanged annotation mapping.")
     # Keep test sources disjoint from the validation recipe.
     bindings = payload.get("digests", {})
     if not isinstance(bindings, dict) or any(not isinstance(key, str) or not isinstance(value, str) or not value for key, value in bindings.items()):
         raise ValueError("Frozen source digests must be named nonempty strings.")
+    if chosen and not bindings:
+        raise ValueError("Frozen tests require nonempty validation source bindings.")
     current = set(identities(chosen).values())
     if current & set(bindings.values()):
         raise ValueError("Test images overlap validation sources.")
+    known, paired = payload.get("pixels", {}), payload.get("paired", {})
+    if not isinstance(known, dict) or not isinstance(paired, dict) or set(known) != set(bindings) or not set(paired) <= set(bindings) or any(not isinstance(value, str) or not value for value in [*known.values(), *paired.values()]):
+        raise ValueError("Frozen recipes require complete source and paired pixel identities; regenerate validation.")
+    currentpixels, currentpaired = set(pixels(chosen).values()), set(pixels(chosen, True).values())
+    if currentpixels & (set(known.values()) | set(paired.values())) or currentpaired & set(known.values()):
+        raise ValueError("Test pixels or paired edit chains overlap validation sources.")
     for field in ("family", "group"):
         known = payload.get(field, [])
         if not isinstance(known, list) or any(not isinstance(value, str) or not value for value in known):
@@ -155,7 +167,10 @@ def main():
     if args.dry:
         print(json.dumps({"schema": 1, "design": plan, "scope": "Declared controls only; no data or frozen recipe has been verified."}, indent=2, allow_nan=False))
         return
+    paths = {"mapping": locate(locate(Path("."), clean(args.dataset, "dataset")), clean(args.mapping, "mapping")), "manifest": locate(Path("."), clean(args.manifest, "manifest"))}
+    inputs = {key: digest(path) for key, path in paths.items()}
     chosen = items(args)
+    sources = identities(chosen)
     if args.recipe:
         controls = frozen(args, chosen)
     output = destination(args.output, "output")
@@ -171,17 +186,26 @@ def main():
     output.mkdir(parents=True)
     results = {}
     for label, modification in controls.items():
+        if any(digest(path) != inputs[key] for key, path in paths.items()):
+            raise ValueError("Frozen ablation inputs changed during execution.")
         current = deepcopy(args)
         current.output = (output / label).as_posix()
         current.frozenrecipehash = hashlib.sha256(locate(Path("."), clean(args.recipe, "recipe")).read_bytes()).hexdigest() if args.recipe else None
         for key, value in modification.items():
             setattr(current, key, value)
         payload = execute(current, (editor, judge, evaluation, independent))
+        if any(payload["inputs"][key]["sha256"] != value for key, value in inputs.items()):
+            raise ValueError("An ablation arm used changed mapping or split inputs.")
+        if any(sources.get(row["key"]) != row.get("inputsha256") for row in payload["rows"]):
+            raise ValueError("An ablation arm used changed source image bytes.")
         if payload["controlsignature"]["sha256"] != plan["variants"][label]["sha256"]:
             raise RuntimeError("Executed control settings differ from the checked ablation plan.")
         results[label] = {"summary": payload["summary"], "cost": payload["cost"], "controller": payload["controller"], "controlsignature": payload["controlsignature"], "changes": plan["variants"][label]["changes"], "path": str(output / label / "summary.json"), "rows": len(payload["rows"])}
+    if any(digest(path) != inputs[key] for key, path in paths.items()):
+        raise ValueError("Ablation inputs changed before publication.")
+    items(args)
     if args.split == "val":
-        recipe = {"schema": 1, "split": "val", "suite": args.suite, "settings": settings(args), "checkpoints": checkpoints, "variants": controls, "digests": identities(chosen), "group": sorted({item.group for item in chosen if item.group}), "family": sorted({item.family for item in chosen if item.family}), "manifestdigest": hashlib.sha256(locate(Path("."), clean(args.manifest, "manifest")).read_bytes()).hexdigest(), "note": "Configurations are frozen; no test-based winner is selected."}
+        recipe = {"schema": 1, "split": "val", "suite": args.suite, "settings": settings(args), "checkpoints": checkpoints, "variants": controls, "digests": identities(chosen), "pixels": pixels(chosen), "paired": pixels(chosen, True), "group": sorted({item.group for item in chosen if item.group}), "family": sorted({item.family for item in chosen if item.family}), "manifestdigest": inputs["manifest"], "mappingdigest": inputs["mapping"], "note": "Configurations are frozen; no test-based winner is selected."}
         writejson(output / "recipe.json", recipe)
     writejson(output / "summary.json", {"schema": 1, "split": args.split, "settings": vars(args), "design": plan, "variants": results, "note": "Controller proxies and consistency remain diagnostics; use independent evidence."})
 

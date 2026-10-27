@@ -232,6 +232,8 @@ python -m pip install datasets pyarrow gradio
 
 Experiments use **one NVIDIA GeForce RTX 4090** and seeds **42, 52, 3047, and 3407**. Single-image inference defaults to 42. For dataset experiments, use `--seeds 42 52 3047 3407`.
 
+`cuda:0` means the first GPU visible to the process. A scheduler's `CUDA_VISIBLE_DEVICES` setting remaps physical GPU indices within that process.
+
 Dataset partitions remain fixed across seeds. Dataset inference defaults to `--batch 3`; `--batch 4` runs four independent image-seed requests when memory permits. Requests share one backbone and control model. Compatible VP predictions are combined into shared forwards; Flow velocity calls remain serialized while VAE calls can be combined.
 
 Use `--batch 1` for standalone latency, strict `--deterministic` runs, attention-hook localization, or external adapters. The main 4090 configuration uses the VP backbone in fp32. Flow backends load their complete checkpoints into GPU memory; request batching does not reduce resident weight memory.
@@ -432,9 +434,22 @@ With the complete release, each command exports **2,800 image-seed outputs from 
 
 [evaluate.py](evaluate.py) saves images, per-image JSON reports, `summary.cost`, `summary.controller`, and diagnostic scores. Run [assess.py](assess.py) after generation for the official PIE metric table.
 
+### Main Experiments After Internal Validation
+
+When PIE validation results determine any hyperparameter or temporal mixture, report the held-out test subset with the commands below. Its request count comes from the manifest. Reserve the full 700-request table for settings frozen using disjoint external development sources. The grouped manifest is created in the next section.
+
+```bash
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --manifest outputs/split.json --split test --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/maintest
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --manifest outputs/split.json --split test --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 15 --maxcalls 15 --output outputs/matchedtest
+```
+
 ### Frozen Ablation Protocol
 
 Use a grouped validation/test manifest for ablations in [trial.py](trial.py). The custom split below uses partition seed 42 once; generation uses all four seeds on that fixed partition. Validation and test sources remain disjoint. The manifest stores train/val/test keys; these commands use val/test and keep all model weights frozen. Test-subset results report their actual request count separately from the full 700-request benchmark. Freeze full-benchmark hyperparameters using a separate development source.
+
+Splits group shared source paths, file hashes, decoded RGB pixels, source IDs, and families. Paired targets that appear as another request's source stay in the same group, including across multi-turn edits. Lossless re-encodings share a pixel identity; cropped, augmented, and lossy near-duplicates require a common `family` label. Official partitions are preserved and rejected when these groups cross partitions.
+
+Frozen tests verify the annotation mapping, manifest, source pixels, paired edit chains, code, settings, and weights. Ablations also recheck inputs during execution. `--split all` requires omitting `--manifest`; passing both is rejected. Regenerate manifests and validation recipes with this revision in a new output tree.
 
 ```bash
 python -B RefUnmix/split.py --dataset data --mapping mapping_file.json --images annotation_images --protocol custom --seed 42 --ratios 0.70 0.15 0.15 --output outputs/split.json
@@ -771,7 +786,7 @@ python -B RefUnmix/blind.py --left outputs/releasetest/joint/summary.json --righ
 
 ### Tests
 
-Run the synthetic-backend regression suite from the repository root:
+Run the regression suite from `workspace/`:
 
 ```bash
 cd RefUnmix
@@ -779,6 +794,14 @@ python -B -m unittest discover -s tests -p '*.py' -q
 ```
 
 The suite covers field construction, control constraints, query accounting, image formats, dataset conversion, and validation-to-test recipe replay. Temporal diagnostics distinguish numerical underflow from an exact fit.
+
+For the focused parallel checks, run from the checkout root:
+
+```bash
+python -B -m unittest discover -s tests -p batch.py -q
+```
+
+CUDA availability enables allocator-retention and CUDA random-state tests with lightweight backends. Without CUDA, those two cases are reported as skipped.
 
 ---
 
@@ -800,6 +823,12 @@ Invalid budgets are rejected before checkpoints load. Nonfinite endpoints are re
 
 Use the same batch width for the main method and its ablations. Every image-seed request keeps its own noise generator, reference cache, controller, CLIP counters, and sample budget. Four seeds generate four runs per source; batch width sets concurrent requests and does not multiply the per-request allowance.
 
+Group barriers release inference-queue inputs and outputs before the next group starts. Failed groups clear completed worker frames. Prior probability tensors are copied before normalization; random search and random-reference directions use request-local generators.
+
 For dataset inference and ablations, use `--batch 3` or `--batch 4`. The last group may contain fewer requests. Parallel request latency includes queue waits; `execution.throughput` records completed image-seed requests per second over the full dataset loop, including scoring and output writes. `execution.peakvram` is the shared-device peak; per-row VRAM is undefined during concurrent execution. Compare standalone latency with `--batch 1`, and compare throughput at the same batch width.
+
+`execution.denoisersamples` and `execution.denoiserrequests` reconcile with summed per-request samples and logical calls. `execution.denoisercalls` counts shared physical forwards. A mismatch stops summary publication. `execution.accounting` records this check.
+
+`execution.memorytrace` records live `allocated` and allocator `reserved` memory after each completed group, in MiB. `finalvram`, `reservedvram`, and `peakreservedvram` record final live, final reserved, and peak reserved memory. Cached allocator reservations can remain high after live tensors are released; inspect live allocations across groups when checking retention.
 
 CUDA memory errors stop execution without changing precision or budgets. Completed row JSON files and their images remain available; a caught execution error writes `failure.json` and does not publish a complete `summary.json`. Start a new output directory after adjusting batch width. A checkpoint-loading memory error requires freeing GPU memory or choosing a compatible checkpoint or precision before inference.

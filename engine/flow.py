@@ -257,7 +257,7 @@ class Consistency:
         if grid.ndim != 1 or len(grid) < 3 or not torch.isfinite(grid).all() or torch.any(grid[1:] <= grid[:-1]) or grid[0] != 0 or grid[-1] != 1:
             raise ValueError("Flow consistency requires a declared monotone actual sigma grid.")
         count = len(grid) - 2
-        probabilities = torch.ones(count, dtype=torch.float64) if probabilities is None else torch.as_tensor(probabilities, dtype=torch.float64)
+        probabilities = torch.ones(count, dtype=torch.float64) if probabilities is None else torch.as_tensor(probabilities, dtype=torch.float64, device="cpu").detach().clone()
         if probabilities.shape != (count,) or not torch.isfinite(probabilities).all() or torch.any(probabilities <= 0):
             raise ValueError("Flow probes must cover all interior actual sigma levels.")
         probabilities = probabilities / probabilities.max()

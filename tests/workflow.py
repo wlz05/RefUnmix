@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from PIL import Image
 import torch
 from data import Record, clean, locate
 from evaluate import identifier, metrics, regions, summary
@@ -183,8 +184,8 @@ class WorkflowTests(unittest.TestCase):
             root = Path(directory)
             records = []
             for index in range(4):
-                image = root / (str(index) + ".bin")
-                image.write_bytes(str(index).encode())
+                image = root / (str(index) + ".png")
+                Image.new("RGB", (8, 8), (index, 20, 30)).save(image)
                 records.append(Record(str(index), image, image, "source", "target", "edit", group="pair" if index < 2 else str(index)))
             manifest = create(records)
             path = root / "split.json"

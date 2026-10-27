@@ -29,7 +29,7 @@ class Prior:
         alphas = session.editor.alphas.detach().double().cpu()
         if alphas.ndim != 1 or len(alphas) < 2 or not torch.isfinite(alphas).all().item() or torch.any(alphas <= 0).item() or torch.any(alphas > 1).item() or torch.any(alphas[1:] >= alphas[:-1]).item() or torch.any(alphas[1:] >= 1).item():
             raise ValueError("Consistency requires decreasing positive VP coefficients.")
-        probability = torch.ones(len(alphas) - 1, dtype=torch.float64) if probabilities is None else torch.as_tensor(probabilities, dtype=torch.float64)
+        probability = torch.ones(len(alphas) - 1, dtype=torch.float64) if probabilities is None else torch.as_tensor(probabilities, dtype=torch.float64, device="cpu").detach().clone()
         if probability.shape != (len(alphas) - 1,) or not torch.isfinite(probability).all().item() or torch.any(probability <= 0).item():
             raise ValueError("Prior probabilities must cover every interior tick.")
         probability /= probability.max()

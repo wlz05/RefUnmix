@@ -609,9 +609,9 @@ class RobustnessTests(unittest.TestCase):
         payload = {"schema": 1, "split": "val", "suite": suite, "settings": settings(args), "variants": controls, "digests": {}, "manifestdigest": "manifest"}
         return args, payload
 
-    def recover(self, args, payload):
+    def recover(self, args, payload, chosen=()):
         with patch("trial.locate", return_value=File("recipe.json")), patch("trial.read", return_value=payload), patch("trial.identities", return_value={}), patch("trial.digest", return_value="manifest"):
-            return frozen(args, [])
+            return frozen(args, chosen)
 
     def testtemporalrecipe(self):
         args, payload = self.recipe()
@@ -635,6 +635,34 @@ class RobustnessTests(unittest.TestCase):
             payload[key] = value
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 self.recover(args, payload)
+
+    def testrecipepixels(self):
+        from data import Record
+        from split import pixels
+        with tempfile.TemporaryDirectory() as folder:
+            path = File(folder) / "source.png"
+            Image.new("RGB", (16, 16), (70, 90, 120)).save(path)
+            item = Record("test", path, File("source.png"), "source", "target", "edit")
+            value = pixels([item])["test"]
+            for paired in (False, True):
+                args, payload = self.recipe()
+                payload["digests"] = {"val": "different file bytes"}
+                payload["pixels"] = {"val": "other pixels" if paired else value}
+                payload["paired"] = {"val": value} if paired else {}
+                with self.subTest(paired=paired), self.assertRaisesRegex(ValueError, "pixels or paired"):
+                    self.recover(args, payload, [item])
+
+    def testrecipemapping(self):
+        args, payload = self.recipe()
+        args.dataset, args.mapping = "data", "mapping.json"
+        payload["mappingdigest"] = "changed mapping"
+        with self.assertRaisesRegex(ValueError, "annotation mapping"):
+            self.recover(args, payload)
+
+    def testrecipeempty(self):
+        args, payload = self.recipe()
+        with self.assertRaisesRegex(ValueError, "nonempty validation"):
+            self.recover(args, payload, [object()])
 
     def testrecipetypes(self):
         args, payload = self.recipe("core")

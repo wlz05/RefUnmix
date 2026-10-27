@@ -320,6 +320,70 @@ class CorpusTests(unittest.TestCase):
             with self.subTest(second=second.key), self.assertRaises(ValueError):
                 official([replace(first, group="same"), second])
 
+    def testpixelduplicates(self):
+        from PIL.PngImagePlugin import PngInfo
+        metadata = PngInfo()
+        metadata.add_text("note", "reencoded source")
+        with Image.open("raw/source.png") as image:
+            image.save("raw/copy.png", pnginfo=metadata)
+        self.assertNotEqual(Path("raw/source.png").read_bytes(), Path("raw/copy.png").read_bytes())
+        first = Record("a", Path("raw/source.png"), Path("source.png"), "A.", "B.", "Edit.", partition="val")
+        second = replace(first, key="b", image=Path("raw/copy.png"), partition="test")
+        with self.assertRaisesRegex(ValueError, "leakage"):
+            official([first, second])
+
+    def testpairedleakage(self):
+        first = Record("a", Path("raw/source.png"), Path("source.png"), "A.", "B.", "Edit.", edited=Path("raw/target.png"), partition="val")
+        second = replace(first, key="b", image=Path("raw/target.png"), edited=None, partition="test")
+        with self.assertRaisesRegex(ValueError, "leakage"):
+            official([first, second])
+
+    def testallmanifest(self):
+        item = Record("a", Path("raw/source.png"), Path("source.png"), "A.", "B.", "Edit.", partition="val")
+        self.dump(official([item]), "split.json")
+        with self.assertRaisesRegex(ValueError, "manifest"):
+            select([item], "split.json", "all")
+
+    def testpairedmutation(self):
+        item = Record("a", Path("raw/source.png"), Path("source.png"), "A.", "B.", "Edit.", edited=Path("raw/target.png"), partition="val")
+        self.dump(official([item]), "split.json")
+        Image.new("RGB", (16, 16), (100, 110, 120)).save("raw/target.png")
+        with self.assertRaises(ValueError):
+            select([item], "split.json", "val")
+
+    def testpixelbindings(self):
+        item = Record("a", Path("raw/source.png"), Path("source.png"), "A.", "B.", "Edit.", partition="val")
+        payload = official([item])
+        payload.pop("pixels")
+        self.dump(payload, "split.json")
+        with self.assertRaisesRegex(ValueError, "regenerate"):
+            select([item], "split.json", "val")
+
+    def testtrialinputmutation(self):
+        from engine.protocol import signature
+        from engine.reproduce import digest
+        from trial import main as trialmain
+        Path("data/images").mkdir(parents=True)
+        mapping = {}
+        for index in range(4):
+            Image.new("RGB", (16, 16), (index, 30, 40)).save(f"data/images/{index}.png")
+            mapping[str(index)] = {"image": f"{index}.png", "source": "source", "target": "target long"}
+        self.dump(mapping, "data/map.json")
+        self.dump(create(records("data", "map.json", "images")), "split.json")
+        arguments = ["trial.py", "--dataset", "data", "--mapping", "map.json", "--images", "images", "--manifest", "split.json", "--split", "val", "--suite", "core", "--size", "16", "--clip", "clip", "--batch", "1", "--output", "trial"]
+
+        def execute(current, resources):
+            result = {"controlsignature": signature(current), "inputs": {"mapping": {"sha256": digest("data/map.json")}, "manifest": {"sha256": digest("split.json")}}, "summary": {}, "cost": {}, "controller": {}, "rows": []}
+            with Path("data/map.json").open("a", encoding="utf-8") as handle:
+                handle.write("\n")
+            return result
+
+        with patch("sys.argv", arguments), patch("trial.load", return_value=(types.SimpleNamespace(metadata={"weights": "fixture"}), None)), patch("trial.execute", side_effect=execute) as runner:
+            with self.assertRaisesRegex(ValueError, "inputs changed"):
+                trialmain()
+        self.assertEqual(runner.call_count, 1)
+        self.assertFalse(Path("trial/recipe.json").exists())
+
     def testofficialtag(self):
         item = Record("a", Path("raw/source.png"), Path("source.png"), "A.", "B.", "Edit.")
         with self.assertRaises(ValueError):
@@ -368,8 +432,8 @@ class CorpusTests(unittest.TestCase):
     def testcustomtrain(self):
         selected = []
         for index in range(4):
-            path = Path("raw") / f"{index}.bin"
-            path.write_bytes(bytes([index]))
+            path = Path("raw") / f"{index}.png"
+            Image.new("RGB", (8, 8), (index, 20, 30)).save(path)
             selected.append(Record(str(index), path, Path(path.name), "A.", "B.", "Edit.", partition="train"))
         payload = create(selected)
         Path("split.json").write_text(json.dumps(payload), encoding="utf-8")

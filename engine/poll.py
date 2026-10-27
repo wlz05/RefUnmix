@@ -301,7 +301,7 @@ def select(path, score, weight, prior, config=None):
     lastmove = None
     initialleverage = None
     rescuetrace = {"considered": 0, "eligible": 0, "proposed": 0, "budgetblocked": 0, "skipped": {}}
-    generator = np.random.default_rng(path.seed ^ 0xC91)
+    generator = np.random.default_rng((path.seed % (2 ** 64)) ^ 0xC91)
     fixed = functional.interpolate(weight.detach().to(session.origin.device).double(), session.origin.shape[-2:], mode="bilinear", align_corners=False)
     root = (fixed / mass).sqrt() if mass > 0 else torch.zeros_like(fixed)
     residuals = {}

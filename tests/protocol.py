@@ -110,7 +110,7 @@ class ProtocolTests(unittest.TestCase):
     def testtamperedrecipe(self):
         args = self.args()
         args.suite, args.recipe, args.manifest = "core", "recipe.json", "split.json"
-        payload = {"schema": 1, "split": "val", "suite": "core", "settings": settings(args), "variants": variants("core", base=args), "digests": {}, "manifestdigest": "manifest"}
+        payload = {"schema": 1, "split": "val", "suite": "core", "settings": settings(args), "variants": variants("core", base=args), "digests": {}, "manifestdigest": "manifest", "mappingdigest": "manifest"}
         payload["variants"]["full"]["prior"] = "rec"
         with patch("trial.locate"), patch("trial.read", return_value=payload), patch("trial.identities", return_value={}), patch("trial.digest", return_value="manifest"):
             with self.assertRaisesRegex(ValueError, "declared ablation"):

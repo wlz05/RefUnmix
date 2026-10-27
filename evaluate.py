@@ -183,6 +183,13 @@ def clusters(args):
     payload = readjson(locate(Path("."), clean(args.manifest, "manifest")))
     return {key: hashlib.sha256("|".join(sorted(group)).encode()).hexdigest() for group in payload.get("groups", []) for key in group}
 
+def reconcile(rows, dispatch):
+    # Match request budgets to the shared inference ledger.
+    totals = {key: sum(row.get("report", {}).get("stats", {}).get(key, 0) for row in rows) for key in ("samples", "calls")}
+    if totals["samples"] != dispatch["denoisersamples"] or totals["calls"] != dispatch["denoiserrequests"]:
+        raise RuntimeError("Per-request denoiser counts do not match shared dispatch accounting.")
+    return {"matched": True, "samples": totals["samples"], "logicalcalls": totals["calls"], "physicalcalls": dispatch["denoisercalls"]}
+
 def request(args, item, seed, resources, output, grouping, concurrent=False):
     # Keep request state and counters separate from shared weights.
     args = deepcopy(args)
@@ -254,6 +261,8 @@ def execute(args, resources=None):
     if gpu:
         torch.cuda.reset_peak_memory_stats(editor.device)
     resident = torch.cuda.memory_allocated(editor.device) / 2 ** 20 if gpu else None
+    residentreserved = torch.cuda.memory_reserved(editor.device) / 2 ** 20 if gpu else None
+    memorytrace = []
     started = time.perf_counter()
     try:
         with Batch(resources, width) if width > 1 else nullcontext(None) as parallel:
@@ -270,7 +279,12 @@ def execute(args, resources=None):
                 if getattr(editor, "metadata", {}).get("family") == "flow":
                     for name in ("pools", "textids"):
                         getattr(editor, name).clear()
-            dispatch = parallel.report() if parallel is not None else {"width": 1, "sharedweights": True, "denoisercalls": sum(row["report"].get("stats", {}).get("calls", 0) for row in rows)}
+                if gpu:
+                    memorytrace.append({"completed": len(rows), "allocated": torch.cuda.memory_allocated(editor.device) / 2 ** 20, "reserved": torch.cuda.memory_reserved(editor.device) / 2 ** 20, "peakreserved": torch.cuda.max_memory_reserved(editor.device) / 2 ** 20})
+            calls = sum(row["report"].get("stats", {}).get("calls", 0) for row in rows)
+            samples = sum(row["report"].get("stats", {}).get("samples", 0) for row in rows)
+            dispatch = parallel.report() if parallel is not None else {"width": 1, "sharedweights": True, "denoisercalls": calls, "denoiserrequests": calls, "denoisersamples": samples}
+            dispatch["accounting"] = {**reconcile(rows, dispatch), "checked": parallel is not None}
     except BaseException as error:
         failure = {"schema": 1, "error": type(error).__name__, "message": str(error), "settings": settings, "completed": sorted(path.name for path in output.glob("*.json")), "scope": "Only completed row JSON files belong to retained results; no complete summary is published."}
         try:
@@ -283,7 +297,7 @@ def execute(args, resources=None):
     payload = {"schema": 1, "split": args.split, "manifest": args.manifest, "oracle": args.oracle, "independentcheckpoint": independent, "controlcheckpoint": getattr(judge, "metadata", None), "reportcheckpoint": getattr(evaluation, "metadata", None), "evaluatornote": "Different CLIP weights remain shared-family diagnostics, not independent task evidence.", "metricnote": "Pixel, band, and paired errors are diagnostics, not official benchmark protocols.", "settings": settings, "seeds": seeds, "inputs": provenance, "reproducibility": snapshot(), "summary": summary(rows), "categories": {category: summary([row for row in rows if row["category"] == category]) for category in sorted({row["category"] for row in rows})}, "rows": rows}
     payload["cost"] = costs(rows)
     peak = torch.cuda.max_memory_allocated(editor.device) / 2 ** 20 if gpu and width > 1 else max((row["vram"] for row in rows if row["vram"] is not None), default=None)
-    payload["execution"] = {**dispatch, "requested": getattr(args, "batch", 1), "requests": len(rows), "seconds": elapsed, "throughput": len(rows) / elapsed, "residentvram": resident, "peakvram": peak, "scope": "End-to-end dataset throughput includes input loading, control, independent scoring, and output writes; checkpoint loading is excluded."}
+    payload["execution"] = {**dispatch, "requested": getattr(args, "batch", 1), "requests": len(rows), "seconds": elapsed, "throughput": len(rows) / elapsed, "residentvram": resident, "peakvram": peak, "residentreservedvram": residentreserved, "finalvram": torch.cuda.memory_allocated(editor.device) / 2 ** 20 if gpu else None, "reservedvram": torch.cuda.memory_reserved(editor.device) / 2 ** 20 if gpu else None, "peakreservedvram": max((row["peakreserved"] for row in memorytrace), default=None), "memorytrace": memorytrace, "scope": "End-to-end dataset throughput includes input loading, control, independent scoring, and output writes; checkpoint loading is excluded. Memory values are MiB; reserved memory includes allocator caches."}
     payload["controlsignature"] = signature(argparse.Namespace(**settings))
     payload["controller"] = coverage(rows)
     statuses = [row["report"].get("field", {}) for row in rows]
