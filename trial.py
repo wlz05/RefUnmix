@@ -20,6 +20,18 @@ def variants(suite, consistency="ddpm", base=None):
     if suite == "alignment":
         raw = {"method": "raw", "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False}
         return {"aligned": {**shared, **raw, "fieldgeometry": "coupled"}, "scalar": {**shared, **raw, "fieldgeometry": "scalar"}, "controlled": {**shared, "fieldgeometry": "coupled", "method": "path"}, "matched": {**shared, "fieldgeometry": "scalar", "method": "path"}}
+    if suite == "temporal":
+        raw = {"method": "raw", "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False}
+        result = {"full": shared}
+        for name, weight in (("first", 0.), ("early", .25), ("mean", .5), ("late", .75), ("last", 1.)):
+            blend = {**shared, "field": "blend", "fieldgeometry": "coupled", "fieldweight": weight}
+            result[name + "raw"] = {**blend, **raw}
+            result[name + "full"] = blend
+        ect = {**shared, "field": "ect", "fieldgeometry": "coupled", "start": .75, "delta": 0., "fieldshrink": .7}
+        localizationtime = getattr(base, "localizationtime", None) if base is not None else None
+        localizationtime = getattr(base, "start", .9) if localizationtime is None else localizationtime
+        result.update({"ectraw": {**ect, **raw, "localizationtime": None}, "ectfull": {**ect, "localizationtime": localizationtime}, "ectdirect": {**ect, **raw, "cleanup": False, "localizationtime": None}, "chorddirect": {**shared, **raw, "field": "chord", "fieldgeometry": "coupled", "cleanup": False}})
+        return result
     if suite == "fields":
         result = {}
         for field in ("pullback", "chord", "instant", "average"):
@@ -62,6 +74,8 @@ def variants(suite, consistency="ddpm", base=None):
 
 def design(args, controls):
     # Verify the full arm before loading checkpoints.
+    if args.suite == "temporal" and args.localization != "baseline":
+        raise ValueError("Temporal trials require the shared baseline localization protocol.")
     validate(args)
     label = args.field + "full" if args.suite == "fields" else "controlled" if args.suite == "alignment" and args.fieldgeometry == "coupled" else "matched" if args.suite == "alignment" else "full"
     if label not in controls:
@@ -117,7 +131,7 @@ def frozen(args, chosen):
 def main():
     parser = datasetargs(common(argparse.ArgumentParser(description="Run frozen native reference and prior ablations.")))
     parser.set_defaults(split="val", output="./trials")
-    parser.add_argument("--suite", type=str.casefold, choices=("alignment", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
+    parser.add_argument("--suite", type=str.casefold, choices=("alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
     parser.add_argument("--recipe", default=None)
     parser.add_argument("--dry", action="store_true", help="Print effective variants without loading data or checkpoints.")
     args = parser.parse_args()

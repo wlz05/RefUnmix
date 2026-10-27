@@ -1,6 +1,6 @@
 # RefUnmix: Endpoint-Aligned Fields for Protected Image Editing
 
-**RefUnmix** recovers target-condition changes suppressed by reference calibration. It measures the frozen generator's response, calibrates the input field, and compensates protected-content damage when releasing the recovered condition response.
+**RefUnmix** coordinates field and conditional-reference responses under a protected-output budget. It pairs reference motion with a field correction, compensates their protected-content response, and adopts the target change that remains.
 
 RefUnmix uses one-step or few-step native backbones with finite-query control. Reports include all denoiser sample evaluations, forward calls, VAE decodes, latency, and peak memory.
 
@@ -10,11 +10,11 @@ RefUnmix uses one-step or few-step native backbones with finite-query control. R
 
 ### Core Insight
 
-A conditional prediction proposes a displacement. Native generation determines how that displacement reaches the output. In the local response model, scalar adjustment follows one output line, leaving off-line request errors that require changing the input direction.
+A single editing channel changes target content and protected content together. Two channels can produce opposing protected responses while retaining useful target change. **RefUnmix measures and uses this compensation to edit within a fixed protection budget.**
 
-Reference calibration then couples preservation with editing: subtracting the target zero-field endpoint removes source reconstruction drift together with the target-condition response. Restoring that response also restores its side effects. **RefUnmix pairs reference motion with a field correction that cancels the protected response while retaining useful target change.** The retained response determines the common adoption step.
+The field and a matched source/target reference path provide the two interventions. Their decoded responses determine the paired correction and its common adoption step. Native endpoint calibration chooses the initial field within the supplied temporal-contrast family.
 
-[ChordEdit](https://arxiv.org/abs/2602.19083) smooths conditional transport. [PreciseEdit](https://arxiv.org/abs/2610.23535) regulates its spatial and directional release. [ECT](https://arxiv.org/abs/2610.30827) analytically corrects the magnitude along a single edit axis from one VP observation. RefUnmix queries native intervention responses to calibrate direction and recover the reference's condition contribution under protected-output constraints.
+[ChordEdit](https://arxiv.org/abs/2602.19083) combines two temporal residuals before optional refinement. [ECT](https://arxiv.org/abs/2610.30827) analytically scales one VP conditional difference. [PreciseEdit](https://arxiv.org/abs/2610.23535) regulates directional and spatial release. RefUnmix fits joint output responses and generates compensated field-reference proposals. The temporal ablation compares initialization rules; the release ablation holds the candidate family fixed and compares query strategies.
 
 ### The Complete Method Chain
 
@@ -75,6 +75,8 @@ F_0&=Q_F(c_0+\delta_F^\star).
 $$
 
 The full response Gram matrix preserves interactions between the conditional directions. The regularizer and correction radius control inverse amplification. The native output $Y_{\mathrm{base}}=V(H(F_0,C_{\mathrm{tgt}}))$ defines the per-field control reference.
+
+$F_0$ remains in the span of the supplied temporal contrasts. With two independent contrasts it can also be written as $\beta_1d_1+\beta_2d_2$. Response measurements determine these coefficients. `field.temporal` records the signed weights, nonnegative-mixture fit, and input-span error; the temporal suite compares this rule with frozen mixture weights.
 
 The measured response also separates strength from direction. Let $\widetilde R_F$ be its resolved SVD, $P_F$ its column-space projector, $v_F=\gamma_F\bar d$, and $w_F=\widetilde R_Fc_0$. For nonzero $v_F$, compare
 
@@ -142,7 +144,9 @@ $$
 
 Choose $\omega$ from the control box, trust region, semantic floors, and the native damage budget. The objective maximizes the least normalized editing-head gain with step regularization. When a release proposal is unavailable, the controller uses its joint QCQP, geometry repair, or measured fallback within the same budget.
 
-**Why compensation can preserve editing capacity.** In a local linear example with one field coordinate, let $A_f=2$, $a_\eta=1$, $C_f=1$, and $c_\eta=2$. The undamped correction is $q=-1/2$. The joint motion has zero incremental protected response, $2q+1=0$, while retaining semantic response $q+2=3/2$. This is the quantity the controller seeks: a reference change whose side effect can be counteracted without cancelling its useful target response. Finite steps are checked on the generated image.
+**Why nonzero protected response can help.** Protection is measured against the source image. For $A_f=(2,0)^\top$, $a_\eta=(1,1)^\top$, $r=(0,-0.1)^\top$, $C_f=1$, and $c_\eta=2$, the correction $q=-1/2$ leaves $e=(0,1)^\top$ and $k=3/2$. Its damage change is $-0.2\omega+\omega^2$, so $0<\omega\le0.2$ respects the current budget. This permits gain 0.3, versus 0.2 from reference motion alone. The full protection matrix is invertible, so strict zero-response projection would allow no motion. Actual outputs verify each finite step.
+
+Solver logs separate `damagecross`, `damagequadratic`, and `repaircredit`. Negative cross response provides repair credit against the current residual; it can offset the positive quadratic cost. `verification` compares this model prediction with the observed damage and target changes. Regional Jacobian and nullspace methods, including [LOCO Edit](https://arxiv.org/html/2409.02374v3), provide related geometric foundations.
 
 **5. Close the loop on actual outputs.** Every visited candidate is decoded and scored under frozen control views. Completed candidates must satisfy the native protection budget and all semantic floors. Rejected outputs still inform response fitting. Initialization, field probes, reference queries, fallback, and enabled priors share the model allowance. Among the actual feasible outputs and $Y_{\mathrm{base}}$, select the highest attained minimum editing gain, then the lowest bounded preservation cost within that attainment band. Postselection PIE metrics and independent task labels score the frozen result.
 
@@ -150,13 +154,11 @@ Choose $\omega$ from the control box, trust region, semantic floors, and the nat
 
 | Method claim | Matched comparison |
 |--------------|--------------------|
-| Endpoint transmission changes the required field direction | Four-field raw outputs and scalar norm-matched alignment |
-| The reference supplies a controllable condition response | Unfiltered diagnosis and same-dimensional reference controls |
-| Protected-output response determines a useful joint intervention | Release and geometry with the same field, allowance, and output selection |
-| Queries improve the editing-preservation trade-off | Search, budget, and independent postselection metrics |
-| Final selection retains generated editing gains | Attainment, goals, and same-pool diagnostics |
+| Response-calibrated initialization selects useful coefficients | Temporal mixtures, direct ECT, and scalar norm-matched alignment |
+| Joint responses permit useful compensation or residual repair | Fixed-reference, release, and geometry controls in the same candidate family |
+| The query policy improves final task quality per unit cost | Joint QCQP, polling, random search, and independent equal-budget evaluation |
 
-The base field can run independently. The same finite-query controller can operate on the instantaneous, average, Chord, or pullback field. These runs separate field construction from the value of subsequent control.
+The base field can run independently. The same finite-query controller can operate on instantaneous, average, blended, Chord, ECT, or pullback fields. These runs separate initialization from subsequent control.
 
 ---
 
@@ -303,7 +305,10 @@ These commands use `--prior off`. Optional consistency priors consume additional
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--field` | `pullback` | Field: pullback, chord, instant, or average |
+| `--field` | `pullback` | Field: pullback, chord, instant, average, blend, ect, or zero |
+| `--fieldweight` | `0.5` | Second-time weight for blend, in [0, 1] |
+| `--fieldshrink` | `0.7` | ECT shrinkage, in [0, 1]; requires epsilon VP and delta zero |
+| `--localizationtime` | start time | Shared protection probe time for native modes with baseline localization |
 | `--fieldgeometry` | `coupled` | Coupled response fit or scalar norm-matched ablation |
 | `--method` | `path` | Primary modes: path, raw, fixed |
 | `--start`, `--delta` | `0.90`, `0.15` | Contrast times are start and start minus delta |
@@ -451,6 +456,7 @@ Main and variant summaries save `controlsignature`; suite summaries save the com
 | `fields` | Four fields with raw, fixed-reference, and full control | 64 |
 | `null` | Explicit zero-field continuation, centering, and condition recovery | 64 |
 | `alignment` | Coupled and scalar norm-matched field construction | 64 |
+| `temporal` | Fixed temporal mixtures and ECT direct/continued/controlled arms | 64 |
 | `core` | Guarded field and reference coordinate controls | 64 |
 | `release` | Main reference-field compensation versus joint QCQP | 64 |
 | `geometry` | Output, latent, and reference-only compensation | 64 |
@@ -503,6 +509,21 @@ Coupled and scalar norm-matched field construction. Named outputs: `aligned`, `s
 python -B RefUnmix/trial.py --dataset data --mapping mapping_file.json --images annotation_images --manifest outputs/split.json --split val --suite alignment --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/alignmentval
 python -B RefUnmix/trial.py --dataset data --mapping mapping_file.json --images annotation_images --manifest outputs/split.json --split test --suite alignment --recipe outputs/alignmentval/recipe.json --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/alignmenttest
 ```
+
+#### Temporal
+
+This VP-only suite compares five fixed temporal mixtures with response-calibrated initialization and the ECT transport in Equation 22. Named mixture outputs are `firstraw/full`, `earlyraw/full`, `meanraw/full`, `lateraw/full`, and `lastraw/full`; their second-time weights are 0, 0.25, 0.5, 0.75, and 1. Select one weight on validation data or report the complete frozen curve. Each arm is one editor configuration; the suite does not select a different winner for each test request.
+
+`ectdirect` applies ECT transport without continuation or reference control at time 0.75 and shrinkage 0.7. `ectraw` passes that field through the common native continuation; `ectfull` adds RefUnmix control. `chorddirect` exports the internal Chord field without refinement. These labels separate direct transport from transplanted controls; external headline comparisons use the published complete pipelines and aligned preprocessing.
+
+All arms inherit the supplied main budget, seeds, and shared protocol; `full` is the unchanged main configuration. Mixtures use the shared two-time contrast pool, including its localization contrast. Report actual conditioned samples and complete latency for every arm.
+
+Controlled arms freeze the same protection-probe time. `ectfull` uses that time even though its editing field is measured at 0.75, and pays the extra probe when needed. Direct ECT keeps its single temporal support and does not prepare a control head.
+
+~~~bash
+python -B RefUnmix/trial.py --dataset data --mapping mapping_file.json --images annotation_images --manifest outputs/split.json --split val --suite temporal --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/temporalval
+python -B RefUnmix/trial.py --dataset data --mapping mapping_file.json --images annotation_images --manifest outputs/split.json --split test --suite temporal --recipe outputs/temporalval/recipe.json --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/temporaltest
+~~~
 
 #### Core
 

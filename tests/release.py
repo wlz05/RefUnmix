@@ -75,6 +75,24 @@ class ReleaseTests(unittest.TestCase):
         result = self.proposed(model)
         self.assertAlmostEqual(result["solver"]["amplitude"], .2)
         self.assertLessEqual(result["solver"]["predicteddamage"], .01 + 1e-12)
+        self.assertEqual(np.linalg.matrix_rank(model.response), len(model.active))
+        self.assertGreater(result["solver"]["protectednorm"], 0.)
+        self.assertLess(result["solver"]["damagecross"], 0.)
+        self.assertAlmostEqual(result["solver"]["repaircredit"], result["solver"]["damagequadratic"])
+        self.assertAlmostEqual(result["solver"]["predicteddamage"], model.residual @ model.residual + result["solver"]["damagecross"] + result["solver"]["damagequadratic"])
+
+    def testrepaircapacity(self):
+        model = self.model(response=((2., 1.), (0., 1.)), semantic=((1., 2.),), residual=(0., -.1))
+        joint = self.proposed(model)
+        reference = self.model(response=((1.,), (1.,)), semantic=((2.,),), residual=(0., -.1), active=(2,))
+        alone = self.proposed(reference)
+        self.assertAlmostEqual(alone["solver"]["gain"], .2)
+        self.assertGreater(joint["solver"]["gain"], .29)
+        self.assertGreater(joint["solver"]["gain"], alone["solver"]["gain"])
+        self.assertGreater(joint["solver"]["repaircredit"], 0.)
+        self.assertGreater(joint["solver"]["protectednorm"], 0.)
+        self.assertLessEqual(joint["solver"]["predicteddamage"], .01 + 1e-12)
+        self.assertLess(np.linalg.norm(np.eye(2) - np.linalg.pinv(model.response) @ model.response), 1e-12)
 
     def testsemanticfloor(self):
         model = self.model(semantic=((0., 1.), (0., -1.)), scores=(0., 0.))

@@ -30,6 +30,7 @@ def values(row):
     result.update({"field:" + key: field.get(key) for key in ("rank", "actualfitmean", "relativefit", "responsecosine", "modelgapmean", "relativegap")})
     result.update({"field:input" + key: value for key, value in field.get("alignment", {}).items() if key != "scope"})
     result.update({"field:response" + key: field.get("capacity", {}).get(key) for key in ("rank", "lineerror", "spanerror", "directionroom", "linecosine")})
+    result.update({"field:temporal" + key: field.get("temporal", {}).get(key) for key in ("rank", "spanerror", "coneerror", "strength", "weight")})
     for key in ("gain", "damagechange", "evaluations"):
         result["selection:" + key] = report.get(key)
     for key in ("interactionenergy", "interactionratio", "damageinteraction", "damageoverlap", "damagenonlinear"):
@@ -77,7 +78,7 @@ def values(row):
         for key in ("predictedgain", "actualgain", "predicteddamagechange", "actualdamagechange"):
             measured = [row["verification"][key] for row in released if isinstance(row.get("verification", {}).get(key), (int, float)) and math.isfinite(row["verification"][key])]
             result["release:verified" + key] = float(np.mean(measured)) if measured else None
-        for key in ("protectednorm", "uncompensatednorm"):
+        for key in ("protectednorm", "uncompensatednorm", "damagecross", "damagequadratic", "repaircredit"):
             measured = [row["solver"][key] for row in released if key in row.get("solver", {})]
             result["release:" + key] = float(np.mean(measured)) if measured else None
         for geometry in ("output", "latent", "attenuate"):

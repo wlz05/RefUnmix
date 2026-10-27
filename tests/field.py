@@ -3,12 +3,13 @@
 
 import argparse
 import json
+import math
 from types import SimpleNamespace
 import unittest
 import numpy as np
 import torch
 from audit import values
-from engine.field import build, capacity, options, orthogonal, solve
+from engine.field import build, capacity, compatible, options, orthogonal, solve, temporal
 from engine.limit import Budget
 from engine.path import Path
 from run import common, validate
@@ -503,6 +504,152 @@ class CapacityTests(unittest.TestCase):
         self.assertEqual((first.samples, first.calls), (second.samples, second.calls))
         measured = values({"report": {"field": coupled.report}})
         self.assertEqual(measured["field:responsedirectionroom"], coupled.report["capacity"]["directionroom"])
+
+class TransportTests(unittest.TestCase):
+    def testblend(self):
+        for weight in (0., .25, .5, .75, 1.):
+            session = Session()
+            result = build(session, Native(session), "blend", weight=weight)
+            expected = torch.tensor([2 * (1 - weight), 2 * weight, 0., 0.]).reshape_as(session.anchor)
+            self.assertTrue(torch.equal(result.value, expected))
+            self.assertEqual((session.samples, result.report["probes"]), (4, 0))
+
+    def testmean(self):
+        session = Session()
+        mean = build(session, Native(session), "average")
+        blend = build(session, Native(session), "blend", weight=.5)
+        self.assertTrue(torch.equal(mean.value, blend.value))
+
+    def testect(self):
+        from PIL import Image
+        from session import editor
+        session = editor().prepare(Image.new("RGB", (16, 16)), "source", "target long")
+        result = build(session, None, "ect", start=.75, delta=0)
+        variance = float(session.editor.alphas[session.editor.index(.75)])
+        sigma = math.sqrt(1 - variance)
+        expected = math.atan2(sigma, math.sqrt(variance)) / sigma - .7
+        self.assertAlmostEqual(result.report["gain"], expected)
+        contrast = session.difference(session.editor.index(.75))
+        self.assertTrue(torch.allclose(result.value, (expected * contrast.double()).float()))
+        self.assertEqual((session.samples, session.calls), (2, 1))
+        self.assertEqual(result.report["times"], [.75])
+
+    def testectlimit(self):
+        from PIL import Image
+        from session import editor
+        session = editor().prepare(Image.new("RGB", (16, 16)), "source", "target long")
+        session.editor.alphas[session.editor.index(.75)] = 1.
+        result = build(session, None, "ect", start=.75, delta=0)
+        self.assertAlmostEqual(result.report["gain"], .3)
+        self.assertFalse(torch.any(result.value != 0).item())
+
+    def testectparameterization(self):
+        from PIL import Image
+        from session import editor
+        for kind in ("sample", "v_prediction"):
+            session = editor(kind).prepare(Image.new("RGB", (16, 16)), "source", "target long")
+            with self.assertRaisesRegex(ValueError, "epsilon"):
+                build(session, None, "ect", delta=0)
+            self.assertEqual(session.samples, 0)
+        with self.assertRaisesRegex(ValueError, "VP"):
+            compatible(SimpleNamespace(metadata={"family": "flux"}, kind="epsilon"), "ect")
+
+    def testectvalidation(self):
+        for flags in (("--field", "ect"), ("--field", "ect", "--delta", "0", "--backbone", "flux"), ("--localizationtime", "nan"), ("--localizationtime", "0"), ("--localizationtime", ".9", "--localization", "attention")):
+            args = common(argparse.ArgumentParser()).parse_args(["--clip", "clip", *flags])
+            with self.assertRaises(ValueError):
+                validate(args)
+
+    def testectdirect(self):
+        from PIL import Image
+        from run import run
+        from session import editor
+        args = common(argparse.ArgumentParser()).parse_args(["--method", "raw", "--field", "ect", "--start", ".75", "--delta", "0", "--no-cleanup"])
+        _, report, _ = run(editor(), None, Image.new("RGB", (16, 16)), "source", "target long", args)
+        self.assertEqual((report["field"]["actual"], report["stats"]["samples"], report["stats"]["calls"]), ("ect", 2, 1))
+
+    def testlocalization(self):
+        from PIL import Image
+        from run import run
+        from session import editor
+        parser = common(argparse.ArgumentParser())
+        mean = parser.parse_args(["--method", "raw", "--field", "average"])
+        ect = parser.parse_args(["--method", "raw", "--field", "ect", "--start", ".75", "--delta", "0", "--localizationtime", ".9"])
+        image = Image.new("RGB", (16, 16))
+        _, first, _ = run(editor(), None, image, "source", "target long", mean)
+        _, second, session = run(editor(), None, image, "source", "target long", ect)
+        self.assertEqual(first["protectionsha256"], second["protectionsha256"])
+        self.assertEqual(second["localization"]["time"], .9)
+        self.assertTrue({session.editor.index(.9), session.editor.index(.75)} <= session.cache.keys())
+        self.assertEqual(second["stats"]["samples"], 5)
+
+    def testtemporalweights(self):
+        report = temporal(np.eye(2), [1., 3.])
+        np.testing.assert_allclose(report["coefficients"], [1., 3.])
+        self.assertTrue(report["nonnegative"])
+        self.assertEqual(report["strength"], 4.)
+        self.assertEqual(report["weight"], .75)
+        self.assertAlmostEqual(report["spanerror"], 0.)
+
+    def testtemporalsigned(self):
+        report = temporal(np.eye(2), [1., -1.])
+        self.assertFalse(report["nonnegative"])
+        self.assertAlmostEqual(report["spanerror"], 0.)
+        self.assertAlmostEqual(report["coneerror"], .5)
+
+    def testtemporaldependent(self):
+        report = temporal([[1., -1.], [0., 0.]], [1., 0.])
+        self.assertTrue(report["nonnegative"])
+        np.testing.assert_allclose(report["nonnegativeweights"], [1., 0.])
+        self.assertEqual(report["rank"], 1)
+
+    def testtemporalincomplete(self):
+        report = temporal([[1.], [0.]], [1., 1.])
+        self.assertAlmostEqual(report["spanerror"], .5)
+        self.assertFalse(report["nonnegative"])
+        self.assertIsNone(report["weight"])
+
+    def testtemporalzero(self):
+        report = temporal(np.eye(2), np.zeros(2))
+        self.assertEqual(report["status"], "zero field")
+        self.assertIsNone(report["nonnegative"])
+        self.assertIsNone(report["spanerror"])
+        self.assertIsNone(report["coneerror"])
+
+    def testtemporalunits(self):
+        for scale in (1e-250, 1e250):
+            report = temporal(scale * np.eye(2), scale * np.array([1., 3.]))
+            np.testing.assert_allclose(report["coefficients"], [1., 3.])
+            self.assertEqual(report["weight"], .75)
+
+    def testtemporalinvalid(self):
+        for matrix, value in (([], []), (np.eye(3), np.ones(3)), (np.eye(2), [1.]), ([[float("nan")]], [1.])):
+            with self.assertRaises(ValueError):
+                temporal(matrix, value)
+        for tolerance in (0., 1., True, float("nan")):
+            with self.assertRaises(ValueError):
+                temporal(np.eye(2), np.ones(2), tolerance)
+
+    def testtemporalsuite(self):
+        from trial import design
+        args = common(argparse.ArgumentParser()).parse_args(["--clip", "clip"])
+        args.suite = "temporal"
+        controls = variants("temporal", base=args)
+        plan = design(args, controls)
+        self.assertEqual(len(controls), 15)
+        self.assertFalse(plan["variants"]["full"]["changes"])
+        self.assertFalse(controls["ectdirect"]["cleanup"])
+        self.assertIsNone(controls["ectdirect"]["localizationtime"])
+        self.assertEqual(controls["ectfull"]["localizationtime"], args.start)
+        self.assertEqual((controls["ectfull"]["method"], controls["ectraw"]["method"]), ("path", "raw"))
+
+    def testtemporalreport(self):
+        session = Session()
+        report = build(session, Native(session)).report
+        self.assertLess(report["temporal"]["spanerror"], 1e-12)
+        self.assertTrue(report["temporal"]["nonnegative"])
+        self.assertIn("field:temporalweight", values({"report": {"field": report}}))
+        json.dumps(report, allow_nan=False)
 
 if __name__ == "__main__":
     unittest.main()

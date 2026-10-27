@@ -39,7 +39,7 @@ def main():
     zero = torch.zeros_like(session.anchor)
     if args.withfield and not getattr(native, "fields", True):
         raise ValueError("This native generator lacks a legitimate field adapter.")
-    constructed = build(session, native, args.field, args.start, args.delta, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry) if args.withfield else None
+    constructed = build(session, native, args.field, args.start, args.delta, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry, args.fieldweight, args.fieldshrink) if args.withfield else None
     limit.phase = "diagnostic"
     endpoints = {"sourcezero": native.endpoint(zero, 1.), "targetzero": constructed.neutral if constructed is not None and constructed.neutral is not None else native.endpoint(zero)}
     field = constructed.value if constructed is not None else None

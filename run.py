@@ -45,7 +45,10 @@ def common(parser):
     parser.add_argument("--noise", type=positive, default=1)
     parser.add_argument("--start", type=float, default=.90)
     parser.add_argument("--delta", type=float, default=.15)
-    parser.add_argument("--field", type=str.casefold, choices=("pullback", "chord", "instant", "average", "zero"), default="pullback")
+    parser.add_argument("--field", type=str.casefold, choices=("pullback", "chord", "instant", "average", "blend", "ect", "zero"), default="pullback")
+    parser.add_argument("--fieldweight", type=float, default=.5)
+    parser.add_argument("--fieldshrink", type=float, default=.7)
+    parser.add_argument("--localizationtime", type=float, default=None)
     parser.add_argument("--fieldridge", type=float, default=.05)
     parser.add_argument("--fieldprobe", type=float, default=.25)
     parser.add_argument("--fieldradius", type=float, default=1.)
@@ -272,7 +275,14 @@ def saveartifacts(session, root):
 
 def validate(args):
     from engine.field import options
-    options(args.field, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry)
+    from engine.session import number
+    options(args.field, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry, args.fieldweight, args.fieldshrink)
+    if args.field == "ect" and (args.backbone != "vp" or args.delta != 0):
+        raise ValueError("ECT transport requires --backbone vp and --delta 0.")
+    if args.localizationtime is not None:
+        number(args.localizationtime, "Localization time", 0, 1)
+        if args.localizationtime == 0 or args.localization != "baseline" or args.method not in {"path", "raw", "fixed"}:
+            raise ValueError("A separate localization time requires baseline localization in (0, 1].")
     if args.field != "chord" and args.method not in {"path", "raw", "fixed"}:
         raise ValueError("Historical methods require --field chord; current fields use path/raw/fixed modes.")
     if args.method == "raw" and (args.prior != "off" or args.heldout or args.control):
@@ -358,6 +368,8 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
     from engine.response import select
     from engine.locality import locate as region, partition
     config = validate(args)
+    from engine.field import compatible
+    compatible(editor, args.field)
     seed(args.seed, getattr(args, "deterministic", False))
     initialstats = judge.stats() if judge is not None else {}
     from engine.limit import Budget, Exhausted
@@ -387,8 +399,9 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
         else:
             native = create(session, args.poststeps, args.guidance, args.cfg, args.referencepath)
         try:
-            localizationbase = session.difference(session.editor.index(args.start))
-            constructed = build(session, native, args.field, args.start, args.delta, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry)
+            localizationtime = args.start if args.localizationtime is None else args.localizationtime
+            localizationbase = session.difference(session.editor.index(localizationtime))
+            constructed = build(session, native, args.field, args.start, args.delta, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry, args.fieldweight, args.fieldshrink)
             base, neutral = constructed.value, constructed.neutral
             metadata["field"] = constructed.report
             cached = neutral is not None and (session.scale == 0 or not base.ne(0).any().item())
@@ -404,7 +417,8 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
         from engine.prior import Prior
         attention = session.attentions.get(session.editor.index(args.start)) if args.localization in {"attention", "hybrid"} else None
         editmask, localizationreport = region(localizationbase, {"base": localizationbase}, session.mask, attention, localization(args))
-        localizationreport["fieldsource"] = "Shared instantaneous contrast at the declared start time."
+        localizationreport["fieldsource"] = "Shared instantaneous contrast at the declared localization time."
+        localizationreport["time"] = args.start if args.localizationtime is None else args.localizationtime
         scoringmask = session.area if session.area is not None else editmask
         metadata["fieldsha256"] = hashlib.sha256(base.detach().float().cpu().contiguous().numpy().tobytes()).hexdigest()
         metadata["fieldnorm"] = float(base.double().norm())

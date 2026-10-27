@@ -55,7 +55,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(validate(args), Config())
 
     def testmainidentity(self):
-        suites = ("null", "core", "reference", "prior", "search", "guidance", "budget", "candidates", "mechanism", "cost", "release", "geometry", "solver", "attainment", "leverage", "frontier", "diagnosis", "goals")
+        suites = ("temporal", "null", "core", "reference", "prior", "search", "guidance", "budget", "candidates", "mechanism", "cost", "release", "geometry", "solver", "attainment", "leverage", "frontier", "diagnosis", "goals")
         reference = variants("core")["full"]
         for suite in suites:
             self.assertEqual(variants(suite)["full"], reference)

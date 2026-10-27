@@ -257,6 +257,7 @@ def execute(args, resources=None):
         measured = {key: field.get(key) for key in ("rank", "actualfitmean", "relativefit", "responsecosine", "modelgapmean", "relativegap")}
         measured.update({"input" + key: value for key, value in field.get("alignment", {}).items() if key != "scope"})
         measured.update({"response" + key: field.get("capacity", {}).get(key) for key in ("rank", "lineerror", "spanerror", "directionroom", "linecosine")})
+        measured.update({"temporal" + key: field.get("temporal", {}).get(key) for key in ("rank", "spanerror", "coneerror", "strength", "weight")})
         measurements.append({"key": row["key"], "metrics": measured})
     payload["fields"]["diagnostics"] = summary(measurements)
     writejson(output / "summary.json", payload)

@@ -8,7 +8,7 @@ import torch
 from engine.limit import Exhausted
 from engine.session import number, tensor
 
-KINDS = ("pullback", "chord", "instant", "average", "zero")
+KINDS = ("pullback", "chord", "instant", "average", "blend", "ect", "zero")
 
 def norm(value):
     scale = float(value.abs().max())
@@ -70,17 +70,56 @@ class Field:
         self.report.update(measure(endpoint.double() - neutral.double(), target, self.prediction))
         self.report["observed"] = "Native field endpoint before reference control."
 
-def options(kind, ridge, probe, radius, tolerance, geometry="coupled"):
+def options(kind, ridge, probe, radius, tolerance, geometry="coupled", weight=.5, shrink=.7):
     if kind not in KINDS:
         raise ValueError("Unknown field construction.")
     for value, label in ((ridge, "Field ridge"), (probe, "Field probe"), (tolerance, "Field tolerance")):
         if number(value, label, 0) <= 0:
             raise ValueError(label + " must be positive.")
     number(radius, "Field radius", 0)
+    number(weight, "Temporal mixture weight", 0, 1)
+    number(shrink, "ECT shrinkage", 0, 1)
     if tolerance >= 1:
         raise ValueError("Field tolerance must be smaller than one.")
     if geometry not in {"coupled", "scalar"} or geometry == "scalar" and kind != "pullback":
         raise ValueError("Norm-matched geometry requires a pullback field.")
+
+def compatible(editor, kind):
+    # Keep the ECT transport on its declared VP parameterization.
+    if kind == "ect" and (getattr(editor, "metadata", {}).get("family") != "vp" or getattr(editor, "kind", None) != "epsilon"):
+        raise ValueError("ECT transport requires an epsilon-prediction VP backbone.")
+
+def temporal(matrix, value, tolerance=1e-6):
+    # Test whether a field is another temporal weighting.
+    matrix, value = (np.asarray(item, dtype=float) for item in (matrix, value))
+    if matrix.ndim != 2 or matrix.shape[1] not in (1, 2) or not matrix.shape[0] or value.shape != (matrix.shape[0],) or any(not np.isfinite(item).all() for item in (matrix, value)):
+        raise ValueError("Temporal decomposition requires one or two finite contrast columns.")
+    if not 0 < number(tolerance, "Temporal rank tolerance") < 1:
+        raise ValueError("Temporal rank tolerance must be between zero and one.")
+    nonzero = bool(np.any(value != 0))
+    scale = max(float(np.abs(matrix).max()), float(np.abs(value).max()))
+    matrix, value = (item / scale if scale else item for item in (matrix, value))
+    coefficients, _, rank, _ = np.linalg.lstsq(matrix, value, rcond=None)
+    candidates = [np.zeros(matrix.shape[1])]
+    if np.all(coefficients >= 0):
+        candidates.append(coefficients)
+    for index in range(matrix.shape[1]):
+        column = matrix[:, index]
+        square = float(column @ column)
+        candidate = np.zeros(matrix.shape[1])
+        candidate[index] = max(0., float(column @ value) / square) if square else 0.
+        candidates.append(candidate)
+    nonnegative = min(candidates, key=lambda item: math.hypot(*(matrix @ item - value)))
+    length = math.hypot(*value)
+    if length == 0 and nonzero:
+        raise ValueError("Temporal decomposition exceeds numerical range.")
+    span = (math.hypot(*(matrix @ coefficients - value)) / length) ** 2 if length else None
+    cone = (math.hypot(*(matrix @ nonnegative - value)) / length) ** 2 if length else None
+    strength = float(nonnegative.sum())
+    result = {"rank": int(rank), "coefficients": coefficients.tolist(), "nonnegativeweights": nonnegative.tolist(), "spanerror": span, "coneerror": cone, "nonnegative": cone <= tolerance ** 2 if cone is not None else None, "strength": strength, "weight": float(nonnegative[-1] / strength) if strength > 0 and len(nonnegative) == 2 else None, "status": "measured" if length else "zero field", "scope": "Input temporal-family membership, separate from output response and task completion."}
+    if any(not math.isfinite(number) for item in (coefficients, nonnegative) for number in item) or any(number is not None and not math.isfinite(number) for number in (span, cone, strength)):
+        raise ValueError("Temporal decomposition exceeds numerical range.")
+    return result
 
 def orthogonal(values, tolerance=1e-6):
     # Keep only resolved directions in clean latent units.
@@ -183,16 +222,27 @@ def solve(response, target, anchor, ridge=.05, radius=1.):
     return coefficients, report
 
 @torch.no_grad()
-def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, probe=.25, radius=1., tolerance=1e-6, geometry="coupled"):
-    options(kind, ridge, probe, radius, tolerance, geometry)
+def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, probe=.25, radius=1., tolerance=1e-6, geometry="coupled", weight=.5, shrink=.7):
+    options(kind, ridge, probe, radius, tolerance, geometry, weight, shrink)
+    compatible(session.editor, kind)
     start, delta = number(start, "Field time", 0, 1), number(delta, "Field interval", 0, 1)
     if start <= 0 or delta >= start:
         raise ValueError("Field times require zero <= delta < start <= one.")
+    if kind == "ect" and delta != 0:
+        raise ValueError("ECT transport uses one temporal support; set delta to zero.")
     if kind == "zero":
         return Field(torch.zeros_like(session.anchor, dtype=torch.float32), {"requested": kind, "actual": kind, "times": [], "status": "constructed", "probes": 0, "space": "clean latent displacement", "scope": "Explicit zero field; native target and reference conditions remain active."})
     if kind == "chord":
         return Field(tensor(session.field(start, delta)).detach().clone(), {"requested": kind, "actual": kind, "times": [start] if delta == 0 else [start, start - delta], "status": "constructed", "probes": 0})
     first = tensor(session.difference(session.editor.index(start))).detach().clone()
+    if kind == "ect":
+        variance = float(session.editor.alphas[session.editor.index(start)])
+        if not 0 < variance <= 1:
+            raise ValueError("ECT requires VP coefficients in (0, 1].")
+        alpha, sigma = math.sqrt(variance), math.sqrt(1 - variance)
+        gain = (math.atan2(sigma, alpha) / sigma if sigma else 1.) - shrink
+        value = tensor((gain * first.double()).float())
+        return Field(value, {"requested": kind, "actual": kind, "times": [start], "status": "constructed", "probes": 0, "gain": gain, "shrink": shrink, "scope": "ECT Equation 22 transport; direct editing requires raw mode and no cleanup."})
     if kind == "instant":
         return Field(first, {"requested": kind, "actual": kind, "times": [start], "status": "constructed", "probes": 0})
     second = first if delta == 0 else tensor(session.difference(session.editor.index(start - delta))).detach().clone()
@@ -201,6 +251,10 @@ def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, prob
     request = tensor((first.double() + second.double()).mul(.5).float())
     report = {"requested": kind, "actual": kind, "times": [start] if delta == 0 else [start, start - delta], "status": "constructed", "probes": 0, "space": "clean latent displacement", "request": "paired conditional contrast consensus", "usesclip": False}
     report["geometry"] = geometry
+    if kind == "blend":
+        value = tensor(((1 - weight) * first.double() + weight * second.double()).float())
+        report.update({"weight": weight, "request": "fixed temporal mixture"})
+        return Field(value, report)
     if kind == "average":
         return Field(request, report)
     if native is None or native.session is not session:
@@ -262,6 +316,8 @@ def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, prob
         report["alignment"] = {"fieldnorm": length, "normratio": length / projectionnorm, "cosine": cosine, "angle": math.degrees(math.acos(cosine)) if cosine is not None else None, "orthogonalratio": float(np.linalg.norm(perpendicular)) / projectionnorm, "singularratio": singular[-1] / singular[0] if rank > 1 else None, "scope": "Input geometry relative to the projected mean request; not semantic correctness."}
         value = torch.from_numpy((basis @ coefficients).reshape(request.shape)).to(device=request.device, dtype=torch.float32)
         tensor(value)
+        contrasts = np.stack([item.detach().double().reshape(-1).cpu().numpy() for item in ([first] if delta == 0 else [first, second])], axis=1)
+        report["temporal"] = temporal(contrasts, value.detach().double().reshape(-1).cpu().numpy(), tolerance)
         report.update({"probes": rank + 1, "calls": session.calls - before[0], "samples": session.samples - before[1], "model": diagnostics, "neutralcached": True})
         target = torch.from_numpy((session.scale * original).reshape(request.shape)).to(device=request.device, dtype=torch.float64)
         predicted = torch.from_numpy((response @ coefficients).reshape(request.shape)).to(device=request.device, dtype=torch.float64)
