@@ -384,6 +384,35 @@ class CorpusTests(unittest.TestCase):
         self.assertEqual(runner.call_count, 1)
         self.assertFalse(Path("trial/recipe.json").exists())
 
+    def testbenchmarktrials(self):
+        from engine.protocol import signature
+        from engine.reproduce import digest
+        from split import identities
+        from trial import main as trialmain
+        Path("data/images").mkdir(parents=True)
+        mapping = {}
+        for index in range(3):
+            Image.new("RGB", (16, 16), (index, 30, 40)).save(f"data/images/{index}.png")
+            mapping[str(index)] = {"image": f"{index}.png", "source": "source", "target": "target long"}
+        self.dump(mapping, "data/map.json")
+        arguments = ["trial.py", "--dataset", "data", "--mapping", "map.json", "--images", "images", "--split", "all", "--suite", "core", "--size", "16", "--clip", "clip", "--batch", "1", "--output", "trial"]
+        observed = []
+
+        def execute(current, resources):
+            chosen = items(current)
+            observed.append([item.key for item in chosen])
+            rows = [{"key": key, "inputsha256": value} for key, value in identities(chosen).items()]
+            return {"controlsignature": signature(current), "inputs": {"mapping": {"sha256": digest("data/map.json")}}, "summary": {}, "cost": {}, "controller": {}, "rows": rows}
+
+        with patch("sys.argv", arguments), patch("trial.load", return_value=(types.SimpleNamespace(metadata={"weights": "fixture"}), None)), patch("trial.execute", side_effect=execute):
+            trialmain()
+        payload = json.loads(Path("trial/summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["split"], "all")
+        self.assertEqual(len(observed), 6)
+        self.assertTrue(all(keys == ["0", "1", "2"] for keys in observed))
+        self.assertTrue(all(arm["rows"] == 3 for arm in payload["variants"].values()))
+        self.assertFalse(Path("trial/recipe.json").exists())
+
     def testofficialtag(self):
         item = Record("a", Path("raw/source.png"), Path("source.png"), "A.", "B.", "Edit.")
         with self.assertRaises(ValueError):

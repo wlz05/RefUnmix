@@ -116,6 +116,23 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "declared ablation"):
                 frozen(args, [])
 
+    def testbenchmarkplan(self):
+        stream = io.StringIO()
+        arguments = ["trial.py", "--suite", "fields", "--split", "all", "--model", "missing", "--clip", "missing", "--dry"]
+        with patch("sys.argv", arguments), patch("trial.items") as items, patch("trial.load") as load, contextlib.redirect_stdout(stream):
+            main()
+        items.assert_not_called()
+        load.assert_not_called()
+        self.assertEqual(len(json.loads(stream.getvalue())["design"]["variants"]), 12)
+
+    def testbenchmarkpartitions(self):
+        for options in (("--manifest", "split.json"), ("--recipe", "recipe.json")):
+            arguments = ["trial.py", "--split", "all", "--clip", "clip", "--dry", *options]
+            with self.subTest(options=options), patch("sys.argv", arguments), patch("trial.load") as load:
+                with self.assertRaisesRegex(ValueError, "no manifest or validation recipe"):
+                    main()
+            load.assert_not_called()
+
     def testrenderidentity(self):
         first = self.args()
         second = deepcopy(first)

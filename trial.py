@@ -148,14 +148,18 @@ def frozen(args, chosen):
     return controls
 
 def main():
-    parser = datasetargs(common(argparse.ArgumentParser(description="Run frozen native reference and prior ablations.")))
+    parser = datasetargs(common(argparse.ArgumentParser(description="Run declared benchmark or validation/test ablations.")))
     parser.set_defaults(split="val", output="./trials")
     parser.add_argument("--suite", type=str.casefold, choices=("alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
     parser.add_argument("--recipe", default=None)
     parser.add_argument("--dry", action="store_true", help="Print effective variants without loading data or checkpoints.")
     args = parser.parse_args()
-    if args.split not in {"val", "test"} or not args.manifest or args.method != "path":
-        raise ValueError("Native trials require path mode and a grouped val/test manifest.")
+    if args.method != "path" or args.split not in {"all", "val", "test"}:
+        raise ValueError("Native trials require path mode and all, val, or test records.")
+    if args.split == "all" and (args.manifest or args.recipe):
+        raise ValueError("All-record benchmark trials require no manifest or validation recipe.")
+    if args.split != "all" and not args.manifest:
+        raise ValueError("Validation/test trials require a split manifest.")
     if args.adapter:
         raise ValueError("Frozen trials require verified native weights; use external adapters separately.")
     if (args.split == "test") != bool(args.recipe):
@@ -167,7 +171,9 @@ def main():
     if args.dry:
         print(json.dumps({"schema": 1, "design": plan, "scope": "Declared controls only; no data or frozen recipe has been verified."}, indent=2, allow_nan=False))
         return
-    paths = {"mapping": locate(locate(Path("."), clean(args.dataset, "dataset")), clean(args.mapping, "mapping")), "manifest": locate(Path("."), clean(args.manifest, "manifest"))}
+    paths = {"mapping": locate(locate(Path("."), clean(args.dataset, "dataset")), clean(args.mapping, "mapping"))}
+    if args.manifest:
+        paths["manifest"] = locate(Path("."), clean(args.manifest, "manifest"))
     inputs = {key: digest(path) for key, path in paths.items()}
     chosen = items(args)
     sources = identities(chosen)
