@@ -274,10 +274,12 @@ def saveartifacts(session, root):
     return result
 
 def validate(args):
+    from engine.batch import options as batching
     from engine.field import options
     from engine.limit import Budget
     from engine.session import number
     Budget(args.maxsamples, args.maxcalls, args.seconds)
+    batching(args)
     options(args.field, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry, args.fieldweight, args.fieldshrink)
     if args.field == "ect" and (args.backbone != "vp" or args.delta != 0):
         raise ValueError("ECT transport requires --backbone vp and --delta 0.")
@@ -340,16 +342,20 @@ def load(args):
     seed(args.seed, getattr(args, "deterministic", False))
     validate(args)
     root = str(locate(Path("."), clean(args.model, "model")))
-    if args.backbone == "vp":
-        from engine.session import Editor
-        editor = Editor.load(root, args.device, args.precision, args.size)
-    else:
-        from engine.flow import Editor
-        editor = Editor.load(root, args.device, args.precision, args.size, args.backbone, args.flowguidance, args.flowconsistency)
-    judge = None
-    if args.clip and args.method not in {"raw", "fixed"}:
-        from engine.judge import ClipJudge
-        judge = ClipJudge.load(str(locate(Path("."), clean(args.clip, "clip"))), args.device or "cpu")
+    import torch
+    try:
+        if args.backbone == "vp":
+            from engine.session import Editor
+            editor = Editor.load(root, args.device, args.precision, args.size)
+        else:
+            from engine.flow import Editor
+            editor = Editor.load(root, args.device, args.precision, args.size, args.backbone, args.flowguidance, args.flowconsistency)
+        judge = None
+        if args.clip and args.method not in {"raw", "fixed"}:
+            from engine.judge import ClipJudge
+            judge = ClipJudge.load(str(locate(Path("."), clean(args.clip, "clip"))), editor.device)
+    except torch.cuda.OutOfMemoryError as error:
+        raise RuntimeError("The frozen checkpoints do not fit available CUDA memory. Free other GPU workloads or select a smaller checkpoint or a supported lower precision consistently across comparisons; batch size cannot fix resident weight memory.") from error
     return editor, judge
 
 def stopped(session, metadata, method, error, latent=None, judge=None, initial=None):
@@ -372,7 +378,8 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
     config = validate(args)
     from engine.field import compatible
     compatible(editor, args.field)
-    seed(args.seed, getattr(args, "deterministic", False))
+    if not getattr(editor, "parallel", False):
+        seed(args.seed, getattr(args, "deterministic", False))
     initialstats = judge.stats() if judge is not None else {}
     from engine.limit import Budget, Exhausted
     limit = Budget(args.maxsamples, args.maxcalls, args.seconds) if args.method in {"path", "raw", "fixed"} else None

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 import argparse
+from contextlib import nullcontext
 from copy import deepcopy
 import hashlib
 import json
@@ -28,6 +29,7 @@ def datasetargs(parser):
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--categories", nargs="+", type=str.casefold, default=None)
     parser.add_argument("--seeds", nargs="+", type=int, default=None)
+    parser.add_argument("--batch", type=int, choices=(1, 2, 3, 4), default=3)
     parser.add_argument("--output", default="./evaluation")
     return parser
 
@@ -150,7 +152,8 @@ def costs(rows):
     for key, groups in sorted(grouped.items()):
         values = [sum(group) / len(group) for group in groups.values()]
         result[key] = {"mean": float(np.mean(values)), "median": float(np.median(values)), "p95": float(np.percentile(values, 95)), "sources": len(values)}
-    return {"metrics": result, "scope": "Per-source seed averages; synchronized per-image inference excludes checkpoint loading and independent report scoring."}
+    concurrent = any(row.get("concurrent") for row in rows)
+    return {"metrics": result, "scope": "Per-source seed averages; concurrent request latency includes queue waits, while execution.throughput measures complete dataset throughput." if concurrent else "Per-source seed averages; synchronized per-image inference excludes checkpoint loading and independent report scoring."}
 
 def coverage(rows):
     # Count executed mechanisms separately from enabled switches.
@@ -180,73 +183,107 @@ def clusters(args):
     payload = readjson(locate(Path("."), clean(args.manifest, "manifest")))
     return {key: hashlib.sha256("|".join(sorted(group)).encode()).hexdigest() for group in payload.get("groups", []) for key in group}
 
-def execute(args, resources=None):
+def request(args, item, seed, resources, output, grouping, concurrent=False):
+    # Keep request state and counters separate from shared weights.
     args = deepcopy(args)
-    settings = deepcopy(vars(args))
-    chosen = items(args)
+    editor, judge, evaluation = resources
+    from engine.session import toimage
+    import torch
+    for key in ("attributes", "retain", "localtext"):
+        value = getattr(item, key) or getattr(args, key)
+        setattr(args, key, list(value) if key in {"attributes", "retain"} and value is not None else value)
+    source = read(item.image)
+    annotationmask, fittedmask = regions(item, source, args.size)
+    sourcehash, args.seed = digest(item.image), seed
+    if not concurrent:
+        sync(editor.device)
+        if str(editor.device).startswith("cuda"):
+            torch.cuda.reset_peak_memory_stats(editor.device)
+    resident = torch.cuda.memory_allocated(editor.device) / 2 ** 20 if not concurrent and str(editor.device).startswith("cuda") else None
+    started = time.perf_counter()
+    edited, report, session = run(editor, judge, source, item.source, item.target, args, annotationmask if args.oracle else None)
+    sync(edited.device)
+    elapsed = time.perf_counter() - started
+    memory = torch.cuda.max_memory_allocated(editor.device) / 2 ** 20 if not concurrent and str(editor.device).startswith("cuda") else None
+    mask = masktensor(fittedmask, session.origin)
+    values = metrics(edited, session.origin, mask)
+    values.update(paired(edited, item))
+    reportstats = evaluation.stats() if evaluation is not None else {}
+    if evaluation is not None:
+        reporting = evaluation.prepare(session.origin, item.source, item.target, mask, args.localtext)
+        values.update({"clip" + key: value for key, value in reporting(edited).items()})
+        if session.artifacts:
+            artifactevaluation = {name: reporting(pixels) for name, pixels in session.artifacts.items()}
+            report["artifactevaluation"] = artifactevaluation
+            if "mechanism" in report:
+                report["mechanism"]["reportevaluation"] = artifactevaluation
+        report["reportstats"] = {key: value - reportstats.get(key, 0) for key, value in evaluation.stats().items()}
+    name = identifier(item.key, seed)
+    toimage(edited).save(output / (name + ".png"))
+    report["artifacts"] = saveartifacts(session, output / name)
+    report["artifactsha256"] = {key: hashlib.sha256(Path(value).read_bytes()).hexdigest() for key, value in report["artifacts"].items()}
+    row = {"key": item.key, "group": grouping.get(item.key, item.group or item.relative.as_posix()), "sourcegroup": item.group, "family": item.family, "instruction": item.instruction, "sourceimage": item.image.as_posix(), "category": item.category, "benchmark": item.benchmark, "partition": item.partition, "captionorigin": item.captionorigin, "seed": seed, "seconds": elapsed, "vram": memory, "image": name + ".png", "resultsha256": hashlib.sha256((output / (name + ".png")).read_bytes()).hexdigest(), "metrics": values, "report": report}
+    row.update({"inputsha256": sourcehash, "residentvram": resident, "incrementalvram": max(0., memory - resident) if memory is not None else None, "concurrent": concurrent, "timing": "Shared-device request latency including queue waits." if concurrent else "Synchronized standalone inference latency."})
+    writejson(output / (name + ".json"), row)
+    return row
+
+def execute(args, resources=None):
+    from engine.batch import Batch, options
+    import torch
+    args = deepcopy(args)
+    width, settings = options(args), deepcopy(vars(args))
+    chosen, seeds = items(args), sorted(set(args.seeds or [args.seed]))
+    if any(type(seed) is not int or not -(2 ** 63) <= seed < 2 ** 64 for seed in seeds):
+        raise ValueError("All experiment seeds must be supported integers.")
     output = destination(args.output, "output")
     if output.exists():
         raise FileExistsError(output)
     editor, judge = load(args) if resources is None else resources[:2]
     evaluation, independent = evaluator(args, judge) if resources is None else resources[2:]
-    from PIL import Image
-    from engine.session import toimage
-    output.mkdir(parents=True)
-    rows = []
     grouping = clusters(args)
-    defaults = {key: getattr(args, key) for key in ("attributes", "retain", "localtext")}
-    seeds = sorted(set(args.seeds or [args.seed]))
     inputfiles = {"mapping": locate(locate(Path("."), clean(args.dataset, "dataset")), clean(args.mapping, "mapping"))}
     if args.manifest is not None:
         inputfiles["manifest"] = locate(Path("."), clean(args.manifest, "manifest"))
     provenance = {key: {"path": path.as_posix(), "sha256": digest(path)} for key, path in inputfiles.items()}
-    for item in chosen:
-        for key in defaults:
-            value = getattr(item, key) or defaults[key]
-            setattr(args, key, list(value) if key in {"attributes", "retain"} and value is not None else value)
-        source = read(item.image)
-        annotationmask, fittedmask = regions(item, source, args.size)
-        sourcehash = digest(item.image)
-        for seed in seeds:
-            args.seed = seed
-            sync(editor.device)
-            import torch
-            if str(editor.device).startswith("cuda"):
-                torch.cuda.reset_peak_memory_stats(editor.device)
-            resident = torch.cuda.memory_allocated(editor.device) / 2 ** 20 if str(editor.device).startswith("cuda") else None
-            started = time.perf_counter()
-            edited, report, session = run(editor, judge, source, item.source, item.target, args, annotationmask if args.oracle else None)
-            sync(edited.device)
-            elapsed = time.perf_counter() - started
-            memory = torch.cuda.max_memory_allocated(editor.device) / 2 ** 20 if str(editor.device).startswith("cuda") else None
-            mask = masktensor(fittedmask, session.origin)
-            values = metrics(edited, session.origin, mask)
-            values.update(paired(edited, item))
-            reportstats = evaluation.stats() if evaluation is not None else {}
-            if evaluation is not None:
-                reporting = evaluation.prepare(session.origin, item.source, item.target, mask, args.localtext)
-                values.update({"clip" + key: value for key, value in reporting(edited).items()})
-                if session.artifacts:
-                    artifactevaluation = {name: reporting(pixels) for name, pixels in session.artifacts.items()}
-                    report["artifactevaluation"] = artifactevaluation
-                    if "mechanism" in report:
-                        report["mechanism"]["reportevaluation"] = artifactevaluation
-                report["reportstats"] = {key: value - reportstats.get(key, 0) for key, value in evaluation.stats().items()}
-                del reporting
-            name = identifier(item.key, seed)
-            toimage(edited).save(output / (name + ".png"))
-            report["artifacts"] = saveartifacts(session, output / name)
-            report["artifactsha256"] = {key: hashlib.sha256(Path(value).read_bytes()).hexdigest() for key, value in report["artifacts"].items()}
-            row = {"key": item.key, "group": grouping.get(item.key, item.group or item.relative.as_posix()), "sourcegroup": item.group, "family": item.family, "instruction": item.instruction, "sourceimage": item.image.as_posix(), "category": item.category, "benchmark": item.benchmark, "partition": item.partition, "captionorigin": item.captionorigin, "seed": seed, "seconds": elapsed, "vram": memory, "image": name + ".png", "resultsha256": hashlib.sha256((output / (name + ".png")).read_bytes()).hexdigest(), "metrics": values, "report": report}
-            row["inputsha256"] = sourcehash
-            row["residentvram"] = resident
-            row["incrementalvram"] = max(0., memory - resident) if memory is not None else None
-            rows.append(row)
-            writejson(output / (name + ".json"), row)
-            print(json.dumps({"key": item.key, "seed": seed, "seconds": elapsed, "metrics": values}, allow_nan=False), flush=True)
-            del edited, session, mask
+    output.mkdir(parents=True)
+    rows, jobs = [], [(item, seed) for item in chosen for seed in seeds]
+    width = min(width, len(jobs))
+    resources = (editor, judge, evaluation)
+    sync(editor.device)
+    gpu = str(editor.device).startswith("cuda")
+    if gpu:
+        torch.cuda.reset_peak_memory_stats(editor.device)
+    resident = torch.cuda.memory_allocated(editor.device) / 2 ** 20 if gpu else None
+    started = time.perf_counter()
+    try:
+        with Batch(resources, width) if width > 1 else nullcontext(None) as parallel:
+            def worker(value):
+                current = parallel.replicas() if parallel is not None else resources
+                return request(args, *value, current, output, grouping, concurrent=parallel is not None)
+
+            for offset in range(0, len(jobs), width):
+                group = jobs[offset:offset + width]
+                completed = parallel.map(worker, group) if parallel is not None else [worker(group[0])]
+                rows.extend(completed)
+                for row in completed:
+                    print(json.dumps({key: row[key] for key in ("key", "seed", "seconds", "metrics")}, allow_nan=False), flush=True)
+                if getattr(editor, "metadata", {}).get("family") == "flow":
+                    for name in ("pools", "textids"):
+                        getattr(editor, name).clear()
+            dispatch = parallel.report() if parallel is not None else {"width": 1, "sharedweights": True, "denoisercalls": sum(row["report"].get("stats", {}).get("calls", 0) for row in rows)}
+    except BaseException as error:
+        failure = {"schema": 1, "error": type(error).__name__, "message": str(error), "settings": settings, "completed": sorted(path.name for path in output.glob("*.json")), "scope": "Only completed row JSON files belong to retained results; no complete summary is published."}
+        try:
+            writejson(output / "failure.json", failure)
+        except (OSError, ValueError, TypeError) as reporterror:
+            error.add_note("The failure report could not be saved: " + str(reporterror))
+        raise
+    sync(editor.device)
+    elapsed = time.perf_counter() - started
     payload = {"schema": 1, "split": args.split, "manifest": args.manifest, "oracle": args.oracle, "independentcheckpoint": independent, "controlcheckpoint": getattr(judge, "metadata", None), "reportcheckpoint": getattr(evaluation, "metadata", None), "evaluatornote": "Different CLIP weights remain shared-family diagnostics, not independent task evidence.", "metricnote": "Pixel, band, and paired errors are diagnostics, not official benchmark protocols.", "settings": settings, "seeds": seeds, "inputs": provenance, "reproducibility": snapshot(), "summary": summary(rows), "categories": {category: summary([row for row in rows if row["category"] == category]) for category in sorted({row["category"] for row in rows})}, "rows": rows}
     payload["cost"] = costs(rows)
+    peak = torch.cuda.max_memory_allocated(editor.device) / 2 ** 20 if gpu and width > 1 else max((row["vram"] for row in rows if row["vram"] is not None), default=None)
+    payload["execution"] = {**dispatch, "requested": getattr(args, "batch", 1), "requests": len(rows), "seconds": elapsed, "throughput": len(rows) / elapsed, "residentvram": resident, "peakvram": peak, "scope": "End-to-end dataset throughput includes input loading, control, independent scoring, and output writes; checkpoint loading is excluded."}
     payload["controlsignature"] = signature(argparse.Namespace(**settings))
     payload["controller"] = coverage(rows)
     statuses = [row["report"].get("field", {}) for row in rows]

@@ -649,6 +649,20 @@ class RobustnessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.recover(args, payload)
 
+    def testrecipelineendings(self):
+        args = self.args()
+        with tempfile.TemporaryDirectory() as folder:
+            root = File(folder)
+            (root / "engine").mkdir()
+            code = root / "trial.py"
+            code.write_bytes(b"value = 1\n")
+            with patch("trial.__file__", str(code)):
+                original = settings(args)["codehash"]
+                code.write_bytes(b"value = 1\r\n")
+                self.assertEqual(settings(args)["codehash"], original)
+                code.write_bytes(b"value = 2\n")
+                self.assertNotEqual(settings(args)["codehash"], original)
+
     def testfixedprior(self):
         with self.assertRaises(ValueError):
             validate(self.args("--method", "fixed", "--axes", "none", "--prior", "ddpm"))

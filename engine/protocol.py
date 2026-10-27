@@ -13,7 +13,7 @@ def defaults(args=None):
 
 def configuration(args):
     # Exclude request identity and export destinations from control identity.
-    excluded = {"image", "source", "target", "region", "polarity", "output", "report", "dataset", "mapping", "images", "manifest", "split", "limit", "categories", "seed", "seeds", "evalclip", "recipe", "suite", "dry", "port", "frozenrecipehash"}
+    excluded = {"image", "source", "target", "region", "polarity", "output", "report", "dataset", "mapping", "images", "manifest", "split", "limit", "categories", "seed", "seeds", "batch", "evalclip", "recipe", "suite", "dry", "port", "frozenrecipehash"}
     values = {key: deepcopy(value) for key, value in vars(args).items() if key not in excluded}
     values.setdefault("oracle", False)
     for key in ("model", "clip", "adapter", "constraints", "probabilities", "radiusprofile"):

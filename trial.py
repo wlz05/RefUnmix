@@ -102,7 +102,7 @@ def settings(args):
     root = Path(__file__).resolve().parent
     digest = hashlib.sha256()
     for source in sorted([*root.glob("*.py"), *root.joinpath("engine").glob("*.py")]):
-        digest.update(source.relative_to(root).as_posix().encode("utf-8") + b"\0" + source.read_bytes() + b"\0")
+        digest.update(source.relative_to(root).as_posix().encode("utf-8") + b"\0" + source.read_bytes().replace(b"\r\n", b"\n") + b"\0")
     result["codehash"] = digest.hexdigest()
     return result
 

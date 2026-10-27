@@ -21,14 +21,17 @@ def parser():
     result.add_argument("--backbone", type=str.casefold, choices=("vp", "flux", "sd3"), default="vp")
     result.add_argument("--device", type=str.casefold, default="cpu")
     result.add_argument("--precision", type=str.casefold, choices=("fp32", "fp16", "bf16"), default="fp32")
+    result.add_argument("--batch", type=int, choices=(1, 2, 3, 4), default=3)
     result.add_argument("--limit", type=int, default=None)
     result.add_argument("--report", default=None)
     return result
 
-def dependencies(model=False, clip=False):
+def dependencies(model=False, clip=False, family="vp"):
     names = {"numpy": "numpy", "Pillow": "PIL", "torch": "torch", "scipy": "scipy"}
     if model:
-        names.update({"diffusers": "diffusers", "transformers": "transformers", "safetensors": "safetensors"})
+        names.update({"diffusers": "diffusers", "transformers": "transformers", "safetensors": "safetensors", "accelerate": "accelerate"})
+        if family != "vp":
+            names.update({"sentencepiece": "sentencepiece", "protobuf": "google.protobuf"})
     elif clip:
         names.update({"transformers": "transformers", "safetensors": "safetensors"})
     result, errors = {}, []
@@ -47,16 +50,27 @@ def weights(root, family):
     path = locate(Path("."), clean(root, "model"))
     if not path.is_dir():
         raise NotADirectoryError(path)
-    names = ("unet", "scheduler", "vae", "tokenizer", "text") if family == "vp" else ("transformer", "scheduler", "vae", "tokenizer", "text_encoder", "text_encoder_2")
+    names = {"unet", "scheduler", "vae", "tokenizer", "text"} if family == "vp" else {"transformer", "scheduler", "vae", "tokenizer", "text_encoder", "text_encoder_2"}
+    if family != "vp":
+        from engine.serial import read
+        index = locate(path, Path("model_index.json"))
+        if not index.is_file():
+            raise FileNotFoundError("Flow checkpoints require model_index.json.")
+        declaration = read(index)
+        if not isinstance(declaration, dict):
+            raise ValueError("Flow checkpoint declarations must be JSON objects.")
+        for key, value in declaration.items():
+            if not key.startswith("_") and isinstance(value, list) and len(value) == 2 and value[1] is not None:
+                names.add(clean(key, "component").as_posix())
     # Check checkpoint components before loading any weights.
-    parts = {name: locate(path, Path(name)) for name in names}
+    parts = {name: locate(path, Path(name)) for name in sorted(names)}
     if family == "vp" and not parts["text"].is_dir():
         parts["text"] = locate(path, Path("text_encoder"))
     missing = [name for name, folder in parts.items() if not folder.is_dir()]
     if missing:
         raise ValueError(f"Missing model folders: {missing}")
     learned = {"unet", "transformer", "vae", "text", "text_encoder", "text_encoder_2"}
-    empty = [name for name, folder in parts.items() if name in learned and not any(file.is_file() and file.suffix.casefold() in {".bin", ".safetensors", ".pt"} for file in folder.rglob("*"))]
+    empty = [name for name, folder in parts.items() if (name in learned or name.startswith("text_encoder")) and not any(file.is_file() and file.suffix.casefold() in {".bin", ".safetensors", ".pt"} for file in folder.rglob("*"))]
     if empty:
         raise ValueError(f"Model folders contain no local weights: {empty}")
     return {"path": path.as_posix(), "family": family, "parts": {name: folder.as_posix() for name, folder in parts.items()}, "scope": "Directory and file presence only; tensor compatibility is checked by the native loader."}
@@ -67,7 +81,7 @@ def check(args):
         result["errors"].append("Python 3.11 or later is required.")
         result["ok"] = False
         return result
-    result["dependencies"], errors = dependencies(bool(args.model), bool(args.clip))
+    result["dependencies"], errors = dependencies(bool(args.model), bool(args.clip), args.backbone)
     result["errors"].extend(errors)
     if errors or sys.version_info < (3, 11):
         result["ok"] = False
@@ -78,7 +92,12 @@ def check(args):
     from engine.reproduce import digest, snapshot
     from split import select
     import torch
-    result["reproducibility"] = snapshot()
+    try:
+        result["reproducibility"] = snapshot()
+    except (RuntimeError, OSError) as error:
+        result["errors"].append("Runtime inspection failed: " + str(error))
+        result["ok"] = False
+        return result
     if Path.cwd().resolve().is_relative_to(Path(__file__).resolve().parent):
         result["warnings"].append("Run from a parent workspace; runtime artifacts are forbidden inside the code tree.")
     if args.limit is not None and args.limit < 1:
@@ -95,6 +114,9 @@ def check(args):
             with torch.cuda.device(device):
                 if not torch.cuda.is_bf16_supported():
                     raise ValueError("The selected CUDA device does not support bf16.")
+        if device.type == "cuda":
+            free, total = torch.cuda.mem_get_info(device)
+            result["hardware"] = {"device": str(device), "name": torch.cuda.get_device_name(device), "freemib": free / 2 ** 20, "totalmib": total / 2 ** 20, "batch": args.batch}
     except (ValueError, RuntimeError) as error:
         result["errors"].append(str(error))
     for key in ("model", "clip"):

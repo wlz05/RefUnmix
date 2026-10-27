@@ -398,7 +398,7 @@ class CorpusTests(unittest.TestCase):
         origin = torch.tensor([10, 20, 30], dtype=torch.float32)[None, :, None, None].expand(1, 3, 16, 16) / 255
         edited = torch.tensor([40, 50, 60], dtype=torch.float32)[None, :, None, None].expand_as(origin) / 255
         result = (edited, {"source": "Blue.", "target": "Striped."}, types.SimpleNamespace(origin=origin))
-        arguments = ["evaluate.py", *shared, "--manifest", "split.json", "--split", "VAL", "--categories", "TEXTURE", "--method", "base", "--size", "16", "--seeds", "17", "42", "--output", "evaluation"]
+        arguments = ["evaluate.py", *shared, "--manifest", "split.json", "--split", "VAL", "--categories", "TEXTURE", "--method", "base", "--batch", "1", "--size", "16", "--seeds", "17", "42", "--output", "evaluation"]
         with patch("sys.argv", arguments), patch("evaluate.load", return_value=(types.SimpleNamespace(device="cpu"), None)), patch("evaluate.run", return_value=result) as inference, contextlib.redirect_stdout(io.StringIO()):
             evaluatemain()
         payload = json.loads(Path("evaluation/summary.json").read_text())

@@ -119,13 +119,45 @@ class ReproduceTests(unittest.TestCase):
             Path("models", name, "weights.safetensors").write_bytes(b"fixture")
         self.assertEqual(weights("models", "vp")["parts"]["text"], "models/text_encoder")
 
+    def testflowcomponents(self):
+        Path("models").mkdir()
+        with self.assertRaises(FileNotFoundError):
+            weights("models", "sd3")
+        for name in ("transformer", "vae", "scheduler", "tokenizer", "text_encoder", "text_encoder_2"):
+            Path("models", name).mkdir()
+        Path("models/model_index.json").write_text(json.dumps({"tokenizer_2": ["transformers", "Tokenizer"], "text_encoder_3": ["transformers", "TextModel"]}), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "tokenizer_2"):
+            weights("models", "sd3")
+        Path("models/tokenizer_2").mkdir()
+        Path("models/text_encoder_3").mkdir()
+        for name in ("transformer", "vae", "text_encoder", "text_encoder_2"):
+            Path("models", name, "weights.safetensors").write_bytes(b"fixture")
+        with self.assertRaisesRegex(ValueError, "text_encoder_3"):
+            weights("models", "sd3")
+        Path("models/text_encoder_3/weights.safetensors").write_bytes(b"fixture")
+        self.assertIn("tokenizer_2", weights("models", "sd3")["parts"])
+
+    def testdoctorhardware(self):
+        with patch("doctor.dependencies", return_value=({}, [])), patch("engine.reproduce.snapshot", return_value={}), patch("torch.cuda.is_available", return_value=True), patch("torch.cuda.device_count", return_value=1), patch("torch.cuda.mem_get_info", return_value=(12 * 2 ** 30, 24 * 2 ** 30)), patch("torch.cuda.get_device_name", return_value="NVIDIA GeForce RTX 4090"):
+            result = check(self.args("--device", "cuda:0", "--batch", "4"))
+        self.assertTrue(result["ok"], result["errors"])
+        self.assertEqual(result["hardware"]["batch"], 4)
+        self.assertEqual(result["hardware"]["totalmib"], 24 * 1024)
+
+    def testdoctorruntime(self):
+        for failure in (RuntimeError("CUDA initialization failed"), OSError("runtime metadata unavailable")):
+            with self.subTest(error=str(failure)), patch("doctor.dependencies", return_value=({}, [])), patch("engine.reproduce.snapshot", side_effect=failure):
+                result = check(self.args())
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("Runtime inspection failed" in value for value in result["errors"]))
+
     def testdoctorcli(self):
         with patch("sys.argv", ["doctor.py", "--dataset", "pie", "--mapping", "map.json", "--images", "images", "--report", "check.json"]), contextlib.redirect_stdout(io.StringIO()):
             main()
         self.assertTrue(json.loads(Path("check.json").read_text())["ok"])
 
     def testimmutableevaluation(self):
-        args = datasetargs(common(argparse.ArgumentParser())).parse_args(["--dataset", "pie", "--mapping", "map.json", "--images", "images", "--split", "all", "--method", "base", "--size", "16", "--seed", "5", "--seeds", "9", "7", "--output", "evaluation"])
+        args = datasetargs(common(argparse.ArgumentParser())).parse_args(["--dataset", "pie", "--mapping", "map.json", "--images", "images", "--split", "all", "--method", "base", "--batch", "1", "--size", "16", "--seed", "5", "--seeds", "9", "7", "--output", "evaluation"])
         original = deepcopy(vars(args))
         image = torch.ones(1, 3, 16, 16)
 
@@ -144,7 +176,7 @@ class ReproduceTests(unittest.TestCase):
         self.assertEqual(result["rows"][0]["inputsha256"], digest("pie/images/source.png"))
 
     def testarchivereportevaluation(self):
-        args = datasetargs(common(argparse.ArgumentParser())).parse_args(["--dataset", "pie", "--mapping", "map.json", "--images", "images", "--split", "all", "--method", "base", "--size", "16", "--output", "evaluation"])
+        args = datasetargs(common(argparse.ArgumentParser())).parse_args(["--dataset", "pie", "--mapping", "map.json", "--images", "images", "--split", "all", "--method", "base", "--batch", "1", "--size", "16", "--output", "evaluation"])
         image = torch.ones(1, 3, 16, 16)
 
         class Judge:
@@ -173,7 +205,7 @@ class ReproduceTests(unittest.TestCase):
 
     def testrequestlifetime(self):
         from weakref import ref
-        args = datasetargs(common(argparse.ArgumentParser())).parse_args(["--dataset", "pie", "--mapping", "map.json", "--images", "images", "--split", "all", "--method", "raw", "--size", "16", "--seeds", "1", "2", "--output", "evaluation"])
+        args = datasetargs(common(argparse.ArgumentParser())).parse_args(["--dataset", "pie", "--mapping", "map.json", "--images", "images", "--split", "all", "--method", "raw", "--batch", "1", "--size", "16", "--seeds", "1", "2", "--output", "evaluation"])
         previous = []
 
         class Context:
