@@ -46,111 +46,111 @@ Source image and source/target captions
      Attainment-first selection -> Edited image
 ```
 
-**1. Estimate the request.** Let $z_{\mathrm{src}}=E(X)$ and let $H(F,C)$ be the clean latent endpoint after applying field $F$ and the declared native continuation under condition $C$. Source and target predictions share the anchor and noise. Their contrasts at $t$ and $t-\delta$ define a request proxy and its resolved subspace:
+**1. Estimate the request.** Let $`z_{\mathrm{src}}=E(X)`$ and let $`H(F,C)`$ be the clean latent endpoint after applying field $`F`$ and the declared native continuation under condition $`C`$. Source and target predictions share the anchor and noise. Their contrasts at $`t`$ and $`t-\delta`$ define a request proxy and its resolved subspace:
 
-$$
+```math
 d_k=\widehat z_0(z_k,t_k,C_{\mathrm{tgt}})
 -\widehat z_0(z_k,t_k,C_{\mathrm{src}}),\qquad
 \bar d=\frac{d_1+d_2}{2},\qquad
-Q_F=\operatorname{orth}[d_1,d_2],\quad c_0=Q_F^\top\bar d.
-$$
+Q_F=\mathrm{orth}[d_1,d_2],\quad c_0=Q_F^\top\bar d.
+```
 
 The default times are 0.90 and 0.75. They provide paired conditional measurements; Haar frequency coordinates enter after field construction.
 
 **2. Invert endpoint transmission.** Probe each resolved direction through the same continuation:
 
-$$
+```math
 r_k=\frac{H(\epsilon_F q_k,C_{\mathrm{tgt}})
 -H(0,C_{\mathrm{tgt}})}{\epsilon_F},\qquad
 R_F=[r_1,\ldots,r_r],\qquad r\le2.
-$$
+```
 
-With request scale $\gamma_F$, solve the bounded inverse response problem:
+With request scale $`\gamma_F`$, solve the bounded inverse response problem:
 
-$$
+```math
 \begin{aligned}
 b_F&=\gamma_F\bar d-R_Fc_0,\\
-\delta_F^\star&=\arg\min_{\|\delta\|_2\le\Delta_F}
-\left\{\|R_F\delta-b_F\|_2^2+\lambda_F\|\delta\|_2^2\right\},\\
+\delta_F^\star&=\arg\min_{\lVert \delta\rVert_2\le\Delta_F}
+\bigl(\lVert R_F\delta-b_F\rVert_2^2+\lambda_F\lVert \delta\rVert_2^2\bigr),\\
 F_0&=Q_F(c_0+\delta_F^\star).
 \end{aligned}
-$$
+```
 
-The full response Gram matrix preserves interactions between the conditional directions. The regularizer and correction radius control inverse amplification. The native output $Y_{\mathrm{base}}=V(H(F_0,C_{\mathrm{tgt}}))$ defines the per-field control reference.
+The full response Gram matrix preserves interactions between the conditional directions. The regularizer and correction radius control inverse amplification. The native output $`Y_{\mathrm{base}}=V(H(F_0,C_{\mathrm{tgt}}))`$ defines the per-field control reference.
 
-$F_0$ remains in the span of the supplied temporal contrasts. With two independent contrasts it can also be written as $\beta_1d_1+\beta_2d_2$. Response measurements determine these coefficients. `field.temporal` records the signed weights, nonnegative-mixture fit, and input-span error; the temporal suite compares this rule with frozen mixture weights.
+$`F_0`$ remains in the span of the supplied temporal contrasts. With two independent contrasts it can also be written as $`\beta_1d_1+\beta_2d_2`$. Response measurements determine these coefficients. `field.temporal` records the signed weights, nonnegative-mixture fit, and input-span error; the temporal suite compares this rule with frozen mixture weights.
 
-The measured response also separates strength from direction. Let $\widetilde R_F$ be its resolved SVD, $P_F$ its column-space projector, $v_F=\gamma_F\bar d$, and $w_F=\widetilde R_Fc_0$. For nonzero $v_F$, compare
+The measured response also separates strength from direction. Let $`\widetilde R_F`$ be its resolved SVD, $`P_F`$ its column-space projector, $`v_F=\gamma_F\bar d`$, and $`w_F=\widetilde R_Fc_0`$. For nonzero $`v_F`$, compare
 
-$$
-E_{\mathrm{line}}=\min_{\beta\in\mathbb R}\frac{\|\beta w_F-v_F\|_2^2}{\|v_F\|_2^2},\qquad
-E_{\mathrm{span}}=\min_c\frac{\|\widetilde R_Fc-v_F\|_2^2}{\|v_F\|_2^2},\qquad
+```math
+E_{\mathrm{line}}=\min_{\beta\in\mathbb R}\frac{\lVert \beta w_F-v_F\rVert_2^2}{\lVert v_F\rVert_2^2},\qquad
+E_{\mathrm{span}}=\min_c\frac{\lVert \widetilde R_Fc-v_F\rVert_2^2}{\lVert v_F\rVert_2^2},\qquad
 G_F=E_{\mathrm{line}}-E_{\mathrm{span}}\ge0.
-$$
+```
 
-$G_F$ measures the error reduction available through direction changes beyond any signed scalar adjustment. $E_{\mathrm{span}}$ measures the request component outside the resolved response space. These quantities describe linear capacity before regularization, the correction ball, and nonlinear continuation; actual endpoint fit and final task completion are recorded separately.
+$`G_F`$ measures the error reduction available through direction changes beyond any signed scalar adjustment. $`E_{\mathrm{span}}`$ measures the request component outside the resolved response space. These quantities describe linear capacity before regularization, the correction ball, and nonlinear continuation; actual endpoint fit and final task completion are recorded separately.
 
 **3. Recover the reference degree of freedom.** Query matched endpoints:
 
-$$
+```math
 h_{0,0}=H(0,C_{\mathrm{src}}),\qquad
 h_{0,1}=H(0,C_{\mathrm{tgt}}),\qquad
 h_{1,1}=H(F_0,C_{\mathrm{tgt}}).
-$$
+```
 
 The target zero-field displacement contains two measured components:
 
-$$
+```math
 h_{0,1}-z_{\mathrm{src}}
 =\underbrace{h_{0,0}-z_{\mathrm{src}}}_{b_{\mathrm{src}}}
 +\underbrace{h_{0,1}-h_{0,0}}_{\Delta_{\mathrm{cond}}}.
-$$
+```
 
-Subtracting $h_{0,1}$ also subtracts $\Delta_{\mathrm{cond}}$. A native reference path $\mathcal R(\eta)$ with $\mathcal R(0)=h_{0,1}$ and $\mathcal R(1)=h_{0,0}$ makes this condition contribution controllable:
+Subtracting $`h_{0,1}`$ also subtracts $`\Delta_{\mathrm{cond}}`$. A native reference path $`\mathcal R(\eta)`$ with $`\mathcal R(0)=h_{0,1}`$ and $`\mathcal R(1)=h_{0,0}`$ makes this condition contribution controllable:
 
-$$
+```math
 \begin{aligned}
 F(\xi)&=\alpha_L\Pi_LF_0+\alpha_H\Pi_HF_0,\qquad
 \xi=(\alpha_L,\alpha_H,\eta),\\
 \ell(\xi)&=z_{\mathrm{src}}+H(F(\xi),C_{\mathrm{tgt}})-\mathcal R(\eta),\\
 Y(\xi)&=V(\ell(\xi)).
 \end{aligned}
-$$
+```
 
 The two complementary Haar projections parameterize field corrections. Reference motion and field motion are evaluated jointly through the complete output. Embedding and multistep reference paths use their native endpoints.
 
-**4. Compensate damage before choosing adoption.** For nonempty frozen protection weights $W$, define the decoded residual $\Phi_W(Y)=\operatorname{vec}(\sqrt W\odot(Y-X))/\sqrt{\sum W}$ and damage $D_W=\|\Phi_W\|_2^2$. Paid outputs fit local protected and semantic responses:
+**4. Compensate damage before choosing adoption.** For nonempty frozen protection weights $`W`$, define the decoded residual $`\Phi_W(Y)=\mathrm{vec}(\sqrt W\odot(Y-X))/\sqrt{\sum W}`$ and damage $`D_W=\lVert \Phi_W\rVert_2^2`$. Paid outputs fit local protected and semantic responses:
 
-$$
+```math
 \Phi_W(Y(\xi_j+u))\approx r_j+A_ju,\qquad
 \widehat s(Y(\xi_j+u))\approx\widehat s_j+C_ju.
-$$
+```
 
-Partition $A_j=[A_f,a_\eta]$ and $C_j=[C_f,c_\eta]$. For one unit of reference motion, the field compensation is
+Partition $`A_j=[A_f,a_\eta]`$ and $`C_j=[C_f,c_\eta]`$. For one unit of reference motion, the field compensation is
 
-$$
+```math
 q_\rho=\arg\min_q
-\left\{\|A_fq+a_\eta\|_2^2+\rho\|q\|_{M_f}^2\right\},
+\bigl(\lVert A_fq+a_\eta\rVert_2^2+\rho\lVert q\rVert_{M_f}^2\bigr),
 \qquad
 d_\rho=\begin{bmatrix}q_\rho\\1\end{bmatrix},
 \qquad
 e_\rho=A_jd_\rho,\quad k_\rho=C_jd_\rho.
-$$
+```
 
-Here $e_\rho$ is the remaining protected response and $k_\rho$ is the retained semantic response. A single signed step $\omega$ adopts both changes. Its predicted protection cost is
+Here $`e_\rho`$ is the remaining protected response and $`k_\rho`$ is the retained semantic response. A single signed step $`\omega`$ adopts both changes. Its predicted protection cost is
 
-$$
-D_j(\omega)=\|r_j+\omega e_\rho\|_2^2
-=D_j(0)+2\omega r_j^\top e_\rho+\omega^2\|e_\rho\|_2^2.
-$$
+```math
+D_j(\omega)=\lVert r_j+\omega e_\rho\rVert_2^2
+=D_j(0)+2\omega r_j^\top e_\rho+\omega^2\lVert e_\rho\rVert_2^2.
+```
 
-Choose $\omega$ from the control box, trust region, semantic floors, and the native damage budget. The objective maximizes the least normalized editing-head gain with step regularization. When a release proposal is unavailable, the controller uses its joint QCQP, geometry repair, or measured fallback within the same budget.
+Choose $`\omega`$ from the control box, trust region, semantic floors, and the native damage budget. The objective maximizes the least normalized editing-head gain with step regularization. When a release proposal is unavailable, the controller uses its joint QCQP, geometry repair, or measured fallback within the same budget.
 
-**Why nonzero protected response can help.** Protection is measured against the source image. For $A_f=(2,0)^\top$, $a_\eta=(1,1)^\top$, $r=(0,-0.1)^\top$, $C_f=1$, and $c_\eta=2$, the correction $q=-1/2$ leaves $e=(0,1)^\top$ and $k=3/2$. Its damage change is $-0.2\omega+\omega^2$, so $0<\omega\le0.2$ respects the current budget. This permits gain 0.3, versus 0.2 from reference motion alone. The full protection matrix is invertible, so strict zero-response projection would allow no motion. Actual outputs verify each finite step.
+**Why nonzero protected response can help.** Protection is measured against the source image. For $`A_f=(2,0)^\top`$, $`a_\eta=(1,1)^\top`$, $`r=(0,-0.1)^\top`$, $`C_f=1`$, and $`c_\eta=2`$, the correction $`q=-1/2`$ leaves $`e=(0,1)^\top`$ and $`k=3/2`$. Its damage change is $`-0.2\omega+\omega^2`$, so $`0<\omega\le0.2`$ respects the current budget. This permits gain 0.3, versus 0.2 from reference motion alone. The full protection matrix is invertible, so strict zero-response projection would allow no motion. Actual outputs verify each finite step.
 
 Solver logs separate `damagecross`, `damagequadratic`, and `repaircredit`. Negative cross response provides repair credit against the current residual; it can offset the positive quadratic cost. `verification` compares this model prediction with the observed damage and target changes. Regional Jacobian and nullspace methods, including [LOCO Edit](https://arxiv.org/html/2409.02374v3), provide related geometric foundations.
 
-**5. Close the loop on actual outputs.** Every visited candidate is decoded and scored under frozen control views. Completed candidates must satisfy the native protection budget and all semantic floors. Rejected outputs still inform response fitting. Initialization, field probes, reference queries, fallback, and enabled priors share the model allowance. Among the actual feasible outputs and $Y_{\mathrm{base}}$, select the highest attained minimum editing gain, then the lowest bounded preservation cost within that attainment band. Postselection PIE metrics and independent task labels score the frozen result.
+**5. Close the loop on actual outputs.** Every visited candidate is decoded and scored under frozen control views. Completed candidates must satisfy the native protection budget and all semantic floors. Rejected outputs still inform response fitting. Initialization, field probes, reference queries, fallback, and enabled priors share the model allowance. Among the actual feasible outputs and $`Y_{\mathrm{base}}`$, select the highest attained minimum editing gain, then the lowest bounded preservation cost within that attainment band. Postselection PIE metrics and independent task labels score the frozen result.
 
 ### What Each Experiment Establishes
 
@@ -773,7 +773,7 @@ python -B RefUnmix/probe.py --image input.png --source "a blue shirt" --target "
 
 `field.relativefit` is the response-error norm divided by the request norm; `responsecosine` measures their direction agreement. `relativegap` compares the true response with the measured linear prediction, normalized by the request norm. `alignment` records input angle, norm ratio, orthogonal correction, and the retained singular-value ratio. Undefined directions and zero denominators are null; numerical underflow and overflow have explicit status fields.
 
-`field.capacity` contains `lineerror`, `spanerror`, and `directionroom`: the normalized squared errors $E_{\mathrm{line}}$, $E_{\mathrm{span}}$, and their difference $G_F$. Its `rank` is the resolved output-response rank; `field.rank` is the input-contrast rank. Both fits use the same SVD truncation and the same paid response probes. The scalar fit permits either sign. Zero requests have null normalized errors; zero responses have unit errors and zero direction room. The same diagnostic is saved for coupled and norm-matched scalar arms before their different fields are applied.
+`field.capacity` contains `lineerror`, `spanerror`, and `directionroom`: the normalized squared errors $`E_{\mathrm{line}}`$, $`E_{\mathrm{span}}`$, and their difference $`G_F`$. Its `rank` is the resolved output-response rank; `field.rank` is the input-contrast rank. Both fits use the same SVD truncation and the same paid response probes. The scalar fit permits either sign. Zero requests have null normalized errors; zero responses have unit errors and zero direction room. The same diagnostic is saved for coupled and norm-matched scalar arms before their different fields are applied.
 
 These diagnostics use the native field endpoint before reference control. Pullback runs already save them from paid endpoints; evaluation summaries aggregate available values by request before averaging, and `audit.py` includes them in paired comparisons. The probe command adds source-condition endpoints for mechanism analysis and reports its complete cost. Response fit is evaluated separately from final editing quality.
 
