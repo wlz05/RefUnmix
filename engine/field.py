@@ -101,6 +101,34 @@ def orthogonal(values, tolerance=1e-6):
             basis[:, index] *= -1
     return basis, singular[keep].tolist()
 
+def capacity(response, target, anchor, tolerance=1e-6):
+    # Separate scalar mismatch from resolved directional capacity.
+    response, target, anchor = (np.asarray(value, dtype=float) for value in (response, target, anchor))
+    if response.ndim != 2 or not all(response.shape) or target.shape != (response.shape[0],) or anchor.shape != (response.shape[1],) or any(not np.isfinite(value).all() for value in (response, target, anchor)):
+        raise ValueError("Response capacity requires finite aligned arrays.")
+    if isinstance(tolerance, bool) or not 0 < number(tolerance, "Response rank tolerance") < 1:
+        raise ValueError("Response rank tolerance must be between zero and one.")
+    magnitude = float(np.max(np.abs(response)))
+    left, singular, right = np.linalg.svd(response / magnitude if magnitude else response, full_matrices=False)
+    kept = singular > tolerance * singular[0]
+    left, singular, right = left[:, kept], singular[kept], right[kept]
+    report = {"rank": int(kept.sum()), "tolerance": tolerance, "lineerror": None, "spanerror": None, "directionroom": None, "linecosine": None, "status": "zero request", "scope": "Normalized squared errors in the resolved linear response; unconstrained capacity before damping and the correction ball."}
+    targetscale = float(np.max(np.abs(target)))
+    if targetscale == 0:
+        return report
+    normalized = target / targetscale
+    normalized /= math.hypot(*normalized)
+    projected = left @ (left.T @ normalized)
+    anchorscale = float(np.max(np.abs(anchor)))
+    baseline = left @ (singular * (right @ (anchor / anchorscale))) if anchorscale else np.zeros_like(target)
+    length = math.hypot(*baseline)
+    cosine = float(np.clip(normalized @ (baseline / length), -1., 1.)) if length else None
+    line = cosine * (baseline / length) if length else np.zeros_like(target)
+    lineerror = float(np.clip((normalized - line) @ (normalized - line), 0., 1.))
+    spanerror = float(np.clip((normalized - projected) @ (normalized - projected), 0., 1.))
+    report.update({"lineerror": lineerror, "spanerror": spanerror, "directionroom": max(0., lineerror - spanerror), "linecosine": cosine, "status": "zero response" if not len(singular) else "zero baseline" if not length else "measured"})
+    return report
+
 def solve(response, target, anchor, ridge=.05, radius=1.):
     # Solve one coupled inverse response problem inside a ball.
     response, target, anchor = (np.asarray(value, dtype=float) for value in (response, target, anchor))
@@ -218,6 +246,7 @@ def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, prob
                 raise ValueError("Pullback endpoints must preserve native geometry.")
             columns.append(((value.double() - neutral.double()) / step).reshape(-1).cpu().numpy())
         response = np.stack(columns, axis=1)
+        report["capacity"] = capacity(response, session.scale * original, anchor, tolerance)
         coefficients, diagnostics = solve(response, session.scale * original, anchor, ridge, radius)
         if geometry == "scalar":
             length = float(np.linalg.norm(anchor))

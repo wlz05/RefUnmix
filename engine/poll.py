@@ -476,6 +476,8 @@ def select(path, score, weight, prior, config=None):
                 lastmove = move
                 predicted, semantic, penalty = model.prediction(move, None if config.priorcontrol == "soft" else cap)
                 observederror = guard.observe(model, move, residual(current), [current.scores[key] for key in names], scales, max(raw.damage, 1e-8))
+                # Compare predicted and observed changes before acceptance.
+                record["verification"] = {"predictedgain": gain(semantic, reference, scales, indices) - anchor.taskgain, "actualgain": current.taskgain - anchor.taskgain, "predicteddamagechange": predicted - anchor.damage, "actualdamagechange": current.damage - anchor.damage, "feasible": current.feasible}
                 record.update({"predicted": predicted, "actual": current.damage, "responseerror": float(np.linalg.norm(residual(current) - model.residual - model.response @ move)), "semanticerror": float(np.linalg.norm(np.array([current.scores[key] for key in names]) - semantic)), "observation": observederror, "piece": "cached endpoint poll" if budgetfallback else "compensated reference poll" if compensated is not None else "signed response poll" if rescue else proposed["piece"], "converged": None if rescue else proposed["converged"]})
                 if rescue:
                     accepted = better(current, anchor)

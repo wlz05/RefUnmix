@@ -1,6 +1,6 @@
 # RefUnmix: Endpoint-Aligned Fields for Protected Image Editing
 
-**RefUnmix** formulates training-free image editing as inverse control of a frozen generator's measured response. It reconstructs an input field for the requested endpoint displacement, then couples reference motion with a field correction that compensates protected-content damage.
+**RefUnmix** recovers target-condition changes suppressed by reference calibration. It measures the frozen generator's response, calibrates the input field, and compensates protected-content damage when releasing the recovered condition response.
 
 RefUnmix uses one-step or few-step native backbones with finite-query control. Reports include all denoiser sample evaluations, forward calls, VAE decodes, latency, and peak memory.
 
@@ -10,11 +10,11 @@ RefUnmix uses one-step or few-step native backbones with finite-query control. R
 
 ### Core Insight
 
-A conditional prediction estimates a desired change. The frozen continuation and decoder determine the change that reaches the final image. Direction-dependent amplification and mixing separate these two quantities. Reference calibration creates a second coupling: subtracting the target zero-field endpoint removes reconstruction drift together with a finite target-condition response.
+A conditional prediction proposes a displacement. Native generation determines how that displacement reaches the output. In the local response model, scalar adjustment follows one output line, leaving off-line request errors that require changing the input direction.
 
-**RefUnmix controls the semantic response that remains after protected damage is compensated.** The same inverse-response principle determines both the base field and the subsequent reference-field intervention.
+Reference calibration then couples preservation with editing: subtracting the target zero-field endpoint removes source reconstruction drift together with the target-condition response. Restoring that response also restores its side effects. **RefUnmix pairs reference motion with a field correction that cancels the protected response while retaining useful target change.** The retained response determines the common adoption step.
 
-[ChordEdit](https://arxiv.org/abs/2602.19083) stabilizes conditional transport through temporal smoothing. [WhereEdit](https://arxiv.org/abs/2607.20883) strengthens target attraction and localizes transport. [PreciseEdit](https://arxiv.org/abs/2610.23535) coordinates transport strength with cross-scale agreement and spatial gating. RefUnmix measures the response of the chosen intervention through native continuation and decoding, then solves for its adoption under output constraints.
+[ChordEdit](https://arxiv.org/abs/2602.19083) smooths conditional transport. [PreciseEdit](https://arxiv.org/abs/2610.23535) regulates its spatial and directional release. [ECT](https://arxiv.org/abs/2610.30827) analytically corrects the magnitude along a single edit axis from one VP observation. RefUnmix queries native intervention responses to calibrate direction and recover the reference's condition contribution under protected-output constraints.
 
 ### The Complete Method Chain
 
@@ -75,6 +75,16 @@ F_0&=Q_F(c_0+\delta_F^\star).
 $$
 
 The full response Gram matrix preserves interactions between the conditional directions. The regularizer and correction radius control inverse amplification. The native output $Y_{\mathrm{base}}=V(H(F_0,C_{\mathrm{tgt}}))$ defines the per-field control reference.
+
+The measured response also separates strength from direction. Let $\widetilde R_F$ be its resolved SVD, $P_F$ its column-space projector, $v_F=\gamma_F\bar d$, and $w_F=\widetilde R_Fc_0$. For nonzero $v_F$, compare
+
+$$
+E_{\mathrm{line}}=\min_{\beta\in\mathbb R}\frac{\|\beta w_F-v_F\|_2^2}{\|v_F\|_2^2},\qquad
+E_{\mathrm{span}}=\min_c\frac{\|\widetilde R_Fc-v_F\|_2^2}{\|v_F\|_2^2},\qquad
+G_F=E_{\mathrm{line}}-E_{\mathrm{span}}\ge0.
+$$
+
+$G_F$ measures the error reduction available through direction changes beyond any signed scalar adjustment. $E_{\mathrm{span}}$ measures the request component outside the resolved response space. These quantities describe linear capacity before regularization, the correction ball, and nonlinear continuation; actual endpoint fit and final task completion are recorded separately.
 
 **3. Recover the reference degree of freedom.** Query matched endpoints:
 
@@ -685,7 +695,11 @@ python -B RefUnmix/probe.py --image input.png --source "a blue shirt" --target "
 
 `field.relativefit` is the response-error norm divided by the request norm; `responsecosine` measures their direction agreement. `relativegap` compares the true response with the measured linear prediction, normalized by the request norm. `alignment` records input angle, norm ratio, orthogonal correction, and the retained singular-value ratio. Undefined directions and zero denominators are null; numerical underflow and overflow have explicit status fields.
 
+`field.capacity` contains `lineerror`, `spanerror`, and `directionroom`: the normalized squared errors $E_{\mathrm{line}}$, $E_{\mathrm{span}}$, and their difference $G_F$. Its `rank` is the resolved output-response rank; `field.rank` is the input-contrast rank. Both fits use the same SVD truncation and the same paid response probes. The scalar fit permits either sign. Zero requests have null normalized errors; zero responses have unit errors and zero direction room. The same diagnostic is saved for coupled and norm-matched scalar arms before their different fields are applied.
+
 These diagnostics use the native field endpoint before reference control. Pullback runs already save them from paid endpoints; evaluation summaries aggregate available values by request before averaging, and `audit.py` includes them in paired comparisons. The probe command adds source-condition endpoints for mechanism analysis and reports its complete cost. Response fit is evaluated separately from final editing quality.
+
+Controller history records `verification` for every queried non-geometry proposal, including rejected proposals: `predictedgain`, `actualgain`, `predicteddamagechange`, and `actualdamagechange`. Each change is measured from the current anchor. Gains use the frozen control heads and scales; independent task annotations evaluate the final image. `audit.py` averages release-query changes under `release:verified...`, then averages seeds within each request for paired comparisons. This connects predicted compensation to its measured finite-step effect.
 
 Native probes use raw mode with priors and controller diagnostics disabled. Discrete reference paths require `--etas 0 1`. Raw inference rejects ignored prior or controller switches, and held-out consistency requires an enabled prior.
 

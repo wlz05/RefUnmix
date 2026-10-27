@@ -7,7 +7,8 @@ from types import SimpleNamespace
 import unittest
 import numpy as np
 import torch
-from engine.field import build, options, orthogonal, solve
+from audit import values
+from engine.field import build, capacity, options, orthogonal, solve
 from engine.limit import Budget
 from engine.path import Path
 from run import common, validate
@@ -411,6 +412,97 @@ class FieldTests(unittest.TestCase):
         finally:
             if previous:
                 gc.enable()
+
+class CapacityTests(unittest.TestCase):
+    def testanisotropy(self):
+        row = capacity(np.diag([2., .5]), np.ones(2), np.ones(2))
+        self.assertAlmostEqual(row["lineerror"], 9 / 34)
+        self.assertAlmostEqual(row["spanerror"], 0.)
+        self.assertAlmostEqual(row["directionroom"], 9 / 34)
+        json.dumps(row, allow_nan=False)
+
+    def testunreachable(self):
+        row = capacity([[1.], [0.]], [1., 1.], [1.])
+        self.assertAlmostEqual(row["lineerror"], .5)
+        self.assertAlmostEqual(row["spanerror"], .5)
+        self.assertAlmostEqual(row["directionroom"], 0.)
+
+    def testidentity(self):
+        row = capacity(np.eye(2), np.ones(2), np.ones(2))
+        self.assertAlmostEqual(row["directionroom"], 0.)
+        self.assertAlmostEqual(row["linecosine"], 1.)
+
+    def testnegative(self):
+        row = capacity([[-2.], [0.]], [1., 0.], [1.])
+        self.assertAlmostEqual(row["lineerror"], 0.)
+        self.assertAlmostEqual(row["directionroom"], 0.)
+        self.assertAlmostEqual(row["linecosine"], -1.)
+
+    def testzerorequest(self):
+        row = capacity(np.eye(2), np.zeros(2), np.ones(2))
+        self.assertEqual(row["status"], "zero request")
+        self.assertIsNone(row["directionroom"])
+        self.assertEqual(row["rank"], 2)
+
+    def testzeroresponse(self):
+        row = capacity(np.zeros((2, 2)), np.ones(2), np.ones(2))
+        self.assertEqual(row["status"], "zero response")
+        self.assertEqual(row["rank"], 0)
+        self.assertAlmostEqual(row["lineerror"], 1.)
+        self.assertAlmostEqual(row["spanerror"], 1.)
+        self.assertEqual(row["directionroom"], 0.)
+        self.assertIsNone(row["linecosine"])
+
+    def testzeroanchor(self):
+        row = capacity(np.eye(2), [1., 0.], [0., 0.])
+        self.assertEqual(row["status"], "zero baseline")
+        self.assertEqual(row["directionroom"], 1.)
+
+    def testnullanchor(self):
+        row = capacity([[1., -1.], [0., 0.]], [1., 0.], [1., 1.])
+        self.assertEqual(row["status"], "zero baseline")
+        self.assertEqual(row["directionroom"], 1.)
+
+    def testtruncation(self):
+        row = capacity(np.diag([1., 1e-8]), [0., 1.], [0., 1.])
+        self.assertEqual(row["rank"], 1)
+        self.assertEqual(row["status"], "zero baseline")
+        self.assertEqual(row["spanerror"], 1.)
+        self.assertEqual(row["directionroom"], 0.)
+
+    def testunits(self):
+        reference = capacity(np.diag([2., .5]), np.ones(2), np.ones(2))
+        for scale in (1e-250, 1e250):
+            row = capacity(scale * np.diag([2., .5]), scale * np.ones(2), scale * np.ones(2))
+            for key in ("lineerror", "spanerror", "directionroom", "linecosine"):
+                self.assertAlmostEqual(reference[key], row[key])
+
+    def testcovariance(self):
+        rotation = np.array([[.6, -.8], [.8, .6]])
+        matrix, target, anchor = np.array([[2., .4], [0., .5], [0., 0.]]), np.array([1., 1., 1.]), np.ones(2)
+        first = capacity(matrix, target, anchor)
+        second = capacity(matrix @ rotation, target, rotation.T @ anchor)
+        for key in ("lineerror", "spanerror", "directionroom", "linecosine"):
+            self.assertAlmostEqual(first[key], second[key])
+
+    def testinvalid(self):
+        for matrix, target, anchor in (([], [], []), (np.eye(2), [1.], [1., 1.]), ([[float("inf")]], [1.], [1.]), ([[1.]], [float("nan")], [1.])):
+            with self.assertRaises(ValueError):
+                capacity(matrix, target, anchor)
+        for tolerance in (0., 1., -1., True, float("inf"), float("nan")):
+            with self.assertRaises(ValueError):
+                capacity(np.eye(2), np.ones(2), np.ones(2), tolerance)
+
+    def testpaidprobes(self):
+        first, second = Session(), Session()
+        coupled = build(first, Native(first))
+        scalar = build(second, Native(second), geometry="scalar")
+        self.assertEqual(coupled.report["capacity"], scalar.report["capacity"])
+        self.assertGreater(coupled.report["capacity"]["directionroom"], .25)
+        self.assertEqual((first.samples, first.calls), (7, 5))
+        self.assertEqual((first.samples, first.calls), (second.samples, second.calls))
+        measured = values({"report": {"field": coupled.report}})
+        self.assertEqual(measured["field:responsedirectionroom"], coupled.report["capacity"]["directionroom"])
 
 if __name__ == "__main__":
     unittest.main()

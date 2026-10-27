@@ -170,10 +170,19 @@ class ReleaseTests(unittest.TestCase):
         rows = [row for row in result.report["history"] if row.get("kind") == "release"]
         self.assertTrue(rows)
         self.assertTrue(any(row.get("accepted") for row in rows))
+        for row in rows:
+            checked = row["verification"]
+            self.assertTrue(np.isfinite([checked[key] for key in ("predictedgain", "actualgain", "predicteddamagechange", "actualdamagechange")]).all())
+            self.assertIsInstance(checked["feasible"], bool)
+            center = next(candidate for candidate in result.report["candidates"] if candidate["point"] == row["center"])
+            self.assertAlmostEqual(checked["actualdamagechange"], row["actual"] - center["damage"])
+            self.assertAlmostEqual(checked["predicteddamagechange"], row["predicted"] - center["damage"])
+            self.assertAlmostEqual(checked["predictedgain"], checked["actualgain"], places=5)
         self.assertLessEqual(result.report["damage"], result.report["rawdamage"])
         self.assertLessEqual(len(result.report["candidates"]), 12)
         self.assertGreater(result.report["attainment"]["selectedgain"], .2)
         self.assertGreater(values({"report": {"method": "path", **result.report}})["release:queries"], 0)
+        self.assertIsNotNone(values({"report": {"method": "path", **result.report}})["release:verifiedactualgain"])
         json.dumps(result.report, allow_nan=False)
 
 if __name__ == "__main__":
