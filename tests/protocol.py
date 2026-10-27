@@ -94,6 +94,13 @@ class ProtocolTests(unittest.TestCase):
         other.model = ".\\models"
         self.assertEqual(configuration(args), configuration(other))
 
+    def testrecipepaths(self):
+        from trial import settings
+        first, second = self.args(), self.args()
+        first.model, first.clip, first.evalclip = ".\\models", ".\\clip", ".\\report"
+        second.model, second.clip, second.evalclip = "models", "clip", "report"
+        self.assertEqual(settings(first), settings(second))
+
     def testentryidentity(self):
         single = parser().parse_args(["--image", "input.png", "--source", "source", "--target", "target", "--clip", "clip", "--size", "16"])
         self.assertEqual(signature(single), signature(self.args()))

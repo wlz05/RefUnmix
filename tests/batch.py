@@ -313,25 +313,29 @@ class BatchTests(unittest.TestCase):
         image = Image.new("RGB", (16, 16), (70, 90, 120))
         args = self.args()
         serial = []
-        for seed in (42, 52, 3047):
+        seeds = (42, 52, 3047, 3407)
+        for seed in seeds:
             args.seed = seed
             serial.append(run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args))
-        current, judge = editor(), ClipJudge(Clip(), Processor())
-        args.batch = 3
-        with Batch((current, judge, None), 3, .01) as batching:
-            def work(seed):
-                backend, scorer, _ = batching.replicas()
-                local = deepcopy(args)
-                local.seed = seed
-                return run(backend, scorer, image, "source", "target long", local)
+        for width in (3, 4):
+            current, judge = editor(), ClipJudge(Clip(), Processor())
+            args.batch = width
+            with Batch((current, judge, None), width, .01) as batching:
+                def work(seed):
+                    backend, scorer, _ = batching.replicas()
+                    local = deepcopy(args)
+                    local.seed = seed
+                    return run(backend, scorer, image, "source", "target long", local)
 
-            parallel = batching.map(work, [42, 52, 3047])
-        for first, second in zip(serial, parallel):
-            torch.testing.assert_close(first[0], second[0])
-            for key in ("samples", "calls", "decodes", "encodes", "textcalls"):
-                self.assertEqual(first[1]["stats"][key], second[1]["stats"][key])
-            self.assertEqual(first[1]["judgestats"], second[1]["judgestats"])
-        self.assertLess(batching.report()["denoisercalls"], sum(item[1]["stats"]["calls"] for item in parallel))
+                parallel = []
+                for offset in range(0, len(seeds), width):
+                    parallel.extend(batching.map(work, seeds[offset:offset + width]))
+            for first, second in zip(serial, parallel):
+                torch.testing.assert_close(first[0], second[0])
+                for key in ("samples", "calls", "decodes", "encodes", "textcalls"):
+                    self.assertEqual(first[1]["stats"][key], second[1]["stats"][key])
+                self.assertEqual(first[1]["judgestats"], second[1]["judgestats"])
+            self.assertLess(batching.report()["denoisercalls"], sum(item[1]["stats"]["calls"] for item in parallel))
 
     def testseedisolation(self):
         current = editor()

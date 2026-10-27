@@ -56,7 +56,7 @@ class Processor:
 class Vision(torch.nn.Module):
     def forward(self, pixel_values):
         values = pixel_values.mean(dim=(-2, -1))
-        return SimpleNamespace(pooler_output=torch.cat((values, torch.ones((values.shape[0], 1))), dim=1))
+        return SimpleNamespace(pooler_output=torch.cat((values, values.new_ones((values.shape[0], 1))), dim=1))
 
 class ClipText(torch.nn.Module):
     def forward(self, input_ids):

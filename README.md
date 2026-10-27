@@ -273,6 +273,20 @@ workspace/
 
 ---
 
+## Move the Workspace to a Server
+
+Copy the workspace tree with the relative directory names and capitalization shown above: `RefUnmix/`, `models/`, `clip/`, `data/`, `protocol/`, and `cache/metrics/`. For a validation-to-test transfer, also copy `development/`, `outputs/development.json`, and the matching `outputs/developmentval/` directory. Copy resolved checkpoint file contents into `models/` and `clip/` when those directories contain links to an external download cache. Retain the exact source commit and unchanged checkpoint, mapping, and manifest file contents. Match the Python package versions recorded in the source run's environment report.
+
+Open a shell at the new workspace root. Its absolute parent directory can change; the commands continue to use the same relative paths. Run the server preflight into a new report:
+
+```bash
+python -B RefUnmix/doctor.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --report outputs/servercheck.json
+```
+
+For an existing validation recipe, keep its batch width, seed set, precision, model paths, and control settings. The same recipe then replays from the new root. Relative parameter spellings such as `models`, `./models`, and Windows-style separators are normalized. Use the forward-slash commands shown here on Linux. Run the existing test command only; retain its validation recipe and use a fresh test output directory. A new code revision or a change from three to four requests starts a new validation/test pair using the [four-request configuration](#choosing-three-or-four-concurrent-requests).
+
+Use one visible RTX 4090 as `cuda:0` and run one dataset process at a time with `--batch 3` or `--batch 4`. Weights are shared within that process; each image-seed request retains its own generator, cache, controller, and sample/call allowance. Copied completed inference summaries can be scored directly using the [offline cache command](#reuse-the-metric-cache-after-moving). New generation runs use new output directories.
+
 ## Quick Start
 
 ### 1. Clone the Source
@@ -828,7 +842,7 @@ cd RefUnmix
 python -B -m unittest discover -s tests -p '*.py' -q
 ```
 
-The suite covers field construction, control constraints, query accounting, image formats, dataset conversion, README experiment plans, complete-benchmark ablations, and official validation-to-test replay at batch widths three and four. Temporal diagnostics distinguish numerical underflow from an exact fit.
+The suite covers field construction, control constraints, query accounting, image formats, dataset conversion, README experiment plans, complete-benchmark ablations, cache relocation, offline scoring, and official validation-to-test replay at batch widths three and four. Transfer checks copy the checkout and validation files into a new root and run test replay in a fresh Python process with synthetic backends. Serial/parallel checks compare all four seeds, output tensors, and per-request counters. Temporal diagnostics distinguish numerical underflow from an exact fit.
 
 For the focused parallel checks, run from the checkout root:
 

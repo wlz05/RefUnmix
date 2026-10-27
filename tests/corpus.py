@@ -8,6 +8,9 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 import tempfile
 import types
 import unittest
@@ -448,18 +451,40 @@ class CorpusTests(unittest.TestCase):
                 arguments = [*shared, "--split", subset, "--output", output]
                 if subset == "test":
                     arguments.extend(["--recipe", validation + "/recipe.json"])
-                with self.subTest(width=width, subset=subset), patch("sys.argv", arguments), patch("trial.load", return_value=(backend, judge)), contextlib.redirect_stdout(io.StringIO()):
-                    trialmain()
-                suite = json.loads(Path(output, "summary.json").read_text(encoding="utf-8"))
-                self.assertEqual(len(suite["variants"]), 6)
-                for label in suite["variants"]:
-                    payload = json.loads(Path(output, label, "summary.json").read_text(encoding="utf-8"))
-                    self.assertEqual({row["key"] for row in payload["rows"]}, set(subsets[subset]))
-                    self.assertEqual({row["seed"] for row in payload["rows"]}, {42, 52, 3047, 3407})
-                    self.assertEqual(len(payload["rows"]), 4)
-                    self.assertTrue(payload["execution"]["accounting"]["matched"])
-                    self.assertTrue(all(row["report"]["stats"]["samples"] <= 64 for row in payload["rows"]))
-            self.assertFalse(Path(testing, "recipe.json").exists())
+                home = Path.cwd()
+                try:
+                    if subset == "test":
+                        server = home / f"server{width}"
+                        server.mkdir()
+                        shutil.copytree("prepared", server / "prepared")
+                        shutil.copytree(validation, server / validation)
+                        shutil.copyfile("split.json", server / "split.json")
+                        shutil.copytree(Path(__file__).resolve().parent.parent, server / "RefUnmix", ignore=shutil.ignore_patterns(".git", "__pycache__"))
+                        for source in (server / "RefUnmix").rglob("*.py"):
+                            content = source.read_bytes().replace(b"\r\n", b"\n")
+                            source.write_bytes(content.replace(b"\n", b"\r\n") if width == 3 else content)
+                        os.chdir(server)
+                        script = "import sys\nfrom pathlib import Path\nsys.path[:0] = [str(Path('RefUnmix').resolve()), str(Path('RefUnmix/tests').resolve())]\nfrom unittest.mock import patch\nfrom session import Clip, Processor, editor\nfrom engine.judge import ClipJudge\nfrom trial import main\nbackend, judge = editor(), ClipJudge(Clip(), Processor())\nbackend.metadata['weights'], judge.metadata['weights'] = 'backbone', 'control'\nwith patch('trial.load', return_value=(backend, judge)):\n main()\n"
+                        completed = subprocess.run([sys.executable, "-B", "-c", script, *arguments[1:]], capture_output=True, text=True, timeout=90)
+                        self.assertEqual(completed.returncode, 0, completed.stderr[-2500:])
+                    else:
+                        with patch("sys.argv", arguments), patch("trial.load", return_value=(backend, judge)), contextlib.redirect_stdout(io.StringIO()):
+                            trialmain()
+                    suite = json.loads(Path(output, "summary.json").read_text(encoding="utf-8"))
+                    self.assertEqual(len(suite["variants"]), 6)
+                    for label, variant in suite["variants"].items():
+                        self.assertNotIn("\\", variant["path"])
+                        self.assertTrue(Path(variant["path"]).is_file())
+                        payload = json.loads(Path(output, label, "summary.json").read_text(encoding="utf-8"))
+                        self.assertEqual({row["key"] for row in payload["rows"]}, set(subsets[subset]))
+                        self.assertEqual({row["seed"] for row in payload["rows"]}, {42, 52, 3047, 3407})
+                        self.assertEqual(len(payload["rows"]), 4)
+                        self.assertTrue(payload["execution"]["accounting"]["matched"])
+                        self.assertTrue(all(row["report"]["stats"]["samples"] <= 64 for row in payload["rows"]))
+                    if subset == "test":
+                        self.assertFalse(Path(output, "recipe.json").exists())
+                finally:
+                    os.chdir(home)
             arguments = [*shared, "--batch", "4" if width == 3 else "3", "--split", "test", "--recipe", validation + "/recipe.json", "--output", "mismatched"]
             with patch("sys.argv", arguments), patch("trial.load") as load:
                 with self.assertRaisesRegex(ValueError, "unchanged validation"):

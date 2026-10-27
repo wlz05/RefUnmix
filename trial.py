@@ -96,6 +96,9 @@ def design(args, controls):
 def settings(args):
     excluded = {"output", "manifest", "split", "limit", "seeds", "seed", "dataset", "mapping", "images", "recipe", "suite", "dry"}
     result = {key: value for key, value in vars(args).items() if key not in excluded}
+    for key in ("model", "clip", "evalclip", "adapter", "constraints", "probabilities", "radiusprofile"):
+        if result.get(key) is not None:
+            result[key] = clean(result[key], key).as_posix()
     result["seeds"] = sorted(set(getattr(args, "seeds", None) or [args.seed]))
     result["configuration"] = {key: jsonfile(getattr(args, key)) for key in ("constraints", "probabilities", "radiusprofile")}
     result["adapterhash"] = hashlib.sha256(locate(Path("."), clean(args.adapter, "adapter")).read_bytes()).hexdigest() if args.adapter else None
@@ -206,7 +209,7 @@ def main():
             raise ValueError("An ablation arm used changed source image bytes.")
         if payload["controlsignature"]["sha256"] != plan["variants"][label]["sha256"]:
             raise RuntimeError("Executed control settings differ from the checked ablation plan.")
-        results[label] = {"summary": payload["summary"], "cost": payload["cost"], "controller": payload["controller"], "controlsignature": payload["controlsignature"], "changes": plan["variants"][label]["changes"], "path": str(output / label / "summary.json"), "rows": len(payload["rows"])}
+        results[label] = {"summary": payload["summary"], "cost": payload["cost"], "controller": payload["controller"], "controlsignature": payload["controlsignature"], "changes": plan["variants"][label]["changes"], "path": (output / label / "summary.json").as_posix(), "rows": len(payload["rows"])}
     if any(digest(path) != inputs[key] for key, path in paths.items()):
         raise ValueError("Ablation inputs changed before publication.")
     items(args)
