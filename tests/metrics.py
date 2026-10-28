@@ -401,6 +401,15 @@ class MetricTests(unittest.TestCase):
         rows = [{"key": "a", "raw": {"mse": 1.}}, {"key": "a", "raw": {"mse": 3.}}, {"key": "b", "raw": {"mse": 10.}}]
         self.assertEqual(grouped(rows, "raw")["mse"], {"mean": 6., "count": 2})
 
+    def testseedfirstmean(self):
+        rows = [{"key": key, "seed": seed, "raw": {"mse": value}} for seed, values in ((42, (0., 2.)), (52, (10., None)), (3047, (20., None)), (3407, (30., None))) for key, value in zip(("a", "b"), values)]
+        self.assertEqual(grouped(rows, "raw")["mse"], {"mean": 15.25, "count": 2})
+        self.assertEqual([grouped([row for row in rows if row["seed"] == seed], "raw")["mse"]["mean"] for seed in (42, 52, 3047, 3407)], [1., 10., 20., 30.])
+
+    def testundefinedseedmean(self):
+        rows = [{"key": "a", "seed": 42, "raw": {"mse": 2.}}, {"key": "a", "seed": 52, "raw": {"mse": None}}]
+        self.assertIsNone(grouped(rows, "raw")["mse"]["mean"])
+
     def testinfiniteaggregation(self):
         rows = [{"key": "a", "raw": {"psnr": None}, "status": {"psnr": "positive infinity"}}, {"key": "a", "raw": {"psnr": 30.}}, {"key": "b", "raw": {"psnr": 40.}}]
         result = grouped(rows, "raw")["psnr"]
@@ -425,6 +434,7 @@ class MetricTests(unittest.TestCase):
             self.assertFalse(result["backend"]["complete"])
             self.assertFalse(result["population"]["benchmarkcomplete"])
             self.assertEqual(result["protocol"], "PIE pixel diagnostics")
+            self.assertEqual(result["byseed"]["1"]["raw"], result["raw"])
             self.assertIsNone(result["rows"][0]["raw"]["lpips"])
 
 if __name__ == "__main__":

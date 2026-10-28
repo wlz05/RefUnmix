@@ -231,7 +231,7 @@ python -m pip install datasets pyarrow gradio
 
 ### Hardware and Random Seeds
 
-Experiments use **one NVIDIA GeForce RTX 4090** and seeds **42, 52, 3047, and 3407**. Reported benchmark metrics are averaged over the four seeds for each editing request, then averaged over requests. Single-image inference defaults to 42. For dataset experiments, use `--seeds 42 52 3047 3407`.
+Experiments use **one NVIDIA GeForce RTX 4090** and seeds **42, 52, 3047, and 3407**. For each seed, we average each metric over all test requests, then report the arithmetic mean of the four seed-level results. Single-image inference defaults to 42. For dataset experiments, use `--seeds 42 52 3047 3407`.
 
 `cuda:0` means the first GPU visible to the process. A scheduler's `CUDA_VISIBLE_DEVICES` setting remaps physical GPU indices within that process.
 
@@ -454,7 +454,7 @@ Run the [main experiments](#main-experiments-all-700-pie-bench-requests) and [be
 
 ## Experiments
 
-RefUnmix achieves state-of-the-art image editing performance on **PIE-Bench**, with improved protected-content preservation and target-text alignment. All experiments run on a **single NVIDIA GeForce RTX 4090** with seeds **42, 52, 3047, and 3407**. Main and ablation results report the mean over these four seeds, with equal weight per editing request.
+RefUnmix achieves state-of-the-art image editing performance on **PIE-Bench**, with improved protected-content preservation and target-text alignment. All experiments run on a **single NVIDIA GeForce RTX 4090** with seeds **42, 52, 3047, and 3407**. For both main and ablation experiments, we compute the mean across test requests separately for each seed, then average the four seed-level results.
 
 ### Baselines
 
@@ -815,7 +815,7 @@ python -B RefUnmix/assess.py --input outputs/smoke/summary.json --dataset data -
 
 The [ChordEdit export script](https://github.com/ChordEdit/ChordEdit/blob/main/run_pie_bench.py) defaults to seed 42. For a single-seed reproduction, generate both methods with seed 42 and assess with `--seeds 42`; for the four-seed table, rerun both methods with all four seeds. RefUnmix saves lossless PNGs. Use the same image encoding for newly generated comparisons: ChordEdit's exporter retains the input extension, so a JPEG extension adds compression. Score the saved files for every method with the same calculator.
 
-Assessments contain `raw`, scaled `table`, and metric-specific `coverage`. MSE, LPIPS, and DINO structure distance use x1,000; SSIM uses x100; PSNR is in dB. Empty protected regions remain undefined for preservation metrics; zero-error PSNR is recorded as positive infinity. For the main and ablation tables, the scorer first takes the arithmetic mean of each metric across seeds 42, 52, 3047, and 3407 for each request, then averages the request means. Report each metric's valid denominator, alongside all 700 requests and four seeds.
+Assessments contain `raw`, scaled `table`, per-seed results in `byseed`, and metric-specific `coverage`. MSE, LPIPS, and DINO structure distance use x1,000; SSIM uses x100; PSNR is in dB. Empty protected regions remain undefined for preservation metrics; zero-error PSNR is recorded as positive infinity. For each metric, first average its valid request scores separately for seeds 42, 52, 3047, and 3407, then take the arithmetic mean of those four results. Each seed has equal weight. A metric with no valid requests for any one seed has an undefined overall mean. Report the per-seed results and valid denominators alongside the final four-seed mean.
 
 ### Reuse the Metric Cache After Moving
 

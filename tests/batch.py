@@ -481,6 +481,11 @@ class BatchTests(unittest.TestCase):
                     with self.subTest(family=family), contextlib.redirect_stdout(io.StringIO()):
                         payload = execute(args, resources)
                     self.assertEqual([row["seed"] for row in payload["rows"]], [42, 52, 3047, 3407])
+                    self.assertEqual(set(payload["byseed"]), {"42", "52", "3047", "3407"})
+                    for seed in (42, 52, 3047, 3407):
+                        row = next(row for row in payload["rows"] if row["seed"] == seed)
+                        self.assertEqual(payload["byseed"][str(seed)]["mse"]["mean"], row["metrics"]["mse"])
+                    self.assertAlmostEqual(payload["summary"]["mse"]["mean"], sum(payload["byseed"][str(seed)]["mse"]["mean"] for seed in (42, 52, 3047, 3407)) / 4)
                     self.assertEqual(payload["execution"]["width"], 3)
                     self.assertGreater(payload["execution"]["throughput"], 0)
                     self.assertTrue(payload["execution"]["accounting"]["checked"])

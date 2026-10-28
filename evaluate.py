@@ -114,8 +114,25 @@ def paired(image, item):
     difference = image.float() - pixels
     return {"pairmse": float(difference.square().mean()), "pairl1": float(difference.abs().mean())}
 
+def seeded(rows):
+    groups = {}
+    for row in rows:
+        if type(row.get("seed")) is not int:
+            raise ValueError("Seed summaries require an integer seed on every row.")
+        groups.setdefault(row["seed"], []).append({key: value for key, value in row.items() if key != "seed"})
+    return {str(seed): summary(values) for seed, values in sorted(groups.items())}
+
 def summary(rows):
     keys = sorted({key for row in rows for key in row["metrics"]})
+    if any("seed" in row for row in rows):
+        # Average requests within each seed before averaging seed results.
+        separate = seeded(rows)
+        result = {}
+        for key in keys:
+            values = [value.get(key, {}).get("mean") for value in separate.values()]
+            valid = {str(row.get("key", index)) for index, row in enumerate(rows) if isinstance(row["metrics"].get(key), (int, float)) and not isinstance(row["metrics"].get(key), bool) and math.isfinite(row["metrics"][key])}
+            result[key] = {"mean": sum(values) / len(values) if values and all(value is not None for value in values) else None, "count": len(valid)}
+        return result
     result = {}
     for key in keys:
         grouped = {}
@@ -131,9 +148,9 @@ def identifier(key, seed):
     return hashlib.sha256((str(key) + ":" + str(seed)).encode()).hexdigest()[:20]
 
 def costs(rows):
-    # Average repeated seeds before summarizing inference costs.
+    # Report seed-first means and per-request cost distributions.
     import numpy as np
-    grouped = {}
+    grouped, measurements = {}, []
     stages = {"front", "field", "backend", "prior", "diagnostic"}
     for row in rows:
         stages.update((row.get("report", {}).get("stats", {}).get("budget") or {}).get("stages", {}))
@@ -145,15 +162,17 @@ def costs(rows):
             for stage in stages:
                 counts = stats["budget"].get("stages", {}).get(stage, {})
                 values.update({stage + key: counts.get(key, 0) for key in ("samples", "calls")})
+        measured = {key: value for key, value in values.items() if isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0}
+        measurements.append({"key": row.get("key", index), "metrics": measured, **({"seed": row["seed"]} if "seed" in row else {})})
         for key, value in values.items():
             if isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
                 grouped.setdefault(key, {}).setdefault(str(row.get("key", index)), []).append(float(value))
-    result = {}
+    result, means = {}, summary(measurements)
     for key, groups in sorted(grouped.items()):
         values = [sum(group) / len(group) for group in groups.values()]
-        result[key] = {"mean": float(np.mean(values)), "median": float(np.median(values)), "p95": float(np.percentile(values, 95)), "sources": len(values)}
+        result[key] = {"mean": means[key]["mean"], "median": float(np.median(values)), "p95": float(np.percentile(values, 95)), "sources": len(values)}
     concurrent = any(row.get("concurrent") for row in rows)
-    return {"metrics": result, "scope": "Per-source seed averages; concurrent request latency includes queue waits, while execution.throughput measures complete dataset throughput." if concurrent else "Per-source seed averages; synchronized per-image inference excludes checkpoint loading and independent report scoring."}
+    return {"metrics": result, "aggregation": "Means average requests within each seed, then seeds; median and p95 summarize per-request seed averages.", "scope": "Concurrent request latency includes queue waits, while execution.throughput measures complete dataset throughput." if concurrent else "Synchronized per-image inference excludes checkpoint loading and independent report scoring."}
 
 def coverage(rows):
     # Count executed mechanisms separately from enabled switches.
@@ -295,6 +314,8 @@ def execute(args, resources=None):
     sync(editor.device)
     elapsed = time.perf_counter() - started
     payload = {"schema": 1, "split": args.split, "manifest": args.manifest, "oracle": args.oracle, "independentcheckpoint": independent, "controlcheckpoint": getattr(judge, "metadata", None), "reportcheckpoint": getattr(evaluation, "metadata", None), "evaluatornote": "Different CLIP weights remain shared-family diagnostics, not independent task evidence.", "metricnote": "Pixel, band, and paired errors are diagnostics, not official benchmark protocols.", "settings": settings, "seeds": seeds, "inputs": provenance, "reproducibility": snapshot(), "summary": summary(rows), "categories": {category: summary([row for row in rows if row["category"] == category]) for category in sorted({row["category"] for row in rows})}, "rows": rows}
+    payload["byseed"] = seeded(rows)
+    payload["aggregation"] = "Arithmetic mean across requests within each seed, then arithmetic mean across seed results."
     payload["cost"] = costs(rows)
     peak = torch.cuda.max_memory_allocated(editor.device) / 2 ** 20 if gpu and width > 1 else max((row["vram"] for row in rows if row["vram"] is not None), default=None)
     payload["execution"] = {**dispatch, "requested": getattr(args, "batch", 1), "requests": len(rows), "seconds": elapsed, "throughput": len(rows) / elapsed, "residentvram": resident, "peakvram": peak, "residentreservedvram": residentreserved, "finalvram": torch.cuda.memory_allocated(editor.device) / 2 ** 20 if gpu else None, "reservedvram": torch.cuda.memory_reserved(editor.device) / 2 ** 20 if gpu else None, "peakreservedvram": max((row["peakreserved"] for row in memorytrace), default=None), "memorytrace": memorytrace, "scope": "End-to-end dataset throughput includes input loading, control, independent scoring, and output writes; checkpoint loading is excluded. Memory values are MiB; reserved memory includes allocator caches."}
@@ -309,7 +330,7 @@ def execute(args, resources=None):
         measured.update({"input" + key: value for key, value in field.get("alignment", {}).items() if key != "scope"})
         measured.update({"response" + key: field.get("capacity", {}).get(key) for key in ("rank", "lineerror", "spanerror", "directionroom", "linecosine")})
         measured.update({"temporal" + key: field.get("temporal", {}).get(key) for key in ("rank", "spanerror", "coneerror", "strength", "weight")})
-        measurements.append({"key": row["key"], "metrics": measured})
+        measurements.append({"key": row["key"], "seed": row["seed"], "metrics": measured})
     payload["fields"]["diagnostics"] = summary(measurements)
     writejson(output / "summary.json", payload)
     return payload

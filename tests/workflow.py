@@ -10,7 +10,7 @@ from unittest.mock import patch
 from PIL import Image
 import torch
 from data import Record, clean, locate
-from evaluate import identifier, metrics, regions, summary
+from evaluate import identifier, metrics, regions, seeded, summary
 from run import common, parser, run, times, validate
 from split import create, select
 from study import choose, configurations, field, frozen
@@ -178,6 +178,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result["b"], {"mean": None, "count": 0})
         self.assertEqual(identifier("A", 1), identifier("A", 1))
         self.assertNotEqual(identifier("A", 1), identifier("A", 2))
+
+    def testseedsummary(self):
+        rows = [{"key": key, "seed": seed, "metrics": {"value": value}} for seed, values in ((42, (0., 2.)), (52, (10., None)), (3047, (20., None)), (3407, (30., None))) for key, value in zip(("a", "b"), values)]
+        separate = seeded(rows)
+        self.assertEqual([separate[str(seed)]["value"]["mean"] for seed in (42, 52, 3047, 3407)], [1., 10., 20., 30.])
+        self.assertEqual(summary(rows)["value"], {"mean": 15.25, "count": 2})
+        rows[0]["metrics"]["value"] = rows[1]["metrics"]["value"] = None
+        self.assertIsNone(summary(rows)["value"]["mean"])
+        rows[0].pop("seed")
+        with self.assertRaisesRegex(ValueError, "integer seed"):
+            summary(rows)
 
     def testgroupedmanifest(self):
         with tempfile.TemporaryDirectory(dir=".") as directory:

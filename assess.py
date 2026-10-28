@@ -110,8 +110,8 @@ def grouped(rows, field):
     groups = {}
     for row in rows:
         groups.setdefault(str(row["key"]), []).append(row)
-    # Average seeds within each source before aggregating metrics.
-    means = [{"metrics": {key: value["mean"] for key, value in summary([{"metrics": row[field]} for row in values]).items()}} for values in groups.values()]
+    # Preserve the seed-first reporting order in official scores.
+    means = [{"key": row["key"], "metrics": row[field], **({"seed": row["seed"]} if "seed" in row else {})} for row in rows]
     result = summary(means)
     infinite = {key for key, values in groups.items() if any(row.get("status", {}).get("psnr") == "positive infinity" for row in values)}
     if infinite:
@@ -168,7 +168,8 @@ def main():
         print(json.dumps({"key": item.key, "seed": pair[1], "table": result["table"]}, allow_nan=False), flush=True)
     if digest(source) != sourcehash or digest(mapping) != mappinghash:
         raise ValueError("Inference summary or annotation mapping changed during assessment.")
-    result = {"schema": 1, "protocol": "PIE external metric adapter" if args.protocol else "PIE pixel diagnostics", "settings": vars(args), "inputsha256": sourcehash, "mappingsha256": mappinghash, "population": members, "packages": dict(versions()), "backend": backend.metadata, "raw": grouped(output, "raw"), "table": grouped(output, "table"), "rows": output, "note": "Seeds are averaged per image; undefined and infinite PSNR values remain null with explicit status."}
+    result = {"schema": 1, "protocol": "PIE external metric adapter" if args.protocol else "PIE pixel diagnostics", "settings": vars(args), "inputsha256": sourcehash, "mappingsha256": mappinghash, "population": members, "packages": dict(versions()), "backend": backend.metadata, "raw": grouped(output, "raw"), "table": grouped(output, "table"), "rows": output, "note": "Metrics are averaged across requests within each seed, then across seed results; undefined and infinite PSNR values remain null with explicit status."}
+    result["byseed"] = {str(seed): {"raw": grouped([row for row in output if row["seed"] == seed], "raw"), "table": grouped([row for row in output if row["seed"] == seed], "table"), "coverage": coverage([row for row in output if row["seed"] == seed])} for seed in sorted(args.seeds)}
     result["coverage"] = coverage(output)
     writejson(target, result)
 
