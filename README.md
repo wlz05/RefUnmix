@@ -231,7 +231,7 @@ python -m pip install datasets pyarrow gradio
 
 ### Hardware and Random Seeds
 
-Experiments use **one NVIDIA GeForce RTX 4090** and seeds **42, 52, 3047, and 3407**. Single-image inference defaults to 42. For dataset experiments, use `--seeds 42 52 3047 3407`.
+Experiments use **one NVIDIA GeForce RTX 4090** and seeds **42, 52, 3047, and 3407**. Reported benchmark metrics are averaged over the four seeds for each editing request, then averaged over requests. Single-image inference defaults to 42. For dataset experiments, use `--seeds 42 52 3047 3407`.
 
 `cuda:0` means the first GPU visible to the process. A scheduler's `CUDA_VISIBLE_DEVICES` setting remaps physical GPU indices within that process.
 
@@ -454,7 +454,7 @@ Run the [main experiments](#main-experiments-all-700-pie-bench-requests) and [be
 
 ## Experiments
 
-RefUnmix achieves state-of-the-art image editing performance on **PIE-Bench**, with improved protected-content preservation and target-text alignment. All experiments run on a **single NVIDIA GeForce RTX 4090** with seeds **42, 52, 3047, and 3407**.
+RefUnmix achieves state-of-the-art image editing performance on **PIE-Bench**, with improved protected-content preservation and target-text alignment. All experiments run on a **single NVIDIA GeForce RTX 4090** with seeds **42, 52, 3047, and 3407**. Main and ablation results report the mean over these four seeds, with equal weight per editing request.
 
 ### Baselines
 
@@ -815,7 +815,7 @@ python -B RefUnmix/assess.py --input outputs/smoke/summary.json --dataset data -
 
 The [ChordEdit export script](https://github.com/ChordEdit/ChordEdit/blob/main/run_pie_bench.py) defaults to seed 42. For a single-seed reproduction, generate both methods with seed 42 and assess with `--seeds 42`; for the four-seed table, rerun both methods with all four seeds. RefUnmix saves lossless PNGs. Use the same image encoding for newly generated comparisons: ChordEdit's exporter retains the input extension, so a JPEG extension adds compression. Score the saved files for every method with the same calculator.
 
-Assessments contain `raw`, scaled `table`, and metric-specific `coverage`. MSE, LPIPS, and DINO structure distance use x1,000; SSIM uses x100; PSNR is in dB. Empty protected regions remain undefined for preservation metrics; zero-error PSNR is recorded as positive infinity. The scorer averages seeds within each request key, then averages those request scores. Report each metric's valid denominator, alongside all 700 requests and four seeds.
+Assessments contain `raw`, scaled `table`, and metric-specific `coverage`. MSE, LPIPS, and DINO structure distance use x1,000; SSIM uses x100; PSNR is in dB. Empty protected regions remain undefined for preservation metrics; zero-error PSNR is recorded as positive infinity. For the main and ablation tables, the scorer first takes the arithmetic mean of each metric across seeds 42, 52, 3047, and 3407 for each request, then averages the request means. Report each metric's valid denominator, alongside all 700 requests and four seeds.
 
 ### Reuse the Metric Cache After Moving
 
