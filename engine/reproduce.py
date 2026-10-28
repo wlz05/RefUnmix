@@ -51,7 +51,7 @@ def digest(path):
 @lru_cache(maxsize=1)
 def versions():
     result = {}
-    for package in ("torch", "numpy", "Pillow", "scipy", "diffusers", "transformers", "safetensors", "accelerate", "datasets", "pyarrow", "sentencepiece"):
+    for package in ("torch", "torchvision", "torchmetrics", "lpips", "numpy", "Pillow", "scipy", "diffusers", "transformers", "huggingface_hub", "safetensors", "accelerate", "datasets", "pyarrow", "sentencepiece"):
         try:
             result[package] = metadata.version(package)
         except metadata.PackageNotFoundError:

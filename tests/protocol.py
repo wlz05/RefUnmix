@@ -193,6 +193,25 @@ class ProtocolTests(unittest.TestCase):
         for key in ("controlsignature", "fieldsha256", "point", "scores", "damage"):
             self.assertEqual(outputs[0][1][key], outputs[1][1][key])
 
+    def testdocumentedassessment(self):
+        from assess import parser as assessment
+        lines = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(encoding="utf-8").splitlines()
+        commands = [shlex.split(line) for line in lines if line.startswith("python -B RefUnmix/assess.py")]
+        self.assertGreaterEqual(len(commands), 5)
+        for command in commands:
+            args = assessment().parse_args(command[3:])
+            with self.subTest(input=args.input):
+                if args.scope == "benchmark":
+                    self.assertEqual(args.seeds, [42, 52, 3047, 3407])
+                    self.assertEqual(args.protocol, "protocol/metrics.py")
+                    self.assertEqual(args.device, "cuda:0")
+                    self.assertNotEqual(args.network, args.offline)
+                    self.assertFalse(args.pixels)
+                else:
+                    self.assertTrue(args.pixels)
+                    self.assertEqual(args.seeds, [42])
+                    self.assertFalse(args.network or args.offline)
+
     def testuniquewinner(self):
         raw = self.candidate("raw")
         first = self.candidate("0", .2, 2., .09, 2.)

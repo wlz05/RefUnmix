@@ -2,6 +2,9 @@
 # RefUnmix: Endpoint-Aligned Fields for Protected Image Editing
 
 import contextlib
+from copy import deepcopy
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -15,7 +18,8 @@ import numpy as np
 from PIL import Image
 import torch
 from engine.metrics import Protocol, connection, pixels, relocate, storage
-from assess import grouped, main
+from assess import grouped, main, parser, population, prediction, verified
+from data import Record
 
 class Calculator:
     def __init__(self):
@@ -240,6 +244,159 @@ class MetricTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 Protocol(calculator).evaluate(self.origin, self.edited, self.mask, "target")
 
+    def testrejectpsnrmismatch(self):
+        calculator = Calculator()
+        with patch.object(calculator, "calculate_psnr", return_value=30.):
+            with self.assertRaisesRegex(RuntimeError, "PSNR"):
+                Protocol(calculator).evaluate(self.origin, self.edited, self.mask, "target")
+
+    def testtinyerrorprotocol(self):
+        origin = Image.new("RGB", (512, 512))
+        values = np.zeros((512, 512, 3), dtype=np.uint8)
+        values[0, 0, 0] = 1
+        edited = Image.fromarray(values)
+        mask = Image.new("L", origin.size, 0)
+        calculator = Calculator()
+        self.assertGreater(Protocol(calculator).evaluate(origin, edited, mask, "target")["raw"]["psnr"], 100.)
+        for result, image in ((0., edited), (1e-13, origin)):
+            with self.subTest(mse=result), patch.object(calculator, "calculate_mse", return_value=result):
+                with self.assertRaisesRegex(RuntimeError, "masking"):
+                    Protocol(calculator).evaluate(origin, image, mask, "target")
+
+    def testexplicitbackend(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                parser().parse_args(["--input", "summary.json"])
+            with self.assertRaises(SystemExit):
+                parser().parse_args(["--input", "summary.json", "--pixels", "--protocol", "protocol.py"])
+        self.assertTrue(Protocol(Calculator()).metadata["complete"])
+        self.assertFalse(Protocol().metadata["complete"])
+        for options in ({"network": True}, {"offline": True}):
+            with self.subTest(options=options), self.assertRaisesRegex(ValueError, "Pixel diagnostics"):
+                Protocol.load(**options)
+
+    def grid(self, count=700, seeds=None):
+        seeds = [42, 52, 3047, 3407] if seeds is None else seeds
+        items = {str(index): SimpleNamespace(category=str(index % 10)) for index in range(count)}
+        rows = [{"key": key, "seed": seed, "image": key + str(seed) + ".png"} for key in items for seed in seeds]
+        return {"rows": rows, "seeds": seeds}, items, seeds
+
+    def testbenchmarkgrid(self):
+        payload, items, seeds = self.grid()
+        result = population(payload, items, seeds, "benchmark")
+        self.assertEqual((result["requests"], result["rows"]), (700, 2800))
+        self.assertTrue(result["benchmarkcomplete"])
+        self.assertEqual(set(result["categories"].values()), {70})
+
+    def testmissingrequestgrid(self):
+        payload, items, seeds = self.grid()
+        for removed in (1, 4):
+            with self.subTest(removed=removed), self.assertRaisesRegex(ValueError, "incomplete"):
+                population({**payload, "rows": payload["rows"][:-removed]}, items, seeds, "benchmark")
+
+    def testbenchmarkpopulation(self):
+        payload, items, seeds = self.grid(699)
+        with self.assertRaisesRegex(ValueError, "700"):
+            population(payload, items, seeds, "benchmark")
+        payload, items, seeds = self.grid()
+        items["0"].category = "unknown"
+        with self.assertRaisesRegex(ValueError, "categories"):
+            population(payload, items, seeds, "benchmark")
+
+    def testsubsetgrid(self):
+        payload, items, seeds = self.grid(2, [42])
+        result = population({**payload, "rows": payload["rows"][:1]}, items, seeds, "subset")
+        self.assertEqual((result["requests"], result["datasetrequests"]), (1, 2))
+        self.assertFalse(result["benchmarkcomplete"])
+
+    def testinvalidgridseed(self):
+        payload, items, seeds = self.grid(2, [42, 52])
+        for value in (True, 42., "42", None, 7):
+            changed = deepcopy(payload)
+            changed["rows"][0]["seed"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "integer seed"):
+                population(changed, items, seeds, "subset")
+        for invalid in ([], [42, 42], [True], [2 ** 64], [-2 ** 63 - 1]):
+            with self.subTest(seeds=invalid), self.assertRaisesRegex(ValueError, "unique supported"):
+                population(payload, items, invalid, "subset")
+
+    def testinvalidgridrows(self):
+        payload, items, seeds = self.grid(2, [42])
+        for rows in (None, [], [None], [{"configuration": {}}]):
+            with self.subTest(rows=rows), self.assertRaises(ValueError):
+                population({"rows": rows}, items, seeds, "subset")
+        with self.assertRaisesRegex(ValueError, "unique"):
+            population({"rows": payload["rows"] * 2}, items, seeds, "subset")
+        changed = deepcopy(payload)
+        changed["rows"][1]["image"] = changed["rows"][0]["image"]
+        with self.assertRaisesRegex(ValueError, "separate prediction"):
+            population(changed, items, seeds, "subset")
+
+    def testdeclaredseeds(self):
+        payload, items, seeds = self.grid(2, [42])
+        for recorded in ([52], [42, 42], [True], "42"):
+            with self.subTest(recorded=recorded), self.assertRaisesRegex(ValueError, "inference summary"):
+                population({**payload, "seeds": recorded}, items, seeds, "subset")
+
+    def testpredictionhash(self):
+        with tempfile.TemporaryDirectory(dir=".") as directory:
+            root = Path(directory).resolve().relative_to(Path.cwd())
+            path = root / "result.png"
+            Image.new("RGB", (512, 512)).save(path)
+            row = {"image": "result.png", "resultsha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            self.assertEqual(prediction(row, root / "summary.json"), path)
+            path.write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "inference hash"):
+                prediction(row, root / "summary.json")
+
+    def testverifiedinputs(self):
+        with tempfile.TemporaryDirectory(dir=".") as directory:
+            root = Path(directory).resolve().relative_to(Path.cwd())
+            image = root / "source.png"
+            Image.new("RGB", (512, 512)).save(image)
+            Image.new("RGB", (512, 512), "white").save(root / "result.png")
+            item = Record("a", image, Path("source.png"), "source", "target", "target", mask=(0, 1))
+            row = {"image": "result.png", "report": {"source": "source", "target": "target"}}
+            self.assertEqual(verified(row, root / "summary.json", item)[0].size, (512, 512))
+            for key in ("source", "target", "imagesha256"):
+                changed = deepcopy(row)
+                changed["report"][key] = "changed"
+                with self.subTest(key=key), self.assertRaisesRegex(ValueError, "no longer match"):
+                    verified(changed, root / "summary.json", item)
+            with self.assertRaisesRegex(ValueError, "inference hash"):
+                verified({**row, "inputsha256": "changed"}, root / "summary.json", item)
+
+    def testassessmentpreflight(self):
+        for failure in ("mapping", "source", "prediction", "shape", "mask", "network"):
+            with self.subTest(failure=failure), self.workspace(), tempfile.TemporaryDirectory(dir=".") as directory:
+                root = Path(directory).resolve().relative_to(Path.cwd())
+                (root / "images").mkdir()
+                original, edited = root / "images/source.png", root / "result.png"
+                Image.new("RGB", (512, 512)).save(original)
+                Image.new("RGB", (512, 512), "white").save(edited)
+                record = {"image": "source.png", "source": "source", "target": "target"}
+                if failure != "mask":
+                    record["mask"] = [0, 1]
+                mapping = root / "mapping.json"
+                mapping.write_text(json.dumps({"a": record}), encoding="utf-8")
+                row = {"key": "a", "seed": 42, "image": "result.png", "inputsha256": hashlib.sha256(original.read_bytes()).hexdigest(), "resultsha256": hashlib.sha256(edited.read_bytes()).hexdigest()}
+                mapped = "changed" if failure == "mapping" else hashlib.sha256(mapping.read_bytes()).hexdigest()
+                if failure in {"source", "prediction"}:
+                    row["inputsha256" if failure == "source" else "resultsha256"] = "changed"
+                if failure == "shape":
+                    Image.new("RGB", (16, 16)).save(edited)
+                    row.pop("resultsha256")
+                payload = {"rows": [row], "inputs": {"mapping": {"sha256": mapped}}}
+                (root / "summary.json").write_text(json.dumps(payload), encoding="utf-8")
+                args = ["assess.py", "--input", str(root / "summary.json"), "--dataset", str(root), "--mapping", "mapping.json", "--images", "images", "--pixels", "--scope", "subset", "--seeds", "42", "--output", str(root / "assessment.json")]
+                if failure == "network":
+                    args.append("--network")
+                expected = {"mapping": "annotation mapping", "source": "inference hash", "prediction": "inference hash", "shape": "512", "mask": "annotation mask", "network": "Pixel diagnostics"}[failure]
+                with patch("sys.argv", args), patch("assess.Protocol.load") as load, self.assertRaisesRegex(ValueError, expected):
+                    main()
+                load.assert_not_called()
+                self.assertFalse((root / "assessment.json").exists())
+
     def testimagegroupedmean(self):
         rows = [{"key": "a", "raw": {"mse": 1.}}, {"key": "a", "raw": {"mse": 3.}}, {"key": "b", "raw": {"mse": 10.}}]
         self.assertEqual(grouped(rows, "raw")["mse"], {"mean": 6., "count": 2})
@@ -252,7 +409,7 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(result["infinite"], 1)
 
     def testassessmentcli(self):
-        with tempfile.TemporaryDirectory(dir=".") as directory:
+        with self.workspace(), tempfile.TemporaryDirectory(dir=".") as directory:
             root = Path(directory).resolve().relative_to(Path.cwd())
             (root / "images").mkdir()
             Image.new("RGB", (512, 512)).save(root / "images" / "source.png")
@@ -260,12 +417,14 @@ class MetricTests(unittest.TestCase):
             mapping = {"A": {"image": "source.png", "source": "source", "target": "target", "mask": [0, 512]}}
             (root / "mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
             (root / "summary.json").write_text(json.dumps({"rows": [{"key": "a", "seed": 1, "image": "result.png"}]}), encoding="utf-8")
-            args = ["assess.py", "--input", str(root / "summary.json"), "--dataset", str(root), "--mapping", "mapping.json", "--images", "images", "--output", str(root / "assessment.json")]
+            args = ["assess.py", "--input", str(root / "summary.json"), "--dataset", str(root), "--mapping", "mapping.json", "--images", "images", "--pixels", "--scope", "subset", "--seeds", "1", "--output", str(root / "assessment.json")]
             with patch("sys.argv", args), patch("builtins.print"):
                 main()
             result = json.loads((root / "assessment.json").read_text(encoding="utf-8"))
             self.assertEqual(result["raw"]["mse"]["count"], 1)
             self.assertFalse(result["backend"]["complete"])
+            self.assertFalse(result["population"]["benchmarkcomplete"])
+            self.assertEqual(result["protocol"], "PIE pixel diagnostics")
             self.assertIsNone(result["rows"][0]["raw"]["lpips"])
 
 if __name__ == "__main__":

@@ -210,6 +210,7 @@ RefUnmix/
 | Python | 3.11 or later |
 | Core | [PyTorch](https://pytorch.org/get-started/locally/), NumPy, Pillow, SciPy |
 | Frozen models | [diffusers](https://huggingface.co/docs/diffusers/), [transformers](https://huggingface.co/docs/transformers/), safetensors, accelerate |
+| Official PIE scoring | torchvision matched to PyTorch, torchmetrics, lpips; external calculator below |
 | Flow text encoders | sentencepiece, protobuf |
 | Saved Hugging Face datasets | datasets, pyarrow; optional |
 | Local interface | gradio; optional |
@@ -468,8 +469,12 @@ Evaluation follows the PIE-Bench protocol in [ChordEdit](https://arxiv.org/abs/2
 | PSNR | Non-edited | Pixel reconstruction fidelity in dB | Higher |
 | MSE x 1,000 | Non-edited | Mean squared pixel error | Lower |
 | LPIPS x 1,000 | Non-edited | Perceptual distance from the source | Lower |
+| SSIM x 100 | Non-edited | Structural similarity to the source | Higher |
+| DINO Structure Distance x 1,000 | Whole image | Difference between DINO self-similarity structures | Lower |
 | CLIP-Whole | Whole image | Alignment with the target caption | Higher |
 | CLIP-Edited | Edited region | Local alignment with the target caption | Higher |
+
+PIE applies the non-edited mask to both images before computing preservation metrics. MSE retains the full-canvas denominator, and PSNR uses that MSE. CLIP-Edited scores the full canvas with pixels outside the edit region set to black. The calculator uses CLIP ViT-L/14, SqueezeNet LPIPS, and DINO ViT-B/8. Use the postselection assessment's `raw` or `table` fields for benchmark results. The inference `summary.json` contains diagnostics, including region-normalized errors, which use a different denominator.
 
 Efficiency is reported as denoiser evaluations, forward calls, VAE decodes, runtime in seconds, and peak GPU memory. Field and controller comparisons use matched evaluation budgets.
 
@@ -783,7 +788,7 @@ Native probes use raw mode with priors and controller diagnostics disabled. Disc
 
 ### Official PIE Metrics
 
-Save the [PIE-Bench metric calculator](https://github.com/cure-lab/PnPInversion/blob/main/evaluation/matrics_calculator.py) as `protocol/metrics.py` outside the RefUnmix checkout. Keep its `MetricsCalculator` interface and use the same calculator version and metric weights for every method. Install a torchvision build matching PyTorch, then the metric dependencies:
+Download the [PIE-Bench metric calculator](https://raw.githubusercontent.com/cure-lab/PnPInversion/f480116dda7576ea258aca9ac6346c9d9000d49d/evaluation/matrics_calculator.py) at revision `f480116` and save its Python source as `protocol/metrics.py` outside the RefUnmix checkout. Keep its `MetricsCalculator` interface and use the same calculator version, package versions, and metric weights for every method. Install a torchvision build matching PyTorch, then the metric dependencies:
 
 ```bash
 python -m pip install torchmetrics lpips
@@ -792,12 +797,23 @@ python -m pip install torchmetrics lpips
 The official calculator loads CLIP, LPIPS, and DINO assets. Use `--network` to populate or update `cache/metrics`, then use `--offline` to score with the completed cache. These modes are mutually exclusive. The relative cache uses the [Hugging Face cache settings](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables) and PyTorch Hub directory, and is shared by the three- and four-request workflows. Generation remains separate from postselection scoring.
 
 ```bash
-python -B RefUnmix/assess.py --input outputs/main/summary.json --dataset data --mapping mapping_file.json --images annotation_images --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/mainmetrics.json
-python -B RefUnmix/assess.py --input outputs/matched/summary.json --dataset data --mapping mapping_file.json --images annotation_images --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/matchedmetrics.json
-python -B RefUnmix/assess.py --input outputs/fieldstest/pullbackfull/summary.json --dataset data --mapping mapping_file.json --images annotation_images --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/fieldmetrics.json
+python -B RefUnmix/assess.py --input outputs/main/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/mainmetrics.json
+python -B RefUnmix/assess.py --input outputs/matched/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/matchedmetrics.json
+python -B RefUnmix/assess.py --input outputs/fieldstest/pullbackfull/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/fieldmetrics.json
 ```
 
-Score other variants with the same command by changing only `--input` and `--output`. The input is a variant's inference summary, not the suite-level summary. Official scoring requires 512 x 512 source images, outputs, and annotation geometry. Omitting `--protocol` runs pixel-only scoring and leaves perceptual and CLIP metrics unavailable.
+Score other variants with the same command by changing only `--input` and `--output`. The input is a variant's inference summary, not the suite-level summary. `--scope benchmark` checks all 700 request keys, categories 0 through 9, and exactly one result per declared request-seed pair: 2,800 rows for the four-seed experiment. Source images, outputs, and annotation geometry must be 512 x 512. Prediction paths must be distinct. Saved image hashes, source hashes, captions, and the mapping hash are checked when present in the inference summary, before metric weights load. Results retain the calculator hash, package versions, population counts, and per-metric coverage.
+
+`--protocol` and `--pixels` are explicit, mutually exclusive modes. Missing calculator files stop external scoring. Pixel diagnostics require `--pixels`; they report PSNR and MSE without downloading metric weights. For a short smoke run using the main defaults:
+
+```bash
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --limit 3 --model models --clip clip --device cuda:0 --precision fp32 --seeds 42 --maxsamples 64 --maxcalls 64 --output outputs/smoke
+python -B RefUnmix/assess.py --input outputs/smoke/summary.json --dataset data --mapping mapping_file.json --images annotation_images --pixels --scope subset --seeds 42 --output outputs/smokepixels.json
+```
+
+`--scope subset` assesses the request keys present in a diagnostic summary and requires every declared seed for each included request. Such reports record `population.benchmarkcomplete = false`. Use `--protocol protocol/metrics.py --network` instead of `--pixels` to measure the full metric set on that same subset. Pixel mode accepts neither `--network` nor `--offline`.
+
+The [ChordEdit export script](https://github.com/ChordEdit/ChordEdit/blob/main/run_pie_bench.py) defaults to seed 42. For a single-seed reproduction, generate both methods with seed 42 and assess with `--seeds 42`; for the four-seed table, rerun both methods with all four seeds. RefUnmix saves lossless PNGs. Use the same image encoding for newly generated comparisons: ChordEdit's exporter retains the input extension, so a JPEG extension adds compression. Score the saved files for every method with the same calculator.
 
 Assessments contain `raw`, scaled `table`, and metric-specific `coverage`. MSE, LPIPS, and DINO structure distance use x1,000; SSIM uses x100; PSNR is in dB. Empty protected regions remain undefined for preservation metrics; zero-error PSNR is recorded as positive infinity. The scorer averages seeds within each request key, then averages those request scores. Report each metric's valid denominator, alongside all 700 requests and four seeds.
 
@@ -808,7 +824,7 @@ Copy the complete `cache/metrics/` tree with the workspace. Retain Hugging Face 
 From the new workspace root, run the same Python command with `--offline` and a fresh assessment output:
 
 ```bash
-python -B RefUnmix/assess.py --input outputs/main/summary.json --dataset data --mapping mapping_file.json --images annotation_images --protocol protocol/metrics.py --device cuda:0 --offline --cache cache/metrics --output outputs/mainoffline.json
+python -B RefUnmix/assess.py --input outputs/main/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --offline --cache cache/metrics --output outputs/mainoffline.json
 ```
 
 Offline scoring reads cached assets and blocks network connections during calculator loading and scoring. Missing assets stop the run; populate the cache with `--network` before copying it. The saved assessment records its cache paths and offline mode. Pixel-only scoring needs neither flag and creates no metric cache.

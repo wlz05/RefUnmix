@@ -122,7 +122,7 @@ def pixels(origin, edited, mask):
 
 class Protocol:
     def __init__(self, calculator=None, metadata=None):
-        self.calculator, self.metadata = calculator, metadata or {"backend": "pixel-only", "complete": False}
+        self.calculator, self.metadata = calculator, metadata if metadata is not None else {"backend": "external" if calculator is not None else "pixel-only", "complete": calculator is not None}
 
     @classmethod
     def load(cls, path=None, device="cpu", network=False, cache="./cache/metrics", offline=False):
@@ -130,6 +130,8 @@ class Protocol:
         if not isinstance(offline, bool) or not isinstance(network, bool) or offline and network:
             raise ValueError("Choose exactly one external metric mode: --network or --offline.")
         if path is None:
+            if network or offline:
+                raise ValueError("Pixel diagnostics do not use --network or --offline.")
             return cls()
         source = locate(Path("."), clean(path, "protocol"))
         if source.suffix != ".py" or not source.is_file():
@@ -142,6 +144,8 @@ class Protocol:
         module = importlib.util.module_from_spec(spec)
         with connection(offline):
             spec.loader.exec_module(module)
+            if not callable(getattr(module, "MetricsCalculator", None)):
+                raise ValueError("Metric module must expose a MetricsCalculator constructor.")
             calculator = module.MetricsCalculator(device)
         names = ("calculate_psnr", "calculate_mse", "calculate_lpips", "calculate_ssim", "calculate_structure_distance", "calculate_clip_similarity")
         if any(not callable(getattr(calculator, name, None)) for name in names):
@@ -175,12 +179,14 @@ class Protocol:
             if area is not None and np.any(area < 1):
                 protected = 1 - area
                 measured = call("calculate_mse", origin, edited, protected, protected)
-                if not math.isclose(measured, raw["mse"], rel_tol=1e-4, abs_tol=1e-8):
+                if (measured == 0) != (raw["mse"] == 0) or not math.isclose(measured, raw["mse"], rel_tol=1e-4, abs_tol=1e-12):
                     raise RuntimeError("External metric masking differs from the expected pixel protocol.")
                 for name in ("lpips", "ssim"):
                     raw[name] = call("calculate_" + name, origin, edited, protected, protected)
                 if measured > 0:
                     raw["psnr"] = call("calculate_psnr", origin, edited, protected, protected)
+                    if not math.isclose(raw["psnr"], -10 * math.log10(measured), rel_tol=1e-5, abs_tol=1e-4):
+                        raise RuntimeError("External PSNR differs from the expected pixel protocol.")
         factors = {"mse": 1000, "lpips": 1000, "ssim": 100, "structure": 1000}
         for name, value in raw.items():
             if name not in status:

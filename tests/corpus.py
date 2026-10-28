@@ -545,7 +545,7 @@ class CorpusTests(unittest.TestCase):
         from assess import main as assessmain
         convert("emu", self.dump({"a": self.emu()}), "raw", "prepared")
         self.dump({"rows": [{"key": "val-0", "seed": 1, "image": "result.png"}]}, "raw/summary.json")
-        args = ["assess.py", "--input", "raw/summary.json", "--dataset", "prepared", "--mapping", "mapping.json", "--images", "images"]
+        args = ["assess.py", "--input", "raw/summary.json", "--dataset", "prepared", "--mapping", "mapping.json", "--images", "images", "--pixels"]
         with patch("sys.argv", args), patch("assess.Protocol.load") as backend:
             with self.assertRaisesRegex(ValueError, "PIE protocol"):
                 assessmain()
