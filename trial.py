@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 from data import clean, destination, locate
-from evaluate import datasetargs, evaluator, execute, items
+from evaluate import AGGREGATION, datasetargs, evaluator, execute, items
 from run import common, jsonfile, load, validate, writejson
 from split import identities, pixels
 from engine.serial import read
@@ -209,14 +209,14 @@ def main():
             raise ValueError("An ablation arm used changed source image bytes.")
         if payload["controlsignature"]["sha256"] != plan["variants"][label]["sha256"]:
             raise RuntimeError("Executed control settings differ from the checked ablation plan.")
-        results[label] = {"summary": payload["summary"], "cost": payload["cost"], "controller": payload["controller"], "controlsignature": payload["controlsignature"], "changes": plan["variants"][label]["changes"], "path": (output / label / "summary.json").as_posix(), "rows": len(payload["rows"])}
+        results[label] = {"summary": payload["summary"], "byseed": payload["byseed"], "seeds": payload["seeds"], "aggregation": payload["aggregation"], "cost": payload["cost"], "controller": payload["controller"], "controlsignature": payload["controlsignature"], "changes": plan["variants"][label]["changes"], "path": (output / label / "summary.json").as_posix(), "rows": len(payload["rows"])}
     if any(digest(path) != inputs[key] for key, path in paths.items()):
         raise ValueError("Ablation inputs changed before publication.")
     items(args)
     if args.split == "val":
         recipe = {"schema": 1, "split": "val", "suite": args.suite, "settings": settings(args), "checkpoints": checkpoints, "variants": controls, "digests": identities(chosen), "pixels": pixels(chosen), "paired": pixels(chosen, True), "group": sorted({item.group for item in chosen if item.group}), "family": sorted({item.family for item in chosen if item.family}), "manifestdigest": inputs["manifest"], "mappingdigest": inputs["mapping"], "note": "Configurations are frozen; no test-based winner is selected."}
         writejson(output / "recipe.json", recipe)
-    writejson(output / "summary.json", {"schema": 1, "split": args.split, "settings": vars(args), "design": plan, "variants": results, "note": "Controller proxies and consistency remain diagnostics; use independent evidence."})
+    writejson(output / "summary.json", {"schema": 1, "split": args.split, "settings": vars(args), "seeds": settings(args)["seeds"], "aggregation": AGGREGATION, "design": plan, "variants": results, "note": "Controller proxies and consistency remain diagnostics; use independent evidence."})
 
 if __name__ == "__main__":
     main()

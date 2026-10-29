@@ -410,6 +410,37 @@ class MetricTests(unittest.TestCase):
         rows = [{"key": "a", "seed": 42, "raw": {"mse": 2.}}, {"key": "a", "seed": 52, "raw": {"mse": None}}]
         self.assertIsNone(grouped(rows, "raw")["mse"]["mean"])
 
+    def teststoredseedmeans(self):
+        with self.workspace(), tempfile.TemporaryDirectory(dir=".") as directory:
+            root = Path(directory).resolve().relative_to(Path.cwd())
+            (root / "images").mkdir()
+            mapping, rows = {}, []
+            seeds = [42, 52, 3047, 3407]
+            for image, key in enumerate(("a", "b")):
+                Image.new("RGB", (512, 512), (image * 10,) * 3).save(root / "images" / (key + ".png"))
+                mapping[key] = {"image": key + ".png", "source": "source", "target": "target", "mask": [0, 1]}
+                for index, seed in enumerate(seeds):
+                    name = key + str(seed) + ".png"
+                    Image.new("RGB", (512, 512), (20 + 10 * index + image,) * 3).save(root / name)
+                    rows.append({"key": key, "seed": seed, "image": name})
+            (root / "mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
+            (root / "summary.json").write_text(json.dumps({"rows": rows, "seeds": seeds}), encoding="utf-8")
+            args = ["assess.py", "--input", str(root / "summary.json"), "--dataset", str(root), "--mapping", "mapping.json", "--images", "images", "--pixels", "--scope", "subset", "--output", str(root / "assessment.json")]
+            with patch("sys.argv", args), patch("builtins.print"):
+                main()
+            report = json.loads((root / "assessment.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(report["byseed"]), set(map(str, seeds)))
+            for field in ("raw", "table"):
+                for metric in ("mse", "psnr"):
+                    means = []
+                    for seed in seeds:
+                        values = [row[field][metric] for row in report["rows"] if row["seed"] == seed]
+                        observed = report["byseed"][str(seed)][field][metric]
+                        self.assertEqual(observed, {"mean": sum(values) / 2, "count": 2})
+                        means.append(observed["mean"])
+                    self.assertEqual(report[field][metric]["mean"], sum(means) / 4)
+            self.assertAlmostEqual(report["table"]["mse"]["mean"], 1000 * report["raw"]["mse"]["mean"])
+
     def testinfiniteaggregation(self):
         rows = [{"key": "a", "raw": {"psnr": None}, "status": {"psnr": "positive infinity"}}, {"key": "a", "raw": {"psnr": 30.}}, {"key": "b", "raw": {"psnr": 40.}}]
         result = grouped(rows, "raw")["psnr"]

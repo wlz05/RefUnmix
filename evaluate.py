@@ -18,6 +18,8 @@ from engine.reproduce import digest, snapshot
 from engine.serial import read as readjson
 from engine.protocol import signature
 
+AGGREGATION = "Arithmetic mean across requests within each seed, then arithmetic mean across seed results."
+
 def datasetargs(parser):
     parser.add_argument("--dataset", default="./pie")
     parser.add_argument("--mapping", default="./mapping_file.json")
@@ -122,17 +124,30 @@ def seeded(rows):
         groups.setdefault(row["seed"], []).append({key: value for key, value in row.items() if key != "seed"})
     return {str(seed): summary(values) for seed, values in sorted(groups.items())}
 
+def averaged(rows, separate):
+    # Reduce the same seed results that are saved in the report.
+    if set(separate) != {str(row["seed"]) for row in rows}:
+        raise ValueError("Seed summaries do not match the evaluated seed set.")
+    result = {}
+    for key in sorted({key for row in rows for key in row["metrics"]}):
+        values = [separate[str(seed)].get(key, {}).get("mean") for seed in sorted({row["seed"] for row in rows})]
+        valid = {str(row.get("key", index)) for index, row in enumerate(rows) if isinstance(row["metrics"].get(key), (int, float)) and not isinstance(row["metrics"].get(key), bool) and math.isfinite(row["metrics"][key])}
+        result[key] = {"mean": sum(values) / len(values) if values and all(value is not None for value in values) else None, "count": len(valid)}
+    return result
+
+def complete(rows, seeds, keys):
+    if any(type(row.get("seed")) is not int or not isinstance(row.get("key"), str) for row in rows):
+        raise ValueError("Completed results require request keys and integer seeds.")
+    observed = {(row["key"], row["seed"]) for row in rows}
+    expected = {(key, seed) for key in keys for seed in seeds}
+    if len(observed) != len(rows) or observed != expected:
+        raise ValueError("Completed results must contain exactly one row per requested image and seed.")
+
 def summary(rows):
     keys = sorted({key for row in rows for key in row["metrics"]})
     if any("seed" in row for row in rows):
         # Average requests within each seed before averaging seed results.
-        separate = seeded(rows)
-        result = {}
-        for key in keys:
-            values = [value.get(key, {}).get("mean") for value in separate.values()]
-            valid = {str(row.get("key", index)) for index, row in enumerate(rows) if isinstance(row["metrics"].get(key), (int, float)) and not isinstance(row["metrics"].get(key), bool) and math.isfinite(row["metrics"][key])}
-            result[key] = {"mean": sum(values) / len(values) if values and all(value is not None for value in values) else None, "count": len(valid)}
-        return result
+        return averaged(rows, seeded(rows))
     result = {}
     for key in keys:
         grouped = {}
@@ -167,12 +182,13 @@ def costs(rows):
         for key, value in values.items():
             if isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
                 grouped.setdefault(key, {}).setdefault(str(row.get("key", index)), []).append(float(value))
-    result, means = {}, summary(measurements)
+    separate = seeded(measurements) if measurements and all("seed" in row for row in measurements) else {}
+    result, means = {}, averaged(measurements, separate) if separate else summary(measurements)
     for key, groups in sorted(grouped.items()):
         values = [sum(group) / len(group) for group in groups.values()]
         result[key] = {"mean": means[key]["mean"], "median": float(np.median(values)), "p95": float(np.percentile(values, 95)), "sources": len(values)}
     concurrent = any(row.get("concurrent") for row in rows)
-    return {"metrics": result, "aggregation": "Means average requests within each seed, then seeds; median and p95 summarize per-request seed averages.", "scope": "Concurrent request latency includes queue waits, while execution.throughput measures complete dataset throughput." if concurrent else "Synchronized per-image inference excludes checkpoint loading and independent report scoring."}
+    return {"metrics": result, "byseed": separate, "aggregation": "Means average requests within each seed, then seeds; median and p95 summarize per-request seed averages.", "scope": "Concurrent request latency includes queue waits, while execution.throughput measures complete dataset throughput." if concurrent else "Synchronized per-image inference excludes checkpoint loading and independent report scoring."}
 
 def coverage(rows):
     # Count executed mechanisms separately from enabled switches.
@@ -300,6 +316,7 @@ def execute(args, resources=None):
                         getattr(editor, name).clear()
                 if gpu:
                     memorytrace.append({"completed": len(rows), "allocated": torch.cuda.memory_allocated(editor.device) / 2 ** 20, "reserved": torch.cuda.memory_reserved(editor.device) / 2 ** 20, "peakreserved": torch.cuda.max_memory_reserved(editor.device) / 2 ** 20})
+            complete(rows, seeds, {item.key for item in chosen})
             calls = sum(row["report"].get("stats", {}).get("calls", 0) for row in rows)
             samples = sum(row["report"].get("stats", {}).get("samples", 0) for row in rows)
             dispatch = parallel.report() if parallel is not None else {"width": 1, "sharedweights": True, "denoisercalls": calls, "denoiserrequests": calls, "denoisersamples": samples}
@@ -313,9 +330,10 @@ def execute(args, resources=None):
         raise
     sync(editor.device)
     elapsed = time.perf_counter() - started
-    payload = {"schema": 1, "split": args.split, "manifest": args.manifest, "oracle": args.oracle, "independentcheckpoint": independent, "controlcheckpoint": getattr(judge, "metadata", None), "reportcheckpoint": getattr(evaluation, "metadata", None), "evaluatornote": "Different CLIP weights remain shared-family diagnostics, not independent task evidence.", "metricnote": "Pixel, band, and paired errors are diagnostics, not official benchmark protocols.", "settings": settings, "seeds": seeds, "inputs": provenance, "reproducibility": snapshot(), "summary": summary(rows), "categories": {category: summary([row for row in rows if row["category"] == category]) for category in sorted({row["category"] for row in rows})}, "rows": rows}
+    payload = {"schema": 1, "split": args.split, "manifest": args.manifest, "oracle": args.oracle, "independentcheckpoint": independent, "controlcheckpoint": getattr(judge, "metadata", None), "reportcheckpoint": getattr(evaluation, "metadata", None), "evaluatornote": "Different CLIP weights remain shared-family diagnostics, not independent task evidence.", "metricnote": "Pixel, band, and paired errors are diagnostics, not official benchmark protocols.", "settings": settings, "seeds": seeds, "inputs": provenance, "reproducibility": snapshot(), "categories": {category: summary([row for row in rows if row["category"] == category]) for category in sorted({row["category"] for row in rows})}, "rows": rows}
     payload["byseed"] = seeded(rows)
-    payload["aggregation"] = "Arithmetic mean across requests within each seed, then arithmetic mean across seed results."
+    payload["summary"] = averaged(rows, payload["byseed"])
+    payload["aggregation"] = AGGREGATION
     payload["cost"] = costs(rows)
     peak = torch.cuda.max_memory_allocated(editor.device) / 2 ** 20 if gpu and width > 1 else max((row["vram"] for row in rows if row["vram"] is not None), default=None)
     payload["execution"] = {**dispatch, "requested": getattr(args, "batch", 1), "requests": len(rows), "seconds": elapsed, "throughput": len(rows) / elapsed, "residentvram": resident, "peakvram": peak, "residentreservedvram": residentreserved, "finalvram": torch.cuda.memory_allocated(editor.device) / 2 ** 20 if gpu else None, "reservedvram": torch.cuda.memory_reserved(editor.device) / 2 ** 20 if gpu else None, "peakreservedvram": max((row["peakreserved"] for row in memorytrace), default=None), "memorytrace": memorytrace, "scope": "End-to-end dataset throughput includes input loading, control, independent scoring, and output writes; checkpoint loading is excluded. Memory values are MiB; reserved memory includes allocator caches."}

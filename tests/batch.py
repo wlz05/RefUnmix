@@ -472,7 +472,8 @@ class BatchTests(unittest.TestCase):
                 os.chdir(folder)
                 Path("data/images").mkdir(parents=True)
                 Image.new("RGB", (16, 16), (70, 90, 120)).save("data/images/source.png")
-                Path("data/map.json").write_text(json.dumps({"sample": {"image": "source.png", "source": "source", "target": "target long"}}), encoding="utf-8")
+                Image.new("RGB", (16, 16), (30, 60, 90)).save("data/images/second.png")
+                Path("data/map.json").write_text(json.dumps({key: {"image": image, "source": "source", "target": "target long"} for key, image in (("sample", "source.png"), ("second", "second.png"))}), encoding="utf-8")
                 args = datasetargs(common(argparse.ArgumentParser())).parse_args(["--dataset", "data", "--mapping", "map.json", "--images", "images", "--split", "all", "--seeds", "42", "52", "3047", "3407", "--size", "16", "--clip", "clip", "--maxsamples", "15", "--maxcalls", "15", "--output", "outputs"])
                 for family, build in (("vp", editor), ("flux", floweditor)):
                     args.backbone, args.output = family, "outputs" + family
@@ -480,12 +481,15 @@ class BatchTests(unittest.TestCase):
                     resources = (current, ClipJudge(Clip(), Processor()), ClipJudge(Clip(), Processor()), True)
                     with self.subTest(family=family), contextlib.redirect_stdout(io.StringIO()):
                         payload = execute(args, resources)
-                    self.assertEqual([row["seed"] for row in payload["rows"]], [42, 52, 3047, 3407])
+                    self.assertEqual([row["seed"] for row in payload["rows"]], [42, 52, 3047, 3407] * 2)
                     self.assertEqual(set(payload["byseed"]), {"42", "52", "3047", "3407"})
                     for seed in (42, 52, 3047, 3407):
-                        row = next(row for row in payload["rows"] if row["seed"] == seed)
-                        self.assertEqual(payload["byseed"][str(seed)]["mse"]["mean"], row["metrics"]["mse"])
+                        observed = [row["metrics"]["mse"] for row in payload["rows"] if row["seed"] == seed]
+                        self.assertEqual(payload["byseed"][str(seed)]["mse"], {"mean": sum(observed) / 2, "count": 2})
+                        samples = [row["report"]["stats"]["samples"] for row in payload["rows"] if row["seed"] == seed]
+                        self.assertEqual(payload["cost"]["byseed"][str(seed)]["samples"]["mean"], sum(samples) / 2)
                     self.assertAlmostEqual(payload["summary"]["mse"]["mean"], sum(payload["byseed"][str(seed)]["mse"]["mean"] for seed in (42, 52, 3047, 3407)) / 4)
+                    self.assertEqual(payload["cost"]["metrics"]["samples"]["mean"], sum(payload["cost"]["byseed"][str(seed)]["samples"]["mean"] for seed in (42, 52, 3047, 3407)) / 4)
                     self.assertEqual(payload["execution"]["width"], 3)
                     self.assertGreater(payload["execution"]["throughput"], 0)
                     self.assertTrue(payload["execution"]["accounting"]["checked"])

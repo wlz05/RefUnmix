@@ -524,6 +524,8 @@ With the complete release, each command exports **2,800 image-seed outputs from 
 
 Each predeclared suite runs on the same **700 PIE-Bench requests and four seeds** as the main experiment. Run its command once with `--split all`; the suite evaluates every named variant and writes one result directory per variant. The commands below need no split manifest or validation recipe.
 
+For every variant and metric, first compute one mean over all test requests for each seed, then average the four seed means with equal weight. Each variant's own `summary.json` and the suite's `variants[arm]` entry retain the same `byseed`, `summary`, `seeds`, and `aggregation` fields. A complete four-seed benchmark contains 700 request scores per seed and 2,800 rows per variant. Missing or duplicate request-seed rows stop publication of a complete inference summary.
+
 Each suite inherits the supplied main configuration and applies its named interventions. `full` retains the main controls; its label is `pullbackfull` in `fields` and `controlled` in `alignment`. Explicit settings such as native steps, reference path, prior, and rescue are preserved in that reference arm.
 
 Check the twelve-arm field plan before loading data or checkpoints:
@@ -780,7 +782,7 @@ python -B RefUnmix/probe.py --image input.png --source "a blue shirt" --target "
 
 `field.capacity` contains `lineerror`, `spanerror`, and `directionroom`: the normalized squared errors $`E_{\mathrm{line}}`$, $`E_{\mathrm{span}}`$, and their difference $`G_F`$. Its `rank` is the resolved output-response rank; `field.rank` is the input-contrast rank. Both fits use the same SVD truncation and the same paid response probes. The scalar fit permits either sign. Zero requests have null normalized errors; zero responses have unit errors and zero direction room. The same diagnostic is saved for coupled and norm-matched scalar arms before their different fields are applied.
 
-These diagnostics use the native field endpoint before reference control. Pullback runs already save them from paid endpoints; evaluation summaries aggregate available values by request before averaging, and `audit.py` includes them in paired comparisons. The probe command adds source-condition endpoints for mechanism analysis and reports its complete cost. Response fit is evaluated separately from final editing quality.
+These diagnostics use the native field endpoint before reference control. Pullback runs already save them from paid endpoints; evaluation summaries first average available request values within each seed, then average the seed results, and `audit.py` includes them in paired comparisons. The probe command adds source-condition endpoints for mechanism analysis and reports its complete cost. Response fit is evaluated separately from final editing quality.
 
 Controller history records `verification` for every queried non-geometry proposal, including rejected proposals: `predictedgain`, `actualgain`, `predicteddamagechange`, and `actualdamagechange`. Each change is measured from the current anchor. Gains use the frozen control heads and scales; independent task annotations evaluate the final image. `audit.py` averages release-query changes under `release:verified...`, then averages seeds within each request for paired comparisons. This connects predicted compensation to its measured finite-step effect.
 
@@ -816,6 +818,17 @@ python -B RefUnmix/assess.py --input outputs/smoke/summary.json --dataset data -
 The [ChordEdit export script](https://github.com/ChordEdit/ChordEdit/blob/main/run_pie_bench.py) defaults to seed 42. For a single-seed reproduction, generate both methods with seed 42 and assess with `--seeds 42`; for the four-seed table, rerun both methods with all four seeds. RefUnmix saves lossless PNGs. Use the same image encoding for newly generated comparisons: ChordEdit's exporter retains the input extension, so a JPEG extension adds compression. Score the saved files for every method with the same calculator.
 
 Assessments contain `raw`, scaled `table`, per-seed results in `byseed`, and metric-specific `coverage`. MSE, LPIPS, and DINO structure distance use x1,000; SSIM uses x100; PSNR is in dB. Empty protected regions remain undefined for preservation metrics; zero-error PSNR is recorded as positive infinity. For each metric, first average its valid request scores separately for seeds 42, 52, 3047, and 3407, then take the arithmetic mean of those four results. Each seed has equal weight. A metric with no valid requests for any one seed has an undefined overall mean. Report the per-seed results and valid denominators alongside the final four-seed mean.
+
+Final means are computed directly from the saved seed-level means. The result locations are:
+
+| Report | Per-seed metric mean | Final four-seed mean |
+|--------|----------------------|----------------------|
+| Main or individual variant inference | `byseed[seed][metric].mean` | `summary[metric].mean` |
+| Ablation suite | `variants[arm].byseed[seed][metric].mean` | `variants[arm].summary[metric].mean` |
+| Official unscaled assessment | `byseed[seed].raw[metric].mean` | `raw[metric].mean` |
+| Official table assessment | `byseed[seed].table[metric].mean` | `table[metric].mean` |
+
+For example, the final MSE is `(MSE42 + MSE52 + MSE3047 + MSE3407) / 4`, where each term is that seed's dataset mean. Inference reports also retain cost means in `cost.byseed`; `cost.metrics[metric].mean` follows the same seed-first order. Cost medians and p95 describe the distribution of per-request seed averages. Postselection assessment supplies the official table metrics.
 
 ### Reuse the Metric Cache After Moving
 

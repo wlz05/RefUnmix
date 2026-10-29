@@ -386,7 +386,7 @@ class CorpusTests(unittest.TestCase):
         arguments = ["trial.py", "--dataset", "data", "--mapping", "map.json", "--images", "images", "--manifest", "split.json", "--split", "val", "--suite", "core", "--size", "16", "--clip", "clip", "--batch", "1", "--output", "trial"]
 
         def execute(current, resources):
-            result = {"controlsignature": signature(current), "inputs": {"mapping": {"sha256": digest("data/map.json")}, "manifest": {"sha256": digest("split.json")}}, "summary": {}, "cost": {}, "controller": {}, "rows": []}
+            result = {"controlsignature": signature(current), "inputs": {"mapping": {"sha256": digest("data/map.json")}, "manifest": {"sha256": digest("split.json")}}, "summary": {}, "byseed": {}, "seeds": [current.seed], "aggregation": "fixture", "cost": {}, "controller": {}, "rows": []}
             with Path("data/map.json").open("a", encoding="utf-8") as handle:
                 handle.write("\n")
             return result
@@ -398,6 +398,7 @@ class CorpusTests(unittest.TestCase):
         self.assertFalse(Path("trial/recipe.json").exists())
 
     def testbenchmarktrials(self):
+        from evaluate import AGGREGATION
         from engine.protocol import signature
         from engine.reproduce import digest
         from split import identities
@@ -415,7 +416,7 @@ class CorpusTests(unittest.TestCase):
             chosen = items(current)
             observed.append([item.key for item in chosen])
             rows = [{"key": key, "inputsha256": value} for key, value in identities(chosen).items()]
-            return {"controlsignature": signature(current), "inputs": {"mapping": {"sha256": digest("data/map.json")}}, "summary": {}, "cost": {}, "controller": {}, "rows": rows}
+            return {"controlsignature": signature(current), "inputs": {"mapping": {"sha256": digest("data/map.json")}}, "summary": {}, "byseed": {str(current.seed): {}}, "seeds": [current.seed], "aggregation": AGGREGATION, "cost": {}, "controller": {}, "rows": rows}
 
         with patch("sys.argv", arguments), patch("trial.load", return_value=(types.SimpleNamespace(metadata={"weights": "fixture"}), None)), patch("trial.execute", side_effect=execute):
             trialmain()
@@ -424,6 +425,8 @@ class CorpusTests(unittest.TestCase):
         self.assertEqual(len(observed), 6)
         self.assertTrue(all(keys == ["0", "1", "2"] for keys in observed))
         self.assertTrue(all(arm["rows"] == 3 for arm in payload["variants"].values()))
+        self.assertEqual(payload["seeds"], [42])
+        self.assertTrue(all(arm["byseed"] == {"42": {}} for arm in payload["variants"].values()))
         self.assertFalse(Path("trial/recipe.json").exists())
 
     def testofficialtag(self):
@@ -476,6 +479,13 @@ class CorpusTests(unittest.TestCase):
                         self.assertNotIn("\\", variant["path"])
                         self.assertTrue(Path(variant["path"]).is_file())
                         payload = json.loads(Path(output, label, "summary.json").read_text(encoding="utf-8"))
+                        self.assertEqual(variant["byseed"], payload["byseed"])
+                        self.assertEqual(variant["summary"], payload["summary"])
+                        self.assertEqual(variant["seeds"], [42, 52, 3047, 3407])
+                        for metric, result in variant["summary"].items():
+                            seedmeans = [variant["byseed"][str(seed)][metric]["mean"] for seed in variant["seeds"]]
+                            expected = sum(seedmeans) / 4 if all(value is not None for value in seedmeans) else None
+                            self.assertEqual(result["mean"], expected)
                         self.assertEqual({row["key"] for row in payload["rows"]}, set(subsets[subset]))
                         self.assertEqual({row["seed"] for row in payload["rows"]}, {42, 52, 3047, 3407})
                         self.assertEqual(len(payload["rows"]), 4)

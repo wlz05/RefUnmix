@@ -10,7 +10,7 @@ from unittest.mock import patch
 from PIL import Image
 import torch
 from data import Record, clean, locate
-from evaluate import identifier, metrics, regions, seeded, summary
+from evaluate import averaged, complete, identifier, metrics, regions, seeded, summary
 from run import common, parser, run, times, validate
 from split import create, select
 from study import choose, configurations, field, frozen
@@ -184,11 +184,25 @@ class WorkflowTests(unittest.TestCase):
         separate = seeded(rows)
         self.assertEqual([separate[str(seed)]["value"]["mean"] for seed in (42, 52, 3047, 3407)], [1., 10., 20., 30.])
         self.assertEqual(summary(rows)["value"], {"mean": 15.25, "count": 2})
+        self.assertEqual(averaged(rows, separate), summary(rows))
+        with self.assertRaisesRegex(ValueError, "seed set"):
+            averaged(rows, {"42": separate["42"]})
         rows[0]["metrics"]["value"] = rows[1]["metrics"]["value"] = None
         self.assertIsNone(summary(rows)["value"]["mean"])
         rows[0].pop("seed")
         with self.assertRaisesRegex(ValueError, "integer seed"):
             summary(rows)
+
+    def testcompletegrid(self):
+        seeds, keys = [42, 52, 3047, 3407], {"a", "b"}
+        rows = [{"key": key, "seed": seed} for key in keys for seed in seeds]
+        complete(rows, seeds, keys)
+        for values in (rows[:-1], rows[:-4], rows + rows[:1], rows + [{"key": "extra", "seed": 42}]):
+            with self.subTest(rows=len(values)), self.assertRaisesRegex(ValueError, "exactly one"):
+                complete(values, seeds, keys)
+        for value in (True, 42., "42"):
+            with self.subTest(seed=value), self.assertRaisesRegex(ValueError, "integer seeds"):
+                complete([{**rows[0], "seed": value}, *rows[1:]], seeds, keys)
 
     def testgroupedmanifest(self):
         with tempfile.TemporaryDirectory(dir=".") as directory:

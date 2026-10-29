@@ -9,7 +9,7 @@ from pathlib import Path
 from data import clean, destination, locate, records
 from dataset import annotation
 from engine.metrics import Protocol, inputs as metricinputs
-from evaluate import summary
+from evaluate import AGGREGATION, averaged, summary
 from run import writejson
 from engine.format import read
 from engine.reproduce import digest, versions
@@ -106,13 +106,13 @@ def verified(row, source, item):
     metricinputs(image, edited, mask)
     return image, edited, mask
 
-def grouped(rows, field):
+def grouped(rows, field, separate=None):
     groups = {}
     for row in rows:
         groups.setdefault(str(row["key"]), []).append(row)
     # Preserve the seed-first reporting order in official scores.
     means = [{"key": row["key"], "metrics": row[field], **({"seed": row["seed"]} if "seed" in row else {})} for row in rows]
-    result = summary(means)
+    result = summary(means) if separate is None else averaged(means, separate)
     infinite = {key for key, values in groups.items() if any(row.get("status", {}).get("psnr") == "positive infinity" for row in values)}
     if infinite:
         finite = sum(any(row[field].get("psnr") is not None for row in values) for key, values in groups.items() if key not in infinite)
@@ -168,8 +168,11 @@ def main():
         print(json.dumps({"key": item.key, "seed": pair[1], "table": result["table"]}, allow_nan=False), flush=True)
     if digest(source) != sourcehash or digest(mapping) != mappinghash:
         raise ValueError("Inference summary or annotation mapping changed during assessment.")
-    result = {"schema": 1, "protocol": "PIE external metric adapter" if args.protocol else "PIE pixel diagnostics", "settings": vars(args), "inputsha256": sourcehash, "mappingsha256": mappinghash, "population": members, "packages": dict(versions()), "backend": backend.metadata, "raw": grouped(output, "raw"), "table": grouped(output, "table"), "rows": output, "note": "Metrics are averaged across requests within each seed, then across seed results; undefined and infinite PSNR values remain null with explicit status."}
+    result = {"schema": 1, "protocol": "PIE external metric adapter" if args.protocol else "PIE pixel diagnostics", "settings": vars(args), "inputsha256": sourcehash, "mappingsha256": mappinghash, "population": members, "packages": dict(versions()), "backend": backend.metadata, "rows": output, "note": "Metrics are averaged across requests within each seed, then across seed results; undefined and infinite PSNR values remain null with explicit status."}
     result["byseed"] = {str(seed): {"raw": grouped([row for row in output if row["seed"] == seed], "raw"), "table": grouped([row for row in output if row["seed"] == seed], "table"), "coverage": coverage([row for row in output if row["seed"] == seed])} for seed in sorted(args.seeds)}
+    for field in ("raw", "table"):
+        result[field] = grouped(output, field, {seed: value[field] for seed, value in result["byseed"].items()})
+    result["aggregation"] = AGGREGATION
     result["coverage"] = coverage(output)
     writejson(target, result)
 
