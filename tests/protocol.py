@@ -54,7 +54,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(plan["variants"]["pullbackfull"]["settings"][key], getattr(args, key))
 
     def testallsuites(self):
-        suites = ("alignment", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals")
+        suites = ("semantic", "alignment", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals")
         for suite in suites:
             args = self.args()
             args.suite = suite
@@ -69,6 +69,35 @@ class ProtocolTests(unittest.TestCase):
         args.suite = "leverage"
         plan = design(args, variants(args.suite, base=args))
         self.assertEqual(set(plan["variants"]["compensated"]["changes"]), {"compensation"})
+
+    def testsemanticmatrix(self):
+        args = self.args()
+        args.suite = "semantic"
+        plan = design(args, variants(args.suite, base=args))
+        self.assertEqual(set(plan["variants"]["combined"]["changes"]), {"fieldrepair", "semantic"})
+        for name in ("anchored", "regional", "repaired", "combined"):
+            for key in ("maxcalls", "maxsamples", "candidates", "poststeps", "guidance"):
+                self.assertEqual(plan["variants"][name]["settings"][key], getattr(args, key))
+        args.goals = ["target"]
+        with self.assertRaises(ValueError):
+            design(args, variants(args.suite, base=args))
+
+    def testsemanticruntime(self):
+        args = self.args("--semantic", "region", "--fieldrepair", "1")
+        image = Image.new("RGB", (16, 16), (90, 128, 160))
+        _, report, session = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args)
+        self.assertEqual(report["semanticviews"]["layout"], "region")
+        self.assertLessEqual(session.samples, args.maxsamples)
+        self.assertEqual(session.samples, session.limit.used)
+        self.assertNotIn("view0", report["scores"])
+        self.assertIn("repair", report["field"])
+        original = deepcopy(args)
+        original.fieldrepair = 0
+        _, reference, _ = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", original)
+        self.assertEqual(report["rawdamage"], reference["rawdamage"])
+        self.assertEqual(report["rawscores"], reference["rawscores"])
+        self.assertLessEqual(report["damage"], reference["rawdamage"])
+        self.assertEqual(report["path"]["rawreference"], "initial field before repair")
 
     def testmismatch(self):
         args = self.args()
@@ -166,8 +195,8 @@ class ProtocolTests(unittest.TestCase):
         reference = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64)
         validate(reference)
         benchmark = [args for entry, args in executions if entry is main and args.split == "all" and not args.dry]
-        self.assertEqual(len(benchmark), 21)
-        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 186)
+        self.assertEqual(len(benchmark), 22)
+        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 191)
         for args in benchmark:
             plan = design(args, variants(args.suite, base=args))
             expected = deepcopy(reference)

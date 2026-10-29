@@ -17,6 +17,8 @@ from engine.reproduce import digest
 def variants(suite, consistency="ddpm", base=None):
     # Freeze one main configuration across all ablation suites.
     shared = defaults(base)
+    if suite == "semantic":
+        return {"full": shared, "anchored": {**shared, "fieldrepair": 0, "semantic": "patches"}, "regional": {**shared, "fieldrepair": 0, "semantic": "region"}, "repaired": {**shared, "fieldrepair": 1, "semantic": "patches"}, "combined": {**shared, "fieldrepair": 1, "semantic": "region"}}
     if suite == "alignment":
         raw = {"method": "raw", "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False}
         return {"aligned": {**shared, **raw, "fieldgeometry": "coupled"}, "scalar": {**shared, **raw, "fieldgeometry": "scalar"}, "controlled": {**shared, "fieldgeometry": "coupled", "method": "path"}, "matched": {**shared, "fieldgeometry": "scalar", "method": "path"}}
@@ -74,6 +76,8 @@ def variants(suite, consistency="ddpm", base=None):
 
 def design(args, controls):
     # Verify the full arm before loading checkpoints.
+    if args.suite == "semantic" and (args.field != "pullback" or args.fieldgeometry != "coupled" or args.method != "path" or not args.cleanup or args.adapter or args.goals):
+        raise ValueError("Semantic trials require native coupled pullback control with default goals.")
     if args.suite == "temporal" and args.localization != "baseline":
         raise ValueError("Temporal trials require the shared baseline localization protocol.")
     validate(args)
@@ -153,7 +157,7 @@ def frozen(args, chosen):
 def main():
     parser = datasetargs(common(argparse.ArgumentParser(description="Run declared benchmark or validation/test ablations.")))
     parser.set_defaults(split="val", output="./trials")
-    parser.add_argument("--suite", type=str.casefold, choices=("alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
+    parser.add_argument("--suite", type=str.casefold, choices=("semantic", "alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
     parser.add_argument("--recipe", default=None)
     parser.add_argument("--dry", action="store_true", help="Print effective variants without loading data or checkpoints.")
     args = parser.parse_args()

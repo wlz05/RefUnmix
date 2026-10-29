@@ -54,6 +54,8 @@ def common(parser):
     parser.add_argument("--fieldradius", type=float, default=1.)
     parser.add_argument("--fieldtolerance", type=float, default=1e-6)
     parser.add_argument("--fieldgeometry", type=str.casefold, choices=("coupled", "scalar"), default="coupled")
+    parser.add_argument("--fieldrepair", type=int, choices=(0, 1, 2), default=0)
+    parser.add_argument("--semantic", type=str.casefold, choices=("patches", "region"), default="patches")
     parser.add_argument("--end", type=float, default=.30)
     parser.add_argument("--scale", type=float, default=1.)
     parser.add_argument("--cleanup", action=argparse.BooleanOptionalAction, default=True)
@@ -281,6 +283,10 @@ def validate(args):
     Budget(args.maxsamples, args.maxcalls, args.seconds)
     batching(args)
     options(args.field, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry, args.fieldweight, args.fieldshrink)
+    if type(args.fieldrepair) is not int or not 0 <= args.fieldrepair <= 2 or args.fieldrepair and (args.field != "pullback" or args.fieldgeometry != "coupled" or not args.cleanup or args.adapter):
+        raise ValueError("Field repair requires a coupled pullback with native cleanup and no adapter.")
+    if args.semantic not in {"patches", "region"} or args.semantic == "region" and args.method not in {"path", "raw", "fixed"}:
+        raise ValueError("Region semantics require path, raw, or fixed editing.")
     if args.field == "ect" and (args.backbone != "vp" or args.delta != 0):
         raise ValueError("ECT transport requires --backbone vp and --delta 0.")
     if args.localizationtime is not None:
@@ -410,10 +416,10 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
         try:
             localizationtime = args.start if args.localizationtime is None else args.localizationtime
             localizationbase = session.difference(session.editor.index(localizationtime))
-            constructed = build(session, native, args.field, args.start, args.delta, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry, args.fieldweight, args.fieldshrink)
+            constructed = build(session, native, args.field, args.start, args.delta, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry, args.fieldweight, args.fieldshrink, args.fieldrepair)
             base, neutral = constructed.value, constructed.neutral
             metadata["field"] = constructed.report
-            cached = neutral is not None and (session.scale == 0 or not base.ne(0).any().item())
+            cached = constructed.endpoint is not None or neutral is not None and (session.scale == 0 or not base.ne(0).any().item())
             limit.require(0 if cached else native.cost(0.), 0 if cached else native.queries())
         except Exhausted as error:
             return stopped(session, metadata, args.method, error, judge=judge, initial=initialstats)
@@ -434,8 +440,12 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
         metadata["protectionsha256"] = hashlib.sha256(scoringmask.detach().float().cpu().contiguous().numpy().tobytes()).hexdigest()
         score = None
         if args.method == "path" and judge is not None:
-            score = judge.prepare(session.origin, source, target, scoringmask, args.localtext, attributes=args.attributes, retain=args.retain) if args.attributes or args.retain else judge.prepare(session.origin, source, target, scoringmask, args.localtext)
-        path = ReferencePath(native, base, args.representation, args.seed, neutral)
+            options = {"layout": args.semantic} if args.semantic != "patches" else {}
+            if args.attributes or args.retain:
+                options.update(attributes=args.attributes, retain=args.retain)
+            score = judge.prepare(session.origin, source, target, scoringmask, args.localtext, **options)
+            metadata["semanticviews"] = {"layout": args.semantic, "boxes": list(getattr(score, "boxes", ())), "scope": "Frozen inferred or supplied support; independent official masks are used only after selection."}
+        path = ReferencePath(native, base, args.representation, args.seed, neutral, constructed.endpoint, constructed.baseline if args.method == "path" else None)
         if args.method == "raw":
             from engine.poll import protection
             from engine.access import describe
@@ -479,7 +489,7 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
         try:
             result = search(path, score, 1 - scoringmask, prior, config)
         except Exhausted as error:
-            return stopped(session, metadata, args.method, error, path.fields.get((1., 1.)), judge, initialstats)
+            return stopped(session, metadata, args.method, error, path.baseline if path.baseline is not None else path.fields.get((1., 1.)), judge, initialstats)
         constructed.observe(path.fields.get((1., 1.)))
         report = result.report
         report["access"] = capabilities
@@ -498,6 +508,8 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
         report.update({**metadata, "method": "path", "renderer": args.representation, "seed": args.seed, "stats": session.stats(), "judgestats": judgestats, "explicitregion": mask is not None, "localization": localizationreport, "mask": "explicit" if session.mask is not None else "inferred", "evaluationnote": "Controller proxies and consistency are not independent quality evidence."})
         amplitudes = report.get("point") or (1., 1., 0.)
         report["adoptedfieldnorm"] = float((amplitudes[0] * path.low + amplitudes[1] * path.high).double().norm())
+        if report["selected"] == "raw" and constructed.baseline is not None:
+            report["adoptedfieldnorm"] = constructed.report["repair"]["initialnorm"]
         return result.image, report, session
     reference = ("pixel" if args.method == "projection" else "raw") if args.reference == "auto" else args.reference
     render = session.render if reference == "raw" else lambda field: session.render(field, reference=reference)

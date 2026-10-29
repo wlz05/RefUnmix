@@ -56,6 +56,8 @@ class Field:
     neutral: torch.Tensor | None = None
     request: torch.Tensor | None = None
     prediction: torch.Tensor | None = None
+    endpoint: torch.Tensor | None = None
+    baseline: torch.Tensor | None = None
 
     def observe(self, endpoint, reference=None, request=None):
         # Diagnose a paid endpoint without another generation query.
@@ -196,7 +198,7 @@ def capacity(response, target, anchor, tolerance=1e-6):
     report.update({"lineerror": lineerror, "spanerror": spanerror, "directionroom": max(0., lineerror - spanerror), "linecosine": cosine, "status": "zero response" if not len(singular) else "zero baseline" if not length else "measured"})
     return report
 
-def solve(response, target, anchor, ridge=.05, radius=1.):
+def solve(response, target, anchor, ridge=.05, radius=1., bound=None):
     # Solve one coupled inverse response problem inside a ball.
     response, target, anchor = (np.asarray(value, dtype=float) for value in (response, target, anchor))
     if response.ndim != 2 or target.shape != (response.shape[0],) or anchor.shape != (response.shape[1],) or not len(anchor) or not len(target) or any(not np.isfinite(value).all() for value in (response, target, anchor)):
@@ -215,7 +217,7 @@ def solve(response, target, anchor, ridge=.05, radius=1.):
     if eigenvalues[0] <= 0:
         raise ValueError("Pullback normal equations must be positive definite.")
     rotated = vectors.T @ right
-    bound = radius * math.hypot(*anchor)
+    bound = radius * math.hypot(*anchor) if bound is None else number(bound, "Correction bound", 0)
     if not math.isfinite(bound):
         raise ValueError("Pullback radius exceeds numerical range.")
     multiplier = 0.
@@ -250,8 +252,10 @@ def solve(response, target, anchor, ridge=.05, radius=1.):
     return coefficients, report
 
 @torch.no_grad()
-def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, probe=.25, radius=1., tolerance=1e-6, geometry="coupled", weight=.5, shrink=.7):
+def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, probe=.25, radius=1., tolerance=1e-6, geometry="coupled", weight=.5, shrink=.7, repair=0):
     options(kind, ridge, probe, radius, tolerance, geometry, weight, shrink)
+    if type(repair) is not int or not 0 <= repair <= 2 or repair and (kind != "pullback" or geometry != "coupled"):
+        raise ValueError("Field repair requires zero to two rounds of coupled pullback construction.")
     compatible(session.editor, kind)
     start, delta = number(start, "Field time", 0, 1), number(delta, "Field interval", 0, 1)
     if start <= 0 or delta >= start:
@@ -279,6 +283,8 @@ def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, prob
     request = tensor((first.double() + second.double()).mul(.5).float())
     report = {"requested": kind, "actual": kind, "times": [start] if delta == 0 else [start, start - delta], "status": "constructed", "probes": 0, "space": "clean latent displacement", "request": "paired conditional contrast consensus", "usesclip": False}
     report["geometry"] = geometry
+    if repair:
+        report["repair"] = {"requested": repair, "accepted": 0, "endpoints": 0, "status": "skipped", "reason": "Initial construction is unavailable or degenerate.", "calls": 0, "samples": 0, "endpointcached": False}
     if kind == "blend":
         value = tensor(((1 - weight) * first.double() + weight * second.double()).float())
         report.update({"weight": weight, "request": "fixed temporal mixture"})
@@ -349,10 +355,98 @@ def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, prob
         report.update({"probes": rank + 1, "calls": session.calls - before[0], "samples": session.samples - before[1], "model": diagnostics, "neutralcached": True})
         target = torch.from_numpy((session.scale * original).reshape(request.shape)).to(device=request.device, dtype=torch.float64)
         predicted = torch.from_numpy((response @ coefficients).reshape(request.shape)).to(device=request.device, dtype=torch.float64)
-        return Field(value, report, neutral.detach().clone(), target, predicted)
+        result = Field(value, report, neutral.detach().clone(), target, predicted)
+        if repair:
+            refine(result, native, [first, second], repair, ridge, probe, radius, tolerance)
+            report["initialtemporal"] = report["temporal"]
+            report["temporal"] = temporal(contrasts, result.value.detach().double().reshape(-1).cpu().numpy(), tolerance)
+            report.update(calls=session.calls - before[0], samples=session.samples - before[1], probes=rank + 1 + report["repair"]["endpoints"])
+            report["initialdiagnostics"] = "Model, capacity, and alignment describe the initial linear construction."
+        return result
     finally:
         if limit is not None:
             limit.phase = previous
+
+@torch.no_grad()
+def refine(field, native, contrasts, rounds, ridge, probe, radius, tolerance):
+    # Refit the endpoint response at the current finite field.
+    session, limit = native.session, native.session.limit
+    history = []
+    report = {"requested": rounds, "accepted": 0, "endpoints": 0, "history": history, "status": "unchanged", "usesclip": False, "scope": "Measured latent request fit; decoded protection and semantic control follow separately."}
+    field.report["repair"] = report
+    before = session.calls, session.samples
+    initial = field.value.detach().clone()
+    scale = norm(initial.double())
+    report["initialnorm"] = scale
+    bound = radius * scale
+    if scale == 0 or not math.isfinite(bound) or bound <= 0:
+        report.update(status="zero radius", calls=0, samples=0, endpointcached=False)
+        return
+    try:
+        if limit is not None:
+            limit.require(native.cost(0.), native.queries())
+        field.endpoint = tensor(native.endpoint(field.value)).detach().clone()
+        report["endpoints"] += 1
+        if field.endpoint.shape != field.value.shape or field.endpoint.device != field.value.device:
+            raise ValueError("Field repair endpoints must preserve latent geometry.")
+        field.baseline = field.endpoint.detach().clone()
+        report["initialerror"] = norm(field.request - (field.endpoint.double() - field.neutral.double()))
+        for iteration in range(rounds):
+            residual = field.request - (field.endpoint.double() - field.neutral.double())
+            error = norm(residual)
+            if error <= tolerance * norm(field.request):
+                report["status"] = "resolved"
+                break
+            # Add an output residual direction only after measuring its input response.
+            directions = [*contrasts, field.value, (residual * (scale / error)).float()]
+            basis, _ = orthogonal(directions, tolerance)
+            rank = basis.shape[1]
+            step = probe * scale / math.sqrt(rank)
+            if not math.isfinite(step) or step <= 0:
+                raise ValueError("Field repair probes exceed numerical range.")
+            if limit is not None:
+                limit.require((rank + 2) * native.cost(0.), (rank + 2) * native.queries())
+            columns = []
+            for index in range(rank):
+                direction = torch.from_numpy((step * basis[:, index]).reshape(initial.shape)).to(initial.device, torch.float32)
+                endpoint = tensor(native.endpoint(tensor(field.value + direction)))
+                report["endpoints"] += 1
+                if endpoint.shape != initial.shape or endpoint.device != initial.device:
+                    raise ValueError("Field repair probes must preserve latent geometry.")
+                columns.append(((endpoint.double() - field.endpoint.double()) / step).reshape(-1).cpu().numpy())
+            response = np.stack(columns, axis=1)
+            target = residual.reshape(-1).cpu().numpy()
+            move, fitted = solve(response, target, np.zeros(rank), ridge, bound=bound)
+            correction = torch.from_numpy((basis @ move).reshape(initial.shape)).to(initial.device, torch.float32)
+            candidate = tensor(field.value + correction)
+            predicted = norm(torch.from_numpy(response @ move - target))
+            row = {"round": iteration + 1, "rank": rank, "before": error, "predicted": predicted, "movement": norm(correction.double()), "accepted": False, "model": fitted}
+            history.append(row)
+            if predicted >= error or torch.equal(candidate, field.value):
+                row["reason"], report["status"] = "No predicted improvement.", "stationary"
+                break
+            endpoint = tensor(native.endpoint(candidate)).detach().clone()
+            report["endpoints"] += 1
+            if endpoint.shape != initial.shape or endpoint.device != initial.device:
+                raise ValueError("Field repair candidates must preserve latent geometry.")
+            actual = norm(field.request - (endpoint.double() - field.neutral.double()))
+            row["after"] = actual
+            row["accepted"] = actual < error * (1 - tolerance)
+            if not row["accepted"]:
+                row["reason"], report["status"] = "Measured endpoint fit did not improve.", "rejected"
+                break
+            field.prediction = field.endpoint.double() - field.neutral.double() + torch.from_numpy((response @ move).reshape(initial.shape)).to(initial.device)
+            field.value, field.endpoint = candidate.detach().clone(), endpoint
+            report["accepted"] += 1
+            report["status"] = "accepted"
+        report["movement"] = norm(field.value.double() - initial.double())
+        report["finalerror"] = norm(field.request - (field.endpoint.double() - field.neutral.double()))
+    except Exhausted as error:
+        report.update({"status": "budget", "reason": str(error)})
+    finally:
+        if field.endpoint is not None:
+            report["finalerror"] = norm(field.request - (field.endpoint.double() - field.neutral.double()))
+        report.update({"calls": session.calls - before[0], "samples": session.samples - before[1], "endpointcached": field.endpoint is not None})
 
 # Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

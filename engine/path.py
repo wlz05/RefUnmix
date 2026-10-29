@@ -14,7 +14,7 @@ def coordinates(point, bounded=True):
     return tuple(number(value, label, 0 if bounded else None, limit if bounded else None) for value, label, limit in zip((low, high, eta), ("low", "high", "eta"), (2., 2., 1.)))
 
 class Path:
-    def __init__(self, native, base, mode="latent", seed=42, neutral=None):
+    def __init__(self, native, base, mode="latent", seed=42, neutral=None, endpoint=None, baseline=None):
         tensor(base)
         if base.shape != native.session.anchor.shape or any(size % 2 for size in base.shape[-2:]):
             raise ValueError("Path control requires matching even latent geometry.")
@@ -30,6 +30,17 @@ class Path:
                 raise ValueError("Cached references must match the native field geometry.")
             self.references[0.] = neutral.detach().clone()
             self.fields[(0., 0.)] = self.references[0.]
+        if endpoint is not None:
+            tensor(endpoint)
+            if endpoint.shape != base.shape or endpoint.device != base.device:
+                raise ValueError("Cached field endpoints must match the native geometry.")
+            self.fields[(1., 1.)] = endpoint.detach().clone()
+        self.baseline = None
+        if baseline is not None:
+            tensor(baseline)
+            if baseline.shape != base.shape or baseline.device != base.device:
+                raise ValueError("Frozen baselines must match the native geometry.")
+            self.baseline = baseline.detach().clone()
         self.hits, self.seed, self.direction = 0, int(seed), None
         self.images = {}
 
@@ -43,7 +54,8 @@ class Path:
         if key not in self.fields:
             self.phase()
             zero = self.empty or low == high == 0
-            self.fields[key] = self.references[0.] if zero and 0. in self.references else self.native.endpoint(low * self.low + high * self.high)
+            field = self.base if key == (1., 1.) else low * self.low + high * self.high
+            self.fields[key] = self.references[0.] if zero and 0. in self.references else self.native.endpoint(field)
             if zero:
                 self.references[0.] = self.fields[(0., 0.)] = self.fields[key]
         else:
@@ -154,7 +166,7 @@ class Path:
         return tensor(latent).detach().clone(), tensor(pixels, 3).clamp(0, 1).detach().clone()
 
     def raw(self):
-        latent = self.target()
+        latent = self.target() if self.baseline is None else self.baseline
         return latent.detach().clone(), self.session.decode(latent).clamp(0, 1).detach().clone()
 
     def mechanism(self, decoded=False):
@@ -189,7 +201,7 @@ class Path:
     def metadata(self):
         count = len(self.fields) - int((0., 0.) in self.fields)
         observed = [name for name, known in (("sourcezero", 1. in self.references), ("targetzero", 0. in self.references), ("targetfield", (1., 1.) in self.fields)) if known]
-        return {"mode": self.mode, "fields": count, "references": len(self.references), "cachehits": self.hits, "conditionrms": rms(self.references[0.].double() - self.references[1.].double()) if 0. in self.references and 1. in self.references else None, "affineequivalence": self.mode == "mix" and self.native.affine, "design": design(observed), "scope": "Latent frequencies are controls, not semantic partitions."}
+        return {"mode": self.mode, "fields": count, "references": len(self.references), "cachehits": self.hits, "conditionrms": rms(self.references[0.].double() - self.references[1.].double()) if 0. in self.references and 1. in self.references else None, "affineequivalence": self.mode == "mix" and self.native.affine, "design": design(observed), "rawreference": "initial field before repair" if self.baseline is not None else "current field", "scope": "Latent frequencies are controls, not semantic partitions."}
 
 # Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

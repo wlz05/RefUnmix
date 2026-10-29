@@ -151,6 +151,97 @@ class FieldTests(unittest.TestCase):
         self.assertTrue(torch.equal(path.zero(0.), result.neutral))
         self.assertEqual(session.samples, previous)
 
+    def testrepairspan(self):
+        matrix = torch.eye(4)
+        matrix[2, 0] = 1.
+        session = Session()
+        native = Native(session, matrix)
+        result = build(session, native, repair=1)
+        report = result.report["repair"]
+        self.assertEqual(report["accepted"], 1)
+        self.assertEqual(report["history"][0]["rank"], 3)
+        self.assertLess(report["history"][0]["after"], report["history"][0]["before"])
+        self.assertGreater(result.report["temporal"]["spanerror"], 0.)
+        self.assertFalse(result.report["usesclip"])
+        self.assertEqual(result.report["calls"], session.limit.stages["field"]["calls"])
+        self.assertEqual(result.report["samples"], session.limit.stages["field"]["samples"])
+        previous = session.samples
+        path = Path(native, result.value, neutral=result.neutral, endpoint=result.endpoint)
+        self.assertTrue(torch.equal(path.target(), result.endpoint))
+        self.assertEqual(session.samples, previous)
+        result.observe(result.endpoint)
+        summary = values({"report": {"field": result.report}})
+        self.assertEqual(summary["field:repairaccepted"], 1)
+        self.assertEqual(summary["field:repairfinalerror"], report["finalerror"])
+        self.assertNotIn("field:repairfinalerror", values({"report": {}}))
+        json.dumps(result.report, allow_nan=False)
+
+    def testrepairbudget(self):
+        for maximum in range(8, 16):
+            session = Session(maximum=maximum)
+            result = build(session, Native(session), repair=2)
+            self.assertLessEqual(session.samples, maximum)
+            self.assertEqual(session.samples, session.limit.used)
+            self.assertEqual(session.limit.phase, "front")
+            if result.report.get("repair", {}).get("status") == "budget":
+                self.assertIsNotNone(result.endpoint)
+                self.assertTrue(torch.isfinite(result.value).all())
+
+    def testrepairrejection(self):
+        class Curved(Native):
+            def endpoint(self, value, eta=0.):
+                output = super().endpoint(value, eta)
+                if len(self.inputs) >= 7:
+                    output = output + 100.
+                return output
+
+        session = Session()
+        native = Curved(session)
+        result = build(session, native, repair=1)
+        report = result.report["repair"]
+        self.assertEqual(report["status"], "rejected")
+        self.assertEqual(report["accepted"], 0)
+        self.assertTrue(torch.equal(result.value, native.inputs[3]))
+        self.assertTrue(torch.allclose(result.endpoint.reshape(-1), native.offset + native.matrix @ result.value.reshape(-1)))
+
+    def testrepairbounds(self):
+        for value in (True, -1, 3, 1.5):
+            session = Session()
+            with self.assertRaises(ValueError):
+                build(session, Native(session), repair=value)
+        for values in ({"kind": "chord"}, {"geometry": "scalar"}):
+            session = Session()
+            with self.assertRaises(ValueError):
+                build(session, Native(session), repair=1, **values)
+        move, report = solve(np.eye(2), np.ones(2), np.zeros(2), bound=.1)
+        self.assertLessEqual(np.linalg.norm(move), .1 + 1e-12)
+        self.assertGreater(report["before"], report["after"])
+        with self.assertRaises(ValueError):
+            solve(np.eye(2), np.ones(2), np.zeros(2), bound=float("nan"))
+
+    def testrepairnonlinear(self):
+        class Curved(Native):
+            def endpoint(self, value, eta=0.):
+                return super().endpoint(value, eta) + .5 * value.square()
+
+        session = Session()
+        result = build(session, Curved(session), repair=2)
+        accepted = [row for row in result.report["repair"]["history"] if row["accepted"]]
+        self.assertTrue(accepted)
+        for row in accepted:
+            self.assertLess(row["after"], row["before"])
+
+    def testrepairrepeatability(self):
+        state = torch.random.get_rng_state().clone()
+        results = []
+        for _ in range(2):
+            session = Session()
+            result = build(session, Native(session), repair=2)
+            results.append((result.value, result.report["repair"]))
+        self.assertTrue(torch.equal(results[0][0], results[1][0]))
+        self.assertEqual(results[0][1], results[1][1])
+        self.assertTrue(torch.equal(state, torch.random.get_rng_state()))
+
     def testnativegeometry(self):
         class Malformed(Native):
             def endpoint(self, value, eta=0.):

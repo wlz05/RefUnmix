@@ -83,8 +83,10 @@ class ClipJudge:
         return functional.normalize(features, dim=-1)
 
     @torch.no_grad()
-    def prepare(self, origin, source, target, mask=None, localtext=None, attributes=None, retain=None):
+    def prepare(self, origin, source, target, mask=None, localtext=None, attributes=None, retain=None, layout="patches"):
         # Freeze crops and reference features across candidates.
+        if layout not in {"patches", "region"}:
+            raise ValueError("Semantic views must be patches or region.")
         origin = tensor(origin, 3).detach().to(self.device, torch.float32)
         height, width = origin.shape[-2:]
         if mask is None:
@@ -95,7 +97,7 @@ class ClipJudge:
                 raise ValueError("CLIP edit masks must be in [0, 1].")
             area = functional.interpolate(mask.detach().to(self.device, torch.float32), (height, width), mode="bilinear", align_corners=False)
         tiles = [(0, 0, width, height)]
-        if float(area.mean()) > 0.4 and min(height, width) >= 4:
+        if layout == "patches" and float(area.mean()) > 0.4 and min(height, width) >= 4:
             tiles = [(left, top, right, bottom) for left, right in ((0, width // 2), (width // 2, width)) for top, bottom in ((0, height // 2), (height // 2, height))]
         boxes, weights = [], []
         for left, top, right, bottom in tiles:
@@ -106,6 +108,9 @@ class ClipJudge:
             box = (left + int(columns.min()), top + int(rows.min()), left + int(columns.max()) + 1, top + int(rows.max()) + 1)
             boxes.append(box)
             weights.append(area[0, 0, box[1]:box[3], box[0]:box[2]].sum())
+        if layout == "region" and boxes and boxes[0] != (0, 0, width, height):
+            boxes.insert(0, (0, 0, width, height))
+            weights = [area.sum(), area.sum()]
         regionweights = torch.stack(weights) if weights else torch.empty(0, device=self.device)
         regionweights = regionweights / regionweights.sum().clamp_min(1e-8)
 
@@ -114,7 +119,16 @@ class ClipJudge:
             if pixels.shape != origin.shape:
                 raise ValueError("CLIP candidates must share the source image shape.")
             focused = pixels * area + 0.5 * (1 - area)
-            return [pixels] + [focused[..., top:bottom, left:right] for left, top, right, bottom in boxes]
+            local = [focused[..., top:bottom, left:right] for left, top, right, bottom in boxes]
+            if layout == "region":
+                # Preserve the complete edit support before CLIP resizing.
+                padded = []
+                for view in local:
+                    h, w = view.shape[-2:]
+                    vertical, horizontal = max(h, w) - h, max(h, w) - w
+                    padded.append(functional.pad(view, (horizontal // 2, horizontal - horizontal // 2, vertical // 2, vertical - vertical // 2), value=.5))
+                local = padded
+            return [pixels] + local
 
         reference = self.images(views(origin))
         descriptions = list(attributes or []) + list(retain or [])
@@ -134,11 +148,16 @@ class ClipJudge:
             self.evaluations += 1
             active().evaluations += 1
             individual = {"local" + str(index): float(value) for index, value in enumerate((features[1:] - reference[1:]) @ text[2])}
+            if layout == "region":
+                individual = {"view" + str(index): value for index, value in enumerate(individual.values())}
+                if boxes:
+                    individual["local0"] = float(localgain)
             components = {key: float(features[0] @ vector) for key, vector in zip(componentnames, text[3:])}
             return {"score": float(score), "global": float(globalgain), "local": float(localgain), "target": float(features[0] @ text[1]), "direction": float(directional), "localviews": len(boxes), **individual, **components}
 
         evaluate.evaluations = 0
         evaluate.boxes = tuple(boxes)
+        evaluate.layout = layout
         active = ref(evaluate)
         return evaluate
 

@@ -328,6 +328,8 @@ These commands use `--prior off`. Optional consistency priors consume additional
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--field` | `pullback` | Field: pullback, chord, instant, average, blend, ect, or zero |
+| `--fieldrepair` | `0` | Verified endpoint residual repair: zero, one, or two rounds |
+| `--semantic` | `patches` | Local control views: separate patches or one complete-region goal |
 | `--fieldweight` | `0.5` | Second-time weight for blend, in [0, 1] |
 | `--fieldshrink` | `0.7` | ECT shrinkage, in [0, 1]; requires epsilon VP and delta zero |
 | `--localizationtime` | start time | Shared protection probe time for native modes with baseline localization |
@@ -541,6 +543,7 @@ The printed `design.main` is `pullbackfull`, whose `changes` is empty. Each arm 
 | `fields` | Four fields with raw, fixed-reference, and full control | 64 |
 | `null` | Explicit zero-field continuation, centering, and condition recovery | 64 |
 | `alignment` | Coupled and scalar norm-matched field construction | 64 |
+| `semantic` | Region-level goals and current-state endpoint repair | 64 |
 | `temporal` | Fixed temporal mixtures and ECT direct/continued/controlled arms | 64 |
 | `core` | Guarded field and reference coordinate controls | 64 |
 | `release` | Main reference-field compensation versus joint QCQP | 64 |
@@ -787,6 +790,60 @@ These diagnostics use the native field endpoint before reference control. Pullba
 Controller history records `verification` for every queried non-geometry proposal, including rejected proposals: `predictedgain`, `actualgain`, `predicteddamagechange`, and `actualdamagechange`. Each change is measured from the current anchor. Gains use the frozen control heads and scales; independent task annotations evaluate the final image. `audit.py` first averages release-query changes within each request, then applies the same request-within-seed and seed-level averaging used by the main tables. Paired confidence intervals resample source groups and recompute that seed-first statistic.
 
 Native probes use raw mode with priors and controller diagnostics disabled. Discrete reference paths require `--etas 0 1`. Raw inference rejects ignored prior or controller switches, and held-out consistency requires an enabled prior.
+
+### Local Semantic Attainment
+
+`--candidates` limits controlled candidates per image-seed request, including initialization and fallback proposals; the retained native baseline is separate. Values such as 1, 2, 3, and 12 are valid. The default `--poststeps 1` sets one native continuation step per endpoint. Neither value is the total model-query count: field and reference queries also consume `--maxsamples` and `--maxcalls`, and early stopping can leave the candidate allowance partly unused.
+
+
+PIE's [official CLIP calculator](https://github.com/cure-lab/PnPInversion/blob/f480116dda7576ea258aca9ac6346c9d9000d49d/evaluation/matrics_calculator.py) evaluates the target caption against the full image with pixels outside the annotation mask set to black. It does not average crop scores. Control views remain separate: they use frozen inferred support and neutral gray masking; official masks enter only postselection assessment unless an oracle run is explicitly requested.
+
+Two interventions test local under-editing. `--semantic region` evaluates the complete masked support together with its bounding view, pads rectangular views to preserve their extent, and averages their target gains into one `local0` goal. The individual `view0` and `view1` values are diagnostics. The previous `patches` setting treats up to four crops as separate goals; an unchanged crop can keep their minimum gain at zero even when the requested object improves. Global, target, attribute, retention, and protected-output checks remain active.
+
+`--fieldrepair 1` remeasures the native endpoint response at the constructed field. With the initial request held fixed, define
+
+```math
+e_j=\gamma_F\bar d-[H(F_j,C_{\mathrm{tgt}})-H(0,C_{\mathrm{tgt}})].
+```
+
+The probe basis includes the original temporal contrasts, the current field, and the normalized residual. Each direction is measured through the same native continuation at the current field. A bounded damped solve proposes a correction:
+
+```math
+u_j^\star=\arg\min_{\lVert u\rVert_2\le\Delta_{\mathrm{rep}}}
+\left(\lVert R_j u-e_j\rVert_2^2+\lambda_j\lVert u\rVert_2^2\right),
+\qquad F_{j+1}=F_j+Q_j u_j^\star.
+```
+
+The repair radius is fixed to $`\Delta_{\mathrm{rep}}=\rho_F\lVert F_0\rVert_2`$ in each round. The implementation accepts only a measured reduction in endpoint residual. A residual vector is a proposed input direction, not an assumed inverse Jacobian. Failed corrections retain the previous field. Path control retains the pre-repair native output as its protection budget, semantic reference, and fallback; field repair cannot loosen that budget. Raw and fixed diagnostic modes expose the repaired field directly. All probes share the request's sample/call caps, and the accepted endpoint is reused by the controller. Two repair rounds are available; zero preserves the initial construction. The generator's native step count stays unchanged. This is additional field calibration, so its query cost is included in the complete editor cost.
+
+[FlowEdit](https://openaccess.thecvf.com/content/ICCV2025/html/Kulikov_FlowEdit_Inversion-Free_Text-Based_Editing_Using_Pre-Trained_Flow_Models_ICCV_2025_paper.html) updates the target velocity at the evolving target state. [DecFlowEdit](https://arxiv.org/abs/2609.34237) separates localization from editing guidance, and [PreciseEdit](https://arxiv.org/abs/2610.23535) separates strong transport from spatial and directional reliability. These mechanisms motivate testing state-dependent response and regional attainment separately. SD3/SD3.5-versus-SD-Turbo comparisons also include backbone differences. SD-Turbo retains its [documented configuration without extra CFG](https://huggingface.co/stabilityai/sd-turbo); FlowEdit's source/target guidance scales are not transplanted into it.
+
+The `semantic` suite runs the following controlled comparison. Defaults remain `--fieldrepair 0 --semantic patches` for the established main profile. Select a revised profile on the development partition and freeze it before final testing. Endpoint residual reduction is a calibration measurement; official CLIP-Edited and independent task completion measure transfer to image editing.
+
+| Arm | Field repair | Semantic views |
+|-----|--------------|----------------|
+| `full` | Supplied main setting | Supplied main setting |
+| `anchored` | 0 | patches |
+| `regional` | 0 | region |
+| `repaired` | 1 | patches |
+| `combined` | 1 | region |
+
+Use the same 64-sample/64-call cap, twelve control candidates, one native continuation step, and four seeds in every arm. At a 15-sample cap, repair can leave fewer controller queries; compare actual costs and accepted repair counts rather than assuming equal work from equal caps. The existing validation-to-test recipe workflow accepts `--suite semantic`. After freezing the profile, the complete PIE comparison is:
+
+```bash
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite semantic --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldrepair 0 --semantic patches --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/semantic
+```
+
+Score all four interventions with the unchanged official protocol:
+
+```bash
+python -B RefUnmix/assess.py --input outputs/semantic/anchored/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/anchoredmetrics.json
+python -B RefUnmix/assess.py --input outputs/semantic/regional/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/regionalmetrics.json
+python -B RefUnmix/assess.py --input outputs/semantic/repaired/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/repairedmetrics.json
+python -B RefUnmix/assess.py --input outputs/semantic/combined/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/combinedmetrics.json
+```
+
+Read `field.repair` for accepted rounds, per-round residuals, and charged model calls; `audit.py` aggregates its scalar diagnostics under `field:repair...`; `field.temporal` describes the final field while `initialtemporal` describes its initializer. `semanticviews` records frozen crop geometry, and `attainment.bottlenecks` identifies the active control goals. Compare CLIP-Edited, CLIP-Whole, PSNR, LPIPS, DINO structure distance, independent task labels, and runtime on the same outputs. Each metric is averaged over requests within each seed and then over the four seed means, with the corresponding `byseed` entries retained.
 
 ### Official PIE Metrics
 

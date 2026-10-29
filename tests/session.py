@@ -303,6 +303,36 @@ class JudgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.judge.prepare(self.origin, "source", "target", torch.full((1, 1, 2, 2), -1.0))
 
+    def testregiongoal(self):
+        from engine.poll import feedback
+        from engine.attainment import gain
+        patch = self.judge.prepare(self.origin, "source", "target", layout="patches")
+        region = self.judge.prepare(self.origin, "source", "target", layout="region")
+        changed = self.origin.clone()
+        changed[:, 1, :8, :8] += .01
+        left, right = patch(changed), region(changed)
+        patchgoals = [left["local" + str(index)] for index in range(4)]
+        self.assertEqual(gain(patchgoals, [0.] * 4, [1.] * 4), 0.)
+        self.assertGreater(right["local0"], 0.)
+        self.assertEqual(right["localviews"], 1)
+        self.assertNotIn("view0", feedback(right))
+        self.assertEqual(region(self.origin)["local0"], 0.)
+
+    def testregionsupport(self):
+        mask = torch.zeros(1, 1, 16, 16)
+        mask[..., 2:4, 1:15] = 1
+        objective = self.judge.prepare(self.origin, "source", "target", mask, layout="region")
+        self.assertEqual(objective.boxes, ((0, 0, 16, 16), (1, 2, 15, 4)))
+        changed = self.origin.clone()
+        changed[:, 1, 2:4, 1:3] += .1
+        self.assertGreater(objective(changed)["local0"], 0.)
+        self.assertEqual(objective.layout, "region")
+        empty = self.judge.prepare(self.origin, "source", "target", torch.zeros_like(mask), layout="region")
+        self.assertEqual(empty(changed)["localviews"], 0)
+        self.assertNotIn("local0", empty(changed))
+        with self.assertRaises(ValueError):
+            self.judge.prepare(self.origin, "source", "target", layout="unknown")
+
 class IntegrationTests(unittest.TestCase):
     def testreferencecontrol(self):
         import argparse
