@@ -103,5 +103,5 @@ def analyze(model, lower, scales, damage, radius, names=None, regularization=1e-
     report["status"] = "Numerical intervals recorded; unverified components remain missing."
     return report
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

@@ -275,5 +275,5 @@ def select(anchor: torch.Tensor, base: torch.Tensor, pool: dict[float, torch.Ten
     report.update({"selected": bestname, "score": bestscore, "gain": bestscore - basescore["score"], "localgain": bestscore - globalscore, "weights": bestweights.tolist(), "active": int((bestweights > 1e-10).sum()), "evaluations": evaluations, "seconds": time.perf_counter() - started, "audit": protect.audit(bestimage), "fallback": bestname == globalname, "identity": False})
     return Selection(bestfield.detach(), bestimage.detach(), report)
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

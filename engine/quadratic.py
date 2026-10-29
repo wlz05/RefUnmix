@@ -66,5 +66,5 @@ def solve(hessian, linear, constant, constraints, bounds, iterations=250, checkp
     certified = bool(feasible and math.isfinite(gap) and -1e-8 <= gap <= 1e-7)
     return {"point": point if feasible else None, "feasible": feasible, "converged": bool(feasible and (solved.success or certified)), "solversuccess": bool(solved.success), "iterations": int(solved.nit), "reason": str(solved.message), "objective": current * objectiveweight if feasible else None, "dualbound": dualbound * objectiveweight if math.isfinite(dualbound) else None, "gap": max(0., gap) * objectiveweight if math.isfinite(gap) else None, "optimalitycertified": certified, "tolerance": 1e-7 * objectiveweight, "scope": "Numerical convex-piece certificate, not exact arithmetic or nonlinear image optimality."}
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

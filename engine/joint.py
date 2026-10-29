@@ -201,5 +201,5 @@ def select(base, low, high, render, score, origin, mask, config=None, transport=
     report.update({"selected": chosen["label"], "fallback": chosen is baseline, "weights": chosen["weights"], "gain": chosen["scores"]["score"] - reference["score"], "damagechange": chosen["damage"] - baseline["damage"], "scores": chosen["scores"], "audit": protection.audit(chosen["image"]), "evaluations": len(cache), "observations": rows, "verification": verified, "constraintmet": eligible(chosen["scores"], chosen["damage"], reference, ceiling, config), "proposed": len(candidates)})
     return Selection(chosen["field"], chosen["image"].to(origin.device), report)
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

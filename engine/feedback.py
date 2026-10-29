@@ -149,5 +149,5 @@ class FeedbackRouter:
         report["improvement"] = best["score"] - history[0]["score"] if history[0]["score"] is not None else None
         return best["latent"], best["image"], best["field"], report
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

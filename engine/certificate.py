@@ -127,5 +127,5 @@ def identify(response, residual, semantics, metric, beta, radius, damage, iterat
     status = "unverified local distance interval" if not distance["consistent"] else "certified local infeasible" if verified else "no certificate found"
     return {"margin": margin, "normalizedmargin": margin / scale, "threshold": tolerance, "infeasible": verified, "status": status, "multipliers": multipliers.tolist(), "dualweights": weights.tolist(), "norm": math.sqrt(float(multipliers @ multipliers + dual @ dual)), "bound": checked["bound"], "requirement": checked["requirement"], "converged": converged, "iterations": used, "dimension": dimensions, "failure": failure, "optimalitycertified": False, "distance": distance, "scope": "Verified witness for the fixed local proxy; a zero lower bound never certifies feasibility."}
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

@@ -214,5 +214,5 @@ def shortlist(atoms, support, limit=0):
     dropped = [atom.metadata() for index, atom in enumerate(atoms) if index not in kept]
     return [atoms[index] for index in kept], {"available": len(atoms), "retained": len(kept), "complete": False, "dropped": dropped, "sources": sorted(times), "note": "Budgeted coverage and diversity cannot preserve every useful joint combination."}
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

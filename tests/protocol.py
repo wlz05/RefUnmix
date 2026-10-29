@@ -286,5 +286,5 @@ class ProtocolTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

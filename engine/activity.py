@@ -16,5 +16,5 @@ def prior(raw, candidates, selected, config, metadata, mode):
     reason = "disabled" if mode == "off" else "same-pool selection changed" if changed else "no candidate excess" if positive == 0 else "zero bounded penalty cap" if config.priorcontrol == "bounded" and config.priorweight * raw.damage == 0 else "attainment band has one candidate" if config.selection == "attain" and detail["bandcount"] == 1 and vetoes == 0 else "same-pool selection unchanged"
     return {"enabled": mode != "off", "mode": mode, "control": config.priorcontrol, "evaluations": metadata.get("evaluations", 0), "positiveexcess": positive, "penalized": penalties, "vetoed": vetoes, "selectedwithprior": selected.key, "selectedwithoutprior": without.key, "selectionchanged": changed, "bandwithoutprior": detail["bandcount"], "reason": reason, "scope": "Same observed pool only; probe cost and search trajectories require separate paired runs."}
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

@@ -171,5 +171,5 @@ def propose(model, radius, lower, scales, damage, damagescale, cap, ridge, recov
     selected["solver"] = {"pieces": pieces, "iterations": sum(row["iterations"] for row in pieces), "optimalitycertified": bool(certified), "tolerance": tolerance, "tiedpieces": len(tied), "ties": "Deterministic parameter and piece ordering.", "scope": "Enumerated local proxy; numerical bounds do not certify nonlinear image optimality."}
     return selected
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

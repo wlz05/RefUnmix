@@ -354,5 +354,5 @@ def build(session, native, kind="pullback", start=.9, delta=.15, ridge=.05, prob
         if limit is not None:
             limit.phase = previous
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

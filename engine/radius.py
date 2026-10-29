@@ -35,5 +35,5 @@ def initialize(value, default, native, mode, active):
     radius = min(default, result["radius"])
     return radius, {**result, "mode": "declared directional profile", "default": default, "initial": radius, "boundsdeclared": value.get("verified", False), "certified": False, "scope": "Initial radius hint only; joint directions, reanchoring, clipping, and endpoint probes remain actually verified."}
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

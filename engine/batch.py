@@ -240,5 +240,5 @@ class Batch:
         totals = {key: sum(self.counts.get(name, {}).get(key, 0) for name in ("predict", "state", "velocity")) for key in ("samples", "requests", "batches")}
         return {"width": self.width, "sharedweights": True, "operations": {key: dict(value) for key, value in self.counts.items()}, "denoisersamples": totals["samples"], "denoiserrequests": totals["requests"], "denoisercalls": totals["batches"], "scope": "Physical shared model dispatches; per-request budgets retain their conditioned samples and logical forward calls."}
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

@@ -89,5 +89,5 @@ def loader(dataset: EditDataset, batch: int = 1, shuffle: bool = True, seed: int
         raise ValueError("shuffle must be boolean and seed must be a supported integer.")
     return DataLoader(dataset, batch_size=batch, shuffle=shuffle, num_workers=workers, generator=torch.Generator().manual_seed(seed), worker_init_fn=worker)
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

@@ -303,5 +303,5 @@ class Consistency:
     def metadata(self):
         return {"kind": "flow", "probes": self.probes, "ticks": self.ticks, "sigmas": [float(self.session.editor.sigmas[tick]) for tick in self.ticks], "seed": self.seed, "weights": self.weights, "probabilities": self.probabilities, "evaluations": self.evaluations, "velocitydirection": "data-to-noise", "noise": "Shared independent Gaussian endpoint per probe.", "note": "Conditional pair velocity residual is not likelihood, manifold distance, or convergence proof."}
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

@@ -163,5 +163,5 @@ def propose(model, radius, lower, damage, reference, scales, indices, damping, l
     selected = min(options, key=lambda row: (row["objective"], row["point"])) if options else None
     return selected if selected is not None and selected["solver"]["gain"] > current + loss + 1e-12 else None
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

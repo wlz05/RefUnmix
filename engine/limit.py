@@ -63,5 +63,5 @@ class Budget:
         self.check()
         return {"maximum": self.maximum, "calllimit": self.calls, "walllimit": self.seconds, "samples": self.used, "calls": self.forwards, "remaining": self.maximum - self.used, "elapsed": perf_counter() - self.started, "stages": {key: dict(value) for key, value in self.stages.items()}}
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

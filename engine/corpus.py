@@ -309,5 +309,5 @@ def convert(kind, annotation, root, output, sidecar=None, split=None):
     from engine.format import POLICY
     return {"benchmark": kind, "records": len(records), "output": str(output), "mapping": str(output / "mapping.json"), "images": "./images", "format": dict(POLICY), "protocol": "Official tags are preserved; custom splits require explicit grouping."}
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

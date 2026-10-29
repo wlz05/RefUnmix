@@ -552,5 +552,5 @@ def select(path, score, weight, prior, config=None):
     report["termination"] = {"reason": stopped, "radius": radius, "stationaritycertified": False, "globaloptimalitycertified": False}
     return Result(selected.image, selected.latent, report)
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

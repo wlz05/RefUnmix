@@ -62,5 +62,5 @@ def solve(response, residual, semantics, metric, beta, radius, damage, regulariz
     feasible = np.isfinite(point).all() and point @ metric @ point <= radius ** 2 + 1e-8 and np.square(residual + response @ point).sum() <= damage + 1e-8 and np.all(semantics @ point >= beta - 1e-8)
     return {"point": point.tolist() if feasible else None, "feasible": bool(feasible), "converged": bool(fitted.success), "objective": objective(point) if feasible else None, "reason": str(fitted.message), "scope": "Local QCQP only; never used by native search."}
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

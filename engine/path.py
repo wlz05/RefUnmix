@@ -191,5 +191,5 @@ class Path:
         observed = [name for name, known in (("sourcezero", 1. in self.references), ("targetzero", 0. in self.references), ("targetfield", (1., 1.) in self.fields)) if known]
         return {"mode": self.mode, "fields": count, "references": len(self.references), "cachehits": self.hits, "conditionrms": rms(self.references[0.].double() - self.references[1.].double()) if 0. in self.references and 1. in self.references else None, "affineequivalence": self.mode == "mix" and self.native.affine, "design": design(observed), "scope": "Latent frequencies are controls, not semantic partitions."}
 
-# Author: Weiliang Zhu
+# Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com
