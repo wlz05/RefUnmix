@@ -9,7 +9,7 @@ from pathlib import PurePosixPath
 def defaults(args=None):
     # Share the main controls with every ablation reference.
     values = {"field": "pullback", "fieldgeometry": "coupled", "method": "path", "axes": "all", "eta": 0., "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False, "representation": "latent", "selection": "attain", "geometry": "output", "algorithm": "trust", "release": True, "poststeps": 1, "cfg": False, "guidance": 1., "referencepath": "auto"}
-    values.update(fieldrepair=0, semantic="patches")
+    values.update(fieldrepair=0, semantic="patches", releasepolicy="residual")
     return {key: deepcopy(getattr(args, key, value)) for key, value in values.items()}
 
 def configuration(args):

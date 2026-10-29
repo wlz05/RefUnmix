@@ -42,6 +42,7 @@ class Config:
     radiusprofile: dict = field(default_factory=dict)
     compensation: bool = False
     release: bool = True
+    releasepolicy: str = "residual"
     geometry: str = "output"
     ranktol: float = 1e-6
     frontier: bool = False
@@ -79,6 +80,8 @@ class Config:
             raise ValueError("Attainment selection controls are invalid.")
         if self.geometry not in {"output", "latent", "attenuate"}:
             raise ValueError("Unknown compensation geometry.")
+        if self.releasepolicy not in {"increment", "residual"}:
+            raise ValueError("Unknown release compensation policy.")
         if self.geometry != "output" and (not self.release or self.algorithm != "trust" or self.selection != "attain"):
             raise ValueError("Geometry ablations require attainment release queries.")
         if type(self.archive) is not bool or type(self.release) is not bool:
@@ -377,6 +380,8 @@ def select(path, score, weight, prior, config=None):
             if config.geometry == "latent":
                 from engine.geometry import response as latentfit
                 model.latentresponse, model.latentmetadata = latentfit(model, [row.point for row in observed], [row.latent.detach().double().cpu().numpy().reshape(-1) for row in observed], config.secant, latentprevious)
+                sourceanchor = getattr(session, "anchor", rawlatent)
+                model.latentresidual = (anchor.latent.detach().double().cpu().numpy() - sourceanchor.detach().double().cpu().numpy()).reshape(-1)
                 latentprevious = model.latentresponse
             checkpoint = session.limit.require if session.limit is not None else None
             if checkpoint is not None:
@@ -409,7 +414,7 @@ def select(path, score, weight, prior, config=None):
             if repair or rescue:
                 proposed = None
             elif config.selection == "attain" and anchor.feasible:
-                proposed = released(model, radius, lower, raw.damage, reference, scales, indices, monitoring["damping"], config.gainloss, config.ranktol, checkpoint, config.geometry) if config.release and leverage.get("fittrusted") else None
+                proposed = released(model, radius, lower, raw.damage, reference, scales, indices, monitoring["damping"], config.gainloss, config.ranktol, checkpoint, config.geometry, config.releasepolicy) if config.release and leverage.get("fittrusted") else None
                 if proposed is None or path.canonical(proposed["point"]) in visited:
                     proposed = attained(model, radius, lower, scales, raw.damage, config.damagescale, None if config.priorcontrol == "soft" else cap, monitoring["damping"], reference, indices, config.gainloss, config.solversteps, checkpoint)
             else:
@@ -536,7 +541,7 @@ def select(path, score, weight, prior, config=None):
     report["initialization"] = initialization
     report["protection"] = {"active": mass > 0, "mass": mass, "scope": "Empty protection imposes zero damage and preserves semantic search."}
     report["curvature"] = guard.metadata()
-    report["release"] = {"enabled": config.release and config.algorithm == "trust" and config.selection == "attain", "geometry": config.geometry, "queries": sum(row.get("kind") == "release" for row in history), "accepted": sum(row.get("kind") == "release" and row.get("accepted") is True for row in history), "scope": "Compensation proposals share protected-output verification and attainment selection."}
+    report["release"] = {"enabled": config.release and config.algorithm == "trust" and config.selection == "attain", "geometry": config.geometry, "policy": config.releasepolicy, "queries": sum(row.get("kind") == "release" for row in history), "accepted": sum(row.get("kind") == "release" and row.get("accepted") is True for row in history), "scope": "Compensation proposals share protected-output verification and attainment selection."}
     report["rescue"] = {**rescuetrace, "enabled": config.compensation, "queries": sum(row.get("kind") == "compensation" for row in history), "accepted": sum(row.get("kind") == "compensation" and row.get("accepted") is True for row in history), "selected": any(row.get("kind") == "compensation" and row.get("candidate") == selected.key for row in history), "scope": "Optional rescue probes are separate from the main release operator."}
     from engine.activity import prior as prioractivity
     report["prioractivity"] = prioractivity(raw, candidates, selected, config, prior.metadata(), getattr(prior, "mode", "off" if raw.prior is None else "unknown"))

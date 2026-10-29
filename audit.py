@@ -73,6 +73,12 @@ def values(row):
         released = [row for row in history if row.get("kind") == "release"]
         result["release:queries"] = len(released)
         result["release:accepted"] = sum(row.get("accepted") is True for row in released)
+        for policy in ("increment", "residual"):
+            chosen = [row for row in released if row.get("solver", {}).get("policy", "increment") == policy]
+            result["release:" + policy + "queries"] = len(chosen)
+            result["release:" + policy + "accepted"] = sum(row.get("accepted") is True for row in chosen)
+        comparisons = [row["solver"]["comparison"]["improvement"] for row in released if row.get("solver", {}).get("comparison", {}).get("improvement") is not None]
+        result["release:modelimprovement"] = float(np.mean(comparisons)) if comparisons else None
         result["release:predictedgain"] = float(np.mean([row["solver"]["gain"] for row in released])) if released else None
         result["release:responseerror"] = float(np.mean([row["responseerror"] for row in released if "responseerror" in row])) if any("responseerror" in row for row in released) else None
         for key in ("predictedgain", "actualgain", "predicteddamagechange", "actualdamagechange"):

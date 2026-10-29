@@ -62,6 +62,8 @@ def variants(suite, consistency="ddpm", base=None):
             extra["attainment"] = {"protected": {"selection": "protect"}, "attained": {"selection": "attain"}, "field": {"selection": "attain", "axes": "field", "eta": 0.}, "random": {"selection": "attain", "representation": "random"}, "poll": {"selection": "attain", "algorithm": "poll"}}
         elif suite == "release":
             extra["release"] = {"released": {"release": True}, "joint": {"release": False}, "random": {"representation": "random", "release": True}, "field": {"axes": "field", "eta": 0., "release": False}}
+        elif suite == "residual":
+            extra["residual"] = {"incremental": {"release": True, "releasepolicy": "increment"}, "repaired": {"release": True, "releasepolicy": "residual"}, "joint": {"release": False}}
         elif suite == "geometry":
             extra["geometry"] = {"output": {"release": True, "geometry": "output"}, "latent": {"release": True, "geometry": "latent"}, "attenuated": {"release": True, "geometry": "attenuate"}, "joint": {"release": False, "geometry": "output"}}
         elif suite == "solver":
@@ -157,7 +159,7 @@ def frozen(args, chosen):
 def main():
     parser = datasetargs(common(argparse.ArgumentParser(description="Run declared benchmark or validation/test ablations.")))
     parser.set_defaults(split="val", output="./trials")
-    parser.add_argument("--suite", type=str.casefold, choices=("semantic", "alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
+    parser.add_argument("--suite", type=str.casefold, choices=("residual", "semantic", "alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
     parser.add_argument("--recipe", default=None)
     parser.add_argument("--dry", action="store_true", help="Print effective variants without loading data or checkpoints.")
     args = parser.parse_args()

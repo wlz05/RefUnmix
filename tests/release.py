@@ -94,6 +94,119 @@ class ReleaseTests(unittest.TestCase):
         self.assertLessEqual(joint["solver"]["predicteddamage"], .01 + 1e-12)
         self.assertLess(np.linalg.norm(np.eye(2) - np.linalg.pinv(model.response) @ model.response), 1e-12)
 
+    def testresidualcapacity(self):
+        model = self.model(response=((1., 0.), (0., 1.)), residual=(.2, -.1))
+        original = self.proposed(model, policy="increment")
+        repaired = self.proposed(model, policy="residual")
+        self.assertAlmostEqual(original["solver"]["gain"], .2)
+        self.assertGreater(repaired["solver"]["gain"], .32)
+        self.assertEqual(repaired["solver"]["policy"], "residual")
+        self.assertLess(repaired["solver"]["offset"][0], 0.)
+        self.assertAlmostEqual(repaired["solver"]["offset"][1], 0.)
+        self.assertLessEqual(repaired["solver"]["predicteddamage"], .05 + 1e-12)
+        self.assertGreater(repaired["solver"]["comparison"]["improvement"], 0.)
+        self.assertEqual(repaired["solver"]["comparison"]["queries"], 0)
+        self.assertAlmostEqual(repaired["solver"]["predicteddamage"], .05 + repaired["solver"]["damagecross"] + repaired["solver"]["damagequadratic"])
+        json.dumps(repaired["solver"], allow_nan=False)
+
+    def testaffinestationary(self):
+        model = self.model(response=((0., 0.),), residual=(0.,))
+        result = self.proposed(model, policy="residual", damage=0., damping=10.)
+        self.assertAlmostEqual(result["solver"]["amplitude"], .05)
+
+    def testaffinerepaironly(self):
+        model = self.model(response=((1., 0.),), residual=(.2,), semantic=((-1., 0.),))
+        result = self.proposed(model, policy="residual")
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(result["solver"]["amplitude"], 0.)
+        self.assertGreater(result["solver"]["gain"], .19)
+        self.assertLess(result["solver"]["predicteddamage"], 1e-10)
+
+    def testaffineinterval(self):
+        model = self.model(response=((1., 0.), (0., 1.)), residual=(.2, -.1))
+        offset, direction = np.array([-.2, 0.]), np.array([0., 1.])
+        bounds = interval(model, direction, .5, [-1.], .05, offset)
+        self.assertAlmostEqual(bounds[0], .1 - np.sqrt(.05))
+        self.assertAlmostEqual(bounds[1], .1 + np.sqrt(.05))
+        for step in np.linspace(*bounds, 100):
+            move = offset + step * direction
+            self.assertLessEqual(float(move @ move), .25 + 1e-12)
+            residual = model.residual + model.response @ move
+            self.assertLessEqual(float(residual @ residual), .05 + 1e-12)
+
+    def testaffinetrustball(self):
+        model = self.model(response=((0., 0.),), residual=(0.,))
+        self.assertIsNone(interval(model, [0., 1.], .1, [-1.], 0., [.2, 0.]))
+        bounds = interval(model, [0., 1.], .5, [-1.], 0., [.3, .1])
+        np.testing.assert_allclose(bounds, [-.5, .3])
+        for offset in ([0.], [np.nan, 0.]):
+            with self.assertRaises(ValueError):
+                interval(model, [0., 1.], .5, [-1.], 0., offset)
+
+    def testretainedpaths(self):
+        model = self.model()
+        old = directions(model, .1, policy="increment")
+        new = directions(model, .1, policy="residual")
+        self.assertGreater(len(new), len(old))
+        for row in old:
+            self.assertTrue(any(np.array_equal(row["direction"], other["direction"]) and np.array_equal(row["offset"], other["offset"]) for other in new))
+        original = self.proposed(model, policy="increment")
+        repaired = self.proposed(model, policy="residual")
+        self.assertLessEqual(repaired["objective"], original["objective"] + 1e-12)
+        with self.assertRaises(ValueError):
+            self.proposed(model, policy="unknown")
+
+    def testzerobias(self):
+        model = self.model(residual=(0.,))
+        old = directions(model, .1, policy="increment")
+        new = directions(model, .1, policy="residual")
+        self.assertEqual(len(old), len(new))
+        for left, right in zip(old, new):
+            np.testing.assert_array_equal(left["direction"], right["direction"])
+            np.testing.assert_array_equal(left["offset"], right["offset"])
+
+    def testaffinesemanticfloor(self):
+        model = self.model(response=((1., 0.), (0., 1.)), residual=(.2, -.1), semantic=((0., 1.), (1., 0.)), scores=(0., 0.))
+        result = self.proposed(model, policy="residual", lower=[-1., 0.], indices=[0])
+        self.assertIsNotNone(result)
+        self.assertEqual(result["solver"]["policy"], "increment")
+        self.assertGreaterEqual(float((model.semantic @ result["move"])[1]), 0.)
+
+    def testresidualoverflow(self):
+        model = self.model(response=((1e-200, 0.), (0., 1.)), residual=(.2, -.1))
+        result = self.proposed(model, policy="residual")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["solver"]["policy"], "increment")
+        self.assertTrue(result["solver"]["comparison"]["skipped"])
+        self.assertLessEqual(result["solver"]["predicteddamage"], .05 + 1e-12)
+
+    def testresidualcovariance(self):
+        matrix = np.array([[2., .4], [.3, 1.]])
+        model = self.model(response=((1., .2, .4), (.3, 2., .7)), semantic=((1., -.2, 1.),), residual=(.2, -.1), active=(0, 1, 2), metric=np.diag([2., 3., 1.]))
+        transformed = self.model(response=model.response.copy(), semantic=model.semantic.copy(), residual=model.residual, active=(0, 1, 2), metric=model.metric.copy())
+        transformed.response[:, :2] = model.response[:, :2] @ matrix
+        transformed.semantic[:, :2] = model.semantic[:, :2] @ matrix
+        transformed.metric[:2, :2] = matrix.T @ model.metric[:2, :2] @ matrix
+        old = directions(model, .1, policy="residual")
+        new = directions(transformed, .1, policy="residual")
+        self.assertEqual(len(old), len(new))
+        for left, right in zip(old, new):
+            for key in ("direction", "offset"):
+                np.testing.assert_allclose(left[key][:2], matrix @ right[key][:2], atol=1e-10)
+            np.testing.assert_allclose(left["protected"], right["protected"], atol=1e-10)
+
+    def testpolicymatrix(self):
+        controls = variants("residual")
+        self.assertEqual(controls["incremental"]["releasepolicy"], "increment")
+        self.assertEqual(controls["repaired"]["releasepolicy"], "residual")
+        self.assertFalse(controls["joint"]["release"])
+        args = common(argparse.ArgumentParser()).parse_args(["--clip", "clip", "--releasepolicy", "INCREMENT"])
+        from run import pathconfig
+        self.assertEqual(pathconfig(args).releasepolicy, "increment")
+        self.assertEqual(Config().releasepolicy, "residual")
+        with self.assertRaises(ValueError):
+            Config(releasepolicy="unknown").validate()
+
     def testsemanticfloor(self):
         model = self.model(semantic=((0., 1.), (0., -1.)), scores=(0., 0.))
         result = self.proposed(model, lower=[-1., -.03], indices=[0])

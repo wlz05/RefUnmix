@@ -17,7 +17,7 @@ from trust import Fake
 
 class GeometryTests(unittest.TestCase):
     def model(self):
-        return SimpleNamespace(anchor=np.array([1., 1., .5]), active=np.array([0, 2]), response=np.array([[1., 1.]]), latentresponse=np.eye(2), semantic=np.array([[0., 1.]]), residual=np.array([.2]), scores=np.array([0.]), metric=np.eye(2))
+        return SimpleNamespace(anchor=np.array([1., 1., .5]), active=np.array([0, 2]), response=np.array([[1., 1.]]), latentresponse=np.eye(2), latentresidual=np.zeros(2), semantic=np.array([[0., 1.]]), residual=np.array([.2]), scores=np.array([0.]), metric=np.eye(2))
 
     def proposed(self, geometry):
         model = self.model()

@@ -54,7 +54,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(plan["variants"]["pullbackfull"]["settings"][key], getattr(args, key))
 
     def testallsuites(self):
-        suites = ("semantic", "alignment", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals")
+        suites = ("residual", "semantic", "alignment", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals")
         for suite in suites:
             args = self.args()
             args.suite = suite
@@ -195,8 +195,8 @@ class ProtocolTests(unittest.TestCase):
         reference = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64)
         validate(reference)
         benchmark = [args for entry, args in executions if entry is main and args.split == "all" and not args.dry]
-        self.assertEqual(len(benchmark), 22)
-        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 191)
+        self.assertEqual(len(benchmark), 23)
+        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 200)
         for args in benchmark:
             plan = design(args, variants(args.suite, base=args))
             expected = deepcopy(reference)

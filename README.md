@@ -1,8 +1,8 @@
-# RefUnmix: Endpoint-Aligned Fields for Protected Image Editing
+# RefUnmix: Protected-Response Compensation for Image Editing
 
-**RefUnmix** coordinates field and conditional-reference responses under a protected-output budget. It pairs reference motion with a field correction, compensates their protected-content response, and adopts the target change that remains.
+**RefUnmix** edits through protected-response compensation. A field correction and a matched conditional-reference change can cancel their protected effects while retaining target change. The same measured response also repairs existing distortion, releasing room for further editing within a fixed protection budget.
 
-RefUnmix uses one-step or few-step native backbones with finite-query control. Reports include all denoiser sample evaluations, forward calls, VAE decodes, latency, and peak memory.
+RefUnmix uses frozen one-step or few-step native backbones with finite-query control. Reports include all denoiser sample evaluations, forward calls, VAE decodes, latency, and peak memory.
 
 [Quick start](#quick-start) | [Datasets](#datasets) | [Main experiments](#main-experiments-all-700-pie-bench-requests) | [Ablations](#benchmark-ablation-protocol) | [Parallel reproduction](#parallel-reproduction)
 
@@ -12,11 +12,11 @@ RefUnmix uses one-step or few-step native backbones with finite-query control. R
 
 ### Core Insight
 
-A single editing channel changes target content and protected content together. Two channels can produce opposing protected responses while retaining useful target change. **RefUnmix measures and uses this compensation to edit within a fixed protection budget.**
+**Preservation constrains total distortion, so an update in a protected region can help when it repairs an existing error.** RefUnmix measures this relationship in complete generated outputs. One inverse response supplies both the field offset that repairs current distortion and the field correction paired with reference release. Their joint target response determines how much change to adopt.
 
-The field and a matched source/target reference path provide the two interventions. Their decoded responses determine the paired correction and its common adoption step. Native endpoint calibration chooses the initial field within the supplied temporal-contrast family.
+Matched source/target zero-field endpoints expose the reference coordinate. Endpoint calibration supplies the initial field. Regional semantic views and optional endpoint repair support these two operations; the central control mechanism is the joint protected response.
 
-[ChordEdit](https://arxiv.org/abs/2602.19083) combines two temporal residuals before optional refinement. [ECT](https://arxiv.org/abs/2610.30827) analytically scales one VP conditional difference. [PreciseEdit](https://arxiv.org/abs/2610.23535) regulates directional and spatial release. RefUnmix fits joint output responses and generates compensated field-reference proposals. The temporal ablation compares initialization rules; the release ablation holds the candidate family fixed and compares query strategies.
+[ChordEdit](https://arxiv.org/abs/2602.19083) stabilizes coarse-step transport, [PreciseEdit](https://arxiv.org/abs/2610.23535) allocates strong transport by directional and spatial reliability, and [LOCO Edit](https://arxiv.org/html/2409.02374v3) projects editing directions using regional Jacobians. RefUnmix computes residual-aware reference-field compensation from paid output observations, then verifies the selected finite intervention. Equal-budget controls distinguish this mechanism from generic joint search.
 
 ### The Complete Method Chain
 
@@ -37,7 +37,7 @@ Source image and source/target captions
                     |
     Fit joint semantic and protected RGB responses
                     |
-     Compensate reference motion with field motion
+     Repair residuals and compensate reference motion
                     |
      Select a common adoption step and query once
                     |
@@ -126,29 +126,34 @@ The two complementary Haar projections parameterize field corrections. Reference
 \widehat s(Y(\xi_j+u))\approx\widehat s_j+C_ju.
 ```
 
-Partition $`A_j=[A_f,a_\eta]`$ and $`C_j=[C_f,c_\eta]`$. For one unit of reference motion, the field compensation is
+Partition $`A_j=[A_f,a_\eta]`$ and $`C_j=[C_f,c_\eta]`$. For a fixed reference adoption $`\omega`$, the field correction minimizes the current protected residual together with the new conditional response:
 
 ```math
-q_\rho=\arg\min_q
-\bigl(\lVert A_fq+a_\eta\rVert_2^2+\rho\lVert q\rVert_{M_f}^2\bigr),
-\qquad
-d_\rho=\begin{bmatrix}q_\rho\\1\end{bmatrix},
-\qquad
-e_\rho=A_jd_\rho,\quad k_\rho=C_jd_\rho.
+v_\rho(\omega)=\arg\min_v
+\bigl(\lVert r_j+A_fv+\omega a_\eta\rVert_2^2+\rho\lVert v\rVert_{M_f}^2\bigr)
+=p_\rho+\omega q_\rho.
 ```
 
-Here $`e_\rho`$ is the remaining protected response and $`k_\rho`$ is the retained semantic response. A single signed step $`\omega`$ adopts both changes. Its predicted protection cost is
+Both terms use the same measured inverse:
 
 ```math
-D_j(\omega)=\lVert r_j+\omega e_\rho\rVert_2^2
-=D_j(0)+2\omega r_j^\top e_\rho+\omega^2\lVert e_\rho\rVert_2^2.
+B_\rho=(A_f^\top A_f+\rho M_f)^{-1}A_f^\top,\qquad
+p_\rho=-B_\rho r_j,\quad q_\rho=-B_\rho a_\eta.
 ```
 
-Choose $`\omega`$ from the control box, trust region, semantic floors, and the native damage budget. The objective maximizes the least normalized editing-head gain with step regularization. When a release proposal is unavailable, the controller uses its joint QCQP, geometry repair, or measured fallback within the same budget.
+Positive damping gives a unique solution. At zero damping, the implementation uses the resolved minimum-metric-norm solution. Define $`s_\rho=(p_\rho^\top,0)^\top`$ and $`d_\rho=(q_\rho^\top,1)^\top`$. The residual policy compares the affine path $`u(\omega)=s_\rho+\omega d_\rho`$ with the retained incremental path $`u(\omega)=\omega d_\rho`$. The offset consumes the original trust radius. Every path obeys the same control box, semantic floors, and protected-output budget.
 
-**Why nonzero protected response can help.** Protection is measured against the source image. For $`A_f=(2,0)^\top`$, $`a_\eta=(1,1)^\top`$, $`r=(0,-0.1)^\top`$, $`C_f=1`$, and $`c_\eta=2`$, the correction $`q=-1/2`$ leaves $`e=(0,1)^\top`$ and $`k=3/2`$. Its damage change is $`-0.2\omega+\omega^2`$, so $`0<\omega\le0.2`$ respects the current budget. This permits gain 0.3, versus 0.2 from reference motion alone. The full protection matrix is invertible, so strict zero-response projection would allow no motion. Actual outputs verify each finite step.
+For the full protected increment $`w=A_ju(\omega)`$,
 
-Solver logs separate `damagecross`, `damagequadratic`, and `repaircredit`. Negative cross response provides repair credit against the current residual; it can offset the positive quadratic cost. `verification` compares this model prediction with the observed damage and target changes. Regional Jacobian and nullspace methods, including [LOCO Edit](https://arxiv.org/html/2409.02374v3), provide related geometric foundations.
+```math
+D_j(\omega)-D_j(0)=2r_j^\top w+\lVert w\rVert_2^2.
+```
+
+The cross term records whether the change repairs or amplifies existing distortion. The controller optimizes the least editing-head gain with step regularization on at most six paths, then generates one selected proposal. The additional paths reuse the fitted responses and require no additional model probes. A generic joint QCQP and measured fallback remain available.
+
+**Why residual repair changes the attainable edit.** Consider $`A_f=(1,0)^\top`$, $`a_\eta=(0,1)^\top`$, $`r=(0.2,-0.1)^\top`$, $`C_f=0`$, and $`c_\eta=1`$. The current damage is 0.05. Incremental cancellation has $`q=0`$, allowing positive reference adoption only up to 0.2. Residual compensation gives $`p=-0.2`$, removes the first error component, and permits adoption up to $`0.1+\sqrt{0.05}\approx0.324`$ under the same damage budget. Both fit within a control radius of 0.5 at the test's interior anchor. This is a fixed linear example, not a measured PIE result.
+
+`--releasepolicy residual` is the main control policy. `--releasepolicy increment` reproduces the earlier incremental rule. Logs record the repair `offset`, its target response, the two path-family objective values, and actual output verification. At the same fitted state and constraints, the residual family retains all incremental paths; its best regularized local objective is therefore no worse. Final generated-image improvements are evaluated independently.
 
 **5. Close the loop on actual outputs.** Every visited candidate is decoded and scored under frozen control views. Completed candidates must satisfy the native protection budget and all semantic floors. Rejected outputs still inform response fitting. Initialization, field probes, reference queries, fallback, and enabled priors share the model allowance. Among the actual feasible outputs and $`Y_{\mathrm{base}}`$, select the highest attained minimum editing gain, then the lowest bounded preservation cost within that attainment band. Postselection PIE metrics and independent task labels score the frozen result.
 
@@ -351,6 +356,7 @@ These commands use `--prior off`. Optional consistency priors consume additional
 | `--geometry` | `output` | Compensation geometry: output, latent, attenuate |
 | `--axes` | `all` | Active control coordinates |
 | `--release` | on | Main protected-response reference-field compensation |
+| `--releasepolicy` | `residual` | Repair the current residual and compensate new reference motion; `increment` retains the earlier rule |
 | `--compensation` | off | Additional rescue probes after unreliable proposals |
 
 See `python -B RefUnmix/main.py --help` for all options. The report records the field used and the completed queries when a budget limit shortens execution.
@@ -442,8 +448,8 @@ python -B RefUnmix/split.py --dataset development --mapping mapping.json --image
 The following pair evaluates the complete `core` design on the official validation partition and then replays that design on the official test partition. Run validation first. If selecting one global variant, record its name from the validation aggregate before running test; its final result is `outputs/developmenttest/<variant>/summary.json`. The pretrained checkpoint stays the same:
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset development --mapping mapping.json --images images --manifest outputs/development.json --split val --suite core --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/developmentval
-python -B RefUnmix/trial.py --batch 3 --dataset development --mapping mapping.json --images images --manifest outputs/development.json --split test --recipe outputs/developmentval/recipe.json --suite core --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/developmenttest
+python -B RefUnmix/trial.py --batch 3 --dataset development --mapping mapping.json --images images --manifest outputs/development.json --split val --suite core --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/developmentval
+python -B RefUnmix/trial.py --batch 3 --dataset development --mapping mapping.json --images images --manifest outputs/development.json --split test --recipe outputs/developmentval/recipe.json --suite core --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/developmenttest
 ```
 
 The validation run saves `recipe.json` with every declared variant, code and checkpoint identities, seed set, and shared configuration. The test command replays the same matrix. Keep the model paths, mapping, official manifest, code revision, batch width, seeds, and base control options identical between these commands; only the split, output, and recipe argument change. To study different time, field, prior, or budget settings, run a new validation/test pair in a new output tree. The PIE-Bench commands below directly evaluate the fixed main configuration and predeclared variants on all 700 requests.
@@ -456,7 +462,7 @@ Run the [main experiments](#main-experiments-all-700-pie-bench-requests) and [be
 
 ## Experiments
 
-RefUnmix achieves state-of-the-art image editing performance on **PIE-Bench**, with improved protected-content preservation and target-text alignment. All experiments run on a **single NVIDIA GeForce RTX 4090** with seeds **42, 52, 3047, and 3407**. For both main and ablation experiments, we compute the mean across test requests separately for each seed, then average the four seed-level results.
+The **PIE-Bench** protocol measures protected-content preservation and target-text alignment. The experiment profile uses a **single NVIDIA GeForce RTX 4090** with seeds **42, 52, 3047, and 3407**. For both main and ablation experiments, we compute the mean across test requests separately for each seed, then average the four seed-level results.
 
 ### Baselines
 
@@ -509,13 +515,13 @@ Run the following commands from `workspace/` in one process on one RTX 4090. The
 **Full-controller run, 64-sample cap:**
 
 ```bash
-python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/main
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/main
 ```
 
 **Equal-budget run, 15-sample cap:**
 
 ```bash
-python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 15 --maxcalls 15 --output outputs/matched
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 15 --maxcalls 15 --output outputs/matched
 ```
 
 With the complete release, each command exports **2,800 image-seed outputs from 700 requests**. The inference summary contains 2,800 `rows`; each benchmark suite records `variants.<name>.rows = 2800` for every arm. `--split all` evaluates every mapped request; it does not use a split manifest. The 64- and 15-sample outputs belong to different budget settings. Report their actual sample evaluations, calls, and runtime alongside quality. The budget suite below also covers 10, 12, 20, and 30.
@@ -544,6 +550,7 @@ The printed `design.main` is `pullbackfull`, whose `changes` is empty. Each arm 
 | `null` | Explicit zero-field continuation, centering, and condition recovery | 64 |
 | `alignment` | Coupled and scalar norm-matched field construction | 64 |
 | `semantic` | Region-level goals and current-state endpoint repair | 64 |
+| `residual` | Incremental versus residual compensation with the same responses and query caps | 64 |
 | `temporal` | Fixed temporal mixtures and ECT direct/continued/controlled arms | 64 |
 | `core` | Guarded field and reference coordinate controls | 64 |
 | `release` | Main reference-field compensation versus joint QCQP | 64 |
@@ -574,7 +581,7 @@ The 64-sample controller ablations share the full-controller run's allowance. Th
 Four fields with raw, fixed-reference, and full control. Named outputs: `pullbackraw`, `pullbackfixed`, `pullbackfull`, `chordraw`, `chordfixed`, `chordfull`, `instantraw`, `instantfixed`, `instantfull`, `averageraw`, `averagefixed`, `averagefull`.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite fields --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/fieldstest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite fields --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/fieldstest
 ```
 
 #### Null
@@ -582,7 +589,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 `zero` is an explicit field intervention, independent of the input scale. Named outputs are `native` (target-conditioned zero-field endpoint), `centered` (VAE source reconstruction), `condition` (source anchor plus the target/source zero-field difference), `reference` (adaptive zero-field reference control), `raw` (the supplied main field without control), and `full` (the unchanged main method). Fixed interventions are exported directly. The shared localization contrast remains charged; zero-field arms do not pay pullback probe costs, so actual costs differ under the common cap.
 
 ~~~bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite null --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/nulltest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite null --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/nulltest
 ~~~
 
 `centered` is generally a VAE reconstruction rather than the exact input pixels. `condition` retains a conditional effect despite its zero input field. These cases isolate different operations and should not be combined into one no-field label.
@@ -592,7 +599,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Coupled and scalar norm-matched field construction. Named outputs: `aligned`, `scalar`, `controlled`, `matched`.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite alignment --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/alignmenttest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite alignment --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/alignmenttest
 ```
 
 #### Temporal
@@ -606,7 +613,7 @@ All arms inherit the supplied main budget, seeds, and shared protocol; `full` is
 Controlled arms freeze the same protection-probe time. `ectfull` uses that time even though its editing field is measured at 0.75, and pays the extra probe when needed. Direct ECT keeps its single temporal support and does not prepare a control head.
 
 ~~~bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite temporal --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/temporaltest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite temporal --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/temporaltest
 ~~~
 
 #### Core
@@ -614,7 +621,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Guarded field and reference coordinate controls. Named outputs: `raw`, `target`, `source`, `eta`, `field`, `full`.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite core --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/coretest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite core --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/coretest
 ```
 
 #### Release
@@ -622,7 +629,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Main reference-field compensation versus joint QCQP. Named outputs: `released`, `joint`, `random`, `field`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite release --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/releasetest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite release --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/releasetest
 ```
 
 #### Geometry
@@ -630,7 +637,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Output, latent, and reference-only compensation. Named outputs: `output`, `latent`, `attenuated`, `joint`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite geometry --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/geometrytest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite geometry --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/geometrytest
 ```
 
 #### Search
@@ -638,7 +645,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Trust, poll, random search, and curvature monitoring. Named outputs: `poll`, `randomsearch`, `unguarded`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite search --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/searchtest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite search --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/searchtest
 ```
 
 #### Attainment
@@ -646,15 +653,25 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Attainment-first and protection-first selection. Named outputs: `protected`, `attained`, `field`, `random`, `poll`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite attainment --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/attainmenttest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite attainment --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/attainmenttest
 ```
+
+#### Residual Compensation
+
+`--suite residual` adds `incremental`, `repaired`, and `joint` to the six core references. These arms respectively use incremental release, residual-aware affine release, and generic joint control. They freeze the initial field, semantic view policy, native step count, candidate cap, and model budgets. Keep `--fieldrepair 0 --semantic patches` to isolate the control operator. At each visited state, the log's `comparison` evaluates both path families from identical responses without generating either counterfactual image; final arms run and score their own outputs.
+
+```bash
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite residual --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/residualtest
+```
+
+Score `outputs/residualtest/incremental/summary.json`, `outputs/residualtest/repaired/summary.json`, and `outputs/residualtest/joint/summary.json` using the official assessment workflow below. Preserve all four seeds and compare target completion, preservation, and complete cost together. `release:modelimprovement` is the request-level mean of frozen-model objective improvements before seed-first aggregation; it is separate from CLIP-Edited. `release:residualqueries` and `release:residualaccepted` count actual affine-path proposals and accepted queries.
 
 #### Reference
 
 Latent, RGB, mixture, random, and conditional representations. Named outputs: `rgb`, `mixture`, `random`, `conditional`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite reference --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/referencetest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite reference --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/referencetest
 ```
 
 #### Diagnosis
@@ -662,7 +679,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Unfiltered reference interventions. Named outputs: `raw`, `target`, `middle`, `source`, `mixture`, `rgb`, `random`, `full`.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite diagnosis --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/diagnosistest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite diagnosis --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/diagnosistest
 ```
 
 #### Goals
@@ -670,7 +687,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Editing-head objective with unchanged feasibility checks. Named outputs: `targetonly`, `globalonly`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite goals --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/goalstest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite goals --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/goalstest
 ```
 
 #### Leverage
@@ -678,7 +695,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Additional rescue probes. Named outputs: `compensated`, `uncompensated`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite leverage --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/leveragetest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite leverage --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/leveragetest
 ```
 
 #### Prior
@@ -686,7 +703,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Explicit bounded, hard, and soft DDPM consistency. Named outputs: `noprior`, `boundedprior`, `hardprior`, `softprior`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite prior --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/priortest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite prior --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/priortest
 ```
 
 #### Verify Optional Mechanisms
@@ -709,7 +726,7 @@ With attainment-first selection, a finite bounded prior cannot change a unique w
 CFG and prediction-path guidance controls. Named outputs: `cfgone`, `cfgtwo`, `cfgfour`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite guidance --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/guidancetest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite guidance --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/guidancetest
 ```
 
 #### Solver
@@ -717,7 +734,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Solver iterations, certificates, and monitoring. Named outputs: `nocertificate`, `shortsolve`, `unguarded`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite solver --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/solvertest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite solver --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/solvertest
 ```
 
 #### Candidates
@@ -725,7 +742,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Candidate caps of 8 and 24; full uses 12. Named outputs: `small`, `large`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite candidates --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/candidatestest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite candidates --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/candidatestest
 ```
 
 #### Cost
@@ -733,7 +750,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Reference-only and shorter candidate configurations. Named outputs: `light`, `short`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite cost --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/costtest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite cost --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/costtest
 ```
 
 #### Budget
@@ -741,7 +758,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Sample/call caps of 10, 12, 15, 20, and 30. Named outputs: `ten`, `twelve`, `fifteen`, `twenty`, `thirty`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite budget --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/budgettest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite budget --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/budgettest
 ```
 
 #### Mechanism
@@ -749,7 +766,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 Decoder-only and five-step backend diagnostics. Named outputs: `decoder`, `multistep`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite mechanism --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 256 --maxcalls 256 --output outputs/mechanismtest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite mechanism --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 256 --maxcalls 256 --output outputs/mechanismtest
 ```
 
 #### Frontier
@@ -757,7 +774,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 First-model local capacity diagnostic. Named outputs: `capacity`, `unchecked`. The six core references (`raw`, `target`, `source`, `eta`, `field`, `full`) are included.
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite frontier --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/frontiertest
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite frontier --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/frontiertest
 ```
 
 ### Reading and Comparing Outputs
@@ -831,7 +848,7 @@ The `semantic` suite runs the following controlled comparison. Defaults remain `
 Use the same 64-sample/64-call cap, twelve control candidates, one native continuation step, and four seeds in every arm. At a 15-sample cap, repair can leave fewer controller queries; compare actual costs and accepted repair counts rather than assuming equal work from equal caps. The existing validation-to-test recipe workflow accepts `--suite semantic`. After freezing the profile, the complete PIE comparison is:
 
 ```bash
-python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite semantic --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldrepair 0 --semantic patches --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/semantic
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite semantic --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldrepair 0 --semantic patches --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/semantic
 ```
 
 Score all four interventions with the unchanged official protocol:
