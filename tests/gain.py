@@ -201,7 +201,7 @@ class GainTests(unittest.TestCase):
 
     def testdiagnosticcoverage(self):
         trusted = {"active": True, "geometryresolved": True, "fittrusted": True}
-        rows = [{"key": str(index), "report": {"method": "path", "initialleverage": record}} for index, record in enumerate((None, {}, {"active": False}, {"active": True, "fittrusted": False}, trusted))]
+        rows = [{"key": str(index), "seed": 42, "report": {"method": "path", "initialleverage": record}} for index, record in enumerate((None, {}, {"active": False}, {"active": True, "fittrusted": False}, trusted))]
         coverage = summarize(rows)["diagnostics"]["initialleverage"]
         self.assertEqual((coverage["pathrows"], coverage["missing"], coverage["inactive"], coverage["untrusted"], coverage["usable"]), (5, 1, 2, 1, 1))
         self.assertEqual(coverage["fraction"], .2)

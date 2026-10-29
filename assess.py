@@ -107,16 +107,9 @@ def verified(row, source, item):
     return image, edited, mask
 
 def grouped(rows, field, separate=None):
-    groups = {}
-    for row in rows:
-        groups.setdefault(str(row["key"]), []).append(row)
     # Preserve the seed-first reporting order in official scores.
-    means = [{"key": row["key"], "metrics": row[field], **({"seed": row["seed"]} if "seed" in row else {})} for row in rows]
+    means = [{"key": row["key"], "metrics": row[field], "status": row.get("status", {}), **({"seed": row["seed"]} if "seed" in row else {})} for row in rows]
     result = summary(means) if separate is None else averaged(means, separate)
-    infinite = {key for key, values in groups.items() if any(row.get("status", {}).get("psnr") == "positive infinity" for row in values)}
-    if infinite:
-        finite = sum(any(row[field].get("psnr") is not None for row in values) for key, values in groups.items() if key not in infinite)
-        result["psnr"] = {"mean": None, "count": finite + len(infinite), "infinite": len(infinite), "status": "positive infinity"}
     return result
 
 def coverage(rows):

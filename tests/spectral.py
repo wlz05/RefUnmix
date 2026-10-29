@@ -186,6 +186,18 @@ class SpectralTest(unittest.TestCase):
                 self.assertEqual(original["semantic"], current["semantic"])
             self.assertEqual(predictions(rows[:2] + resumed), predictions(rows))
 
+    def testpredictionseeds(self):
+        seeds = [42, 52, 3047, 3407]
+        rows = [{"key": key, "seed": seed, "probes": [{"time": .75, "low": {"energy": None if seed == 52 else 1.}, "high": {"energy": 2.}}]} for key in ("a", "b") for seed in seeds]
+        result = predictions(rows)[0]
+        self.assertIsNone(result["low"]["energy"])
+        self.assertEqual(result["high"]["energy"], 2.)
+        self.assertIsNone(result["byseed"]["52"]["low:energy"]["mean"])
+        changed = [dict(row) for row in rows]
+        changed[0]["probes"] = []
+        with self.assertRaises(ValueError):
+            predictions(changed)
+
     def testworkflow(self):
         origin = Path.cwd()
         with tempfile.TemporaryDirectory() as folder:

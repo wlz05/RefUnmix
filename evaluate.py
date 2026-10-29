@@ -117,6 +117,10 @@ def paired(image, item):
     return {"pairmse": float(difference.square().mean()), "pairl1": float(difference.abs().mean())}
 
 def seeded(rows):
+    if rows:
+        if any(not isinstance(row, dict) or not isinstance(row.get("key"), str) or type(row.get("seed")) is not int for row in rows):
+            raise ValueError("Seed summaries require request keys and integer seeds.")
+        complete(rows, {row.get("seed") for row in rows}, {row.get("key") for row in rows})
     groups = {}
     for row in rows:
         if type(row.get("seed")) is not int:
@@ -124,18 +128,83 @@ def seeded(rows):
         groups.setdefault(row["seed"], []).append({key: value for key, value in row.items() if key != "seed"})
     return {str(seed): summary(values) for seed, values in sorted(groups.items())}
 
+def state(row, key):
+    if not isinstance(row.get("metrics"), dict) or not isinstance(row.get("status", {}), dict):
+        raise ValueError("Metric values and states must be objects.")
+    value = row["metrics"].get(key)
+    label = row.get("status", {}).get(key)
+    if label in {"positive infinity", "negative infinity"}:
+        if not key.casefold().endswith("psnr"):
+            raise ValueError("Infinite metric states are supported only for PSNR.")
+        sign = 1 if label == "positive infinity" else -1
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isinf(value) or value * sign < 0):
+            raise ValueError("PSNR infinity status disagrees with its stored value.")
+        return sign
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or math.isnan(value):
+        raise ValueError("Metrics must be numeric, null, or an explicit PSNR infinity.")
+    if not math.isfinite(value):
+        if not key.casefold().endswith("psnr"):
+            raise ValueError("Only PSNR supports infinite metric values.")
+        return 1 if value > 0 else -1
+    return 2
+
+def declared(payload):
+    rows = payload.get("rows") if isinstance(payload, dict) else None
+    if not isinstance(rows, list) or not rows or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("A result summary requires nonempty object rows.")
+    if any(not isinstance(row.get("key"), str) or type(row.get("seed")) is not int for row in rows):
+        raise ValueError("Result rows require string keys and integer seeds.")
+    if any(field in row and not isinstance(row[field], dict) for row in rows for field in ("metrics", "raw", "table", "status")):
+        raise ValueError("Result metrics and states must be objects.")
+    settings = payload.get("settings", {})
+    if not isinstance(settings, dict):
+        raise ValueError("Result settings must be an object.")
+    recorded = payload.get("seeds", settings.get("seeds"))
+    seeds = sorted({row.get("seed") for row in rows}, key=str) if recorded is None else recorded
+    if not isinstance(seeds, list) or not seeds or any(type(value) is not int or not -(2 ** 63) <= value < 2 ** 64 for value in seeds) or len(seeds) != len(set(seeds)):
+        raise ValueError("Declared seeds must be unique supported integers.")
+    if settings.get("seeds") is not None:
+        value = settings["seeds"]
+        if not isinstance(value, list) or any(type(seed) is not int for seed in value) or sorted(value) != sorted(seeds):
+            raise ValueError("Result seed declarations disagree.")
+    complete(rows, seeds, {row.get("key") for row in rows})
+    execution = payload.get("execution", {})
+    if not isinstance(execution, dict):
+        raise ValueError("Execution metadata must be an object.")
+    expected = execution.get("requests")
+    if expected is not None and (type(expected) is not int or expected != len(rows)):
+        raise ValueError("Result rows differ from the declared completed request count.")
+    population = payload.get("population", {})
+    if not isinstance(population, dict):
+        raise ValueError("Population metadata must be an object.")
+    for key, expected in (("rows", len(rows)), ("requests", len({row["key"] for row in rows}))):
+        if key in population and (type(population[key]) is not int or population[key] != expected):
+            raise ValueError("Result rows differ from the declared population count.")
+    return sorted(seeds)
+
 def averaged(rows, separate):
     # Reduce the same seed results that are saved in the report.
     if set(separate) != {str(row["seed"]) for row in rows}:
         raise ValueError("Seed summaries do not match the evaluated seed set.")
     result = {}
     for key in sorted({key for row in rows for key in row["metrics"]}):
-        values = [separate[str(seed)].get(key, {}).get("mean") for seed in sorted({row["seed"] for row in rows})]
-        valid = {str(row.get("key", index)) for index, row in enumerate(rows) if isinstance(row["metrics"].get(key), (int, float)) and not isinstance(row["metrics"].get(key), bool) and math.isfinite(row["metrics"][key])}
-        result[key] = {"mean": sum(values) / len(values) if values and all(value is not None for value in values) else None, "count": len(valid)}
+        stats = {seed: separate[seed].get(key, {"mean": None}) for seed in separate}
+        values = [stats[str(seed)].get("mean") for seed in sorted({row["seed"] for row in rows})]
+        valid = {str(row.get("key", index)) for index, row in enumerate(rows) if state(row, key)}
+        undefined = [seed for seed, value in stats.items() if value.get("mean") is None and value.get("status") not in {"positive infinity", "negative infinity"}]
+        signs = {value.get("status") for value in stats.values()} & {"positive infinity", "negative infinity"}
+        result[key] = {"mean": sum(values) / len(values) if values and not undefined and not signs else None, "count": len(valid)}
+        if undefined:
+            result[key].update({"status": "undefined seed", "undefinedseeds": sorted(undefined, key=int)})
+        elif signs:
+            result[key].update({"status": next(iter(signs)) if len(signs) == 1 else "mixed infinities", "infinite": len({str(row["key"]) for row in rows if state(row, key) in {-1, 1}})})
     return result
 
 def complete(rows, seeds, keys):
+    if not seeds or any(type(seed) is not int or not -(2 ** 63) <= seed < 2 ** 64 for seed in seeds):
+        raise ValueError("Completed results require supported integer seeds.")
     if any(type(row.get("seed")) is not int or not isinstance(row.get("key"), str) for row in rows):
         raise ValueError("Completed results require request keys and integer seeds.")
     observed = {(row["key"], row["seed"]) for row in rows}
@@ -150,13 +219,61 @@ def summary(rows):
         return averaged(rows, seeded(rows))
     result = {}
     for key in keys:
-        grouped = {}
+        grouped, signs, infinite = {}, set(), set()
         for index, row in enumerate(rows):
             value = row["metrics"].get(key)
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            status = state(row, key)
+            if status == 2:
                 grouped.setdefault(str(row.get("key", index)), []).append(value)
+            elif status:
+                signs.add(status)
+                infinite.add(str(row.get("key", index)))
         values = [sum(group) / len(group) for group in grouped.values()]
-        result[key] = {"mean": sum(values) / len(values) if values else None, "count": len(values)}
+        result[key] = {"mean": sum(values) / len(values) if values and not signs else None, "count": len(set(grouped) | infinite)}
+        if signs:
+            result[key].update({"status": "mixed infinities" if len(signs) > 1 else "positive infinity" if 1 in signs else "negative infinity", "infinite": len(infinite)})
+    return result
+
+def aggregate(rows):
+    separate = seeded(rows)
+    return {"metrics": averaged(rows, separate), "byseed": separate, "seeds": sorted({row["seed"] for row in rows}), "aggregation": AGGREGATION}
+
+def intervals(rows, repeats=2000, seed=42):
+    # Resample source groups while preserving the seed-first estimand.
+    import numpy as np
+    if type(repeats) is not int or not 1 <= repeats <= 100000:
+        raise ValueError("Bootstrap repeats must be from one to one hundred thousand.")
+    point = aggregate(rows)
+    groups = sorted({str(row.get("group", row["key"])) for row in rows})
+    membership = {}
+    for row in rows:
+        group = str(row.get("group", row["key"]))
+        if row["key"] in membership and membership[row["key"]] != group:
+            raise ValueError("Source grouping must remain fixed across seeds.")
+        membership[row["key"]] = group
+    seeds = point["seeds"]
+    result = {key: None for key in point["metrics"]}
+    if len(groups) < 2:
+        return result
+    for key, metric in point["metrics"].items():
+        if metric["mean"] is None:
+            continue
+        sums, counts = np.zeros((len(seeds), len(groups))), np.zeros((len(seeds), len(groups)))
+        for row in rows:
+            if state(row, key) == 2:
+                position = seeds.index(row["seed"]), groups.index(str(row.get("group", row["key"])))
+                sums[position] += row["metrics"][key]
+                counts[position] += 1
+        generator, distribution, valid = np.random.default_rng(seed), [], True
+        for offset in range(0, repeats, 128):
+            selected = generator.integers(0, len(groups), (min(128, repeats - offset), len(groups)))
+            total, number = sums[:, selected].sum(axis=2), counts[:, selected].sum(axis=2)
+            if np.any(number == 0):
+                valid = False
+                break
+            distribution.extend((total / number).mean(axis=0).tolist())
+        if valid:
+            result[key] = np.quantile(distribution, [.025, .975]).tolist()
     return result
 
 def identifier(key, seed):

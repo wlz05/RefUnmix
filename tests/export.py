@@ -39,6 +39,7 @@ class ReplayTests(unittest.TestCase):
         return export("summary.json", output)
 
     def testfrozenchoices(self):
+        self.payload.update({"byseed": {"7": {"stale": {"mean": 1.}}}, "aggregation": "stale", "execution": {"requests": 1}})
         result = self.runexport()
         attained, protected = read(result["attained"]), read(result["protected"])
         row = attained["rows"][0]
@@ -49,6 +50,9 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(row["metrics"], {})
         self.assertNotIn("summary", attained)
         self.assertNotIn("cost", attained)
+        self.assertNotIn("byseed", attained)
+        self.assertNotIn("aggregation", attained)
+        self.assertNotIn("execution", attained)
         self.assertEqual(attained["inputs"], self.payload["inputs"])
         self.assertEqual(protected["rows"][0]["report"]["selected"], "raw")
         self.assertEqual(protected["rows"][0]["report"]["config"]["selection"], "protect")

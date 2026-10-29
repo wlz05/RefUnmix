@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from data import clean, destination, locate
 from engine.attainment import choose
 from engine.serial import read, write
+from evaluate import declared
 
 def export(summary, output):
     # Export frozen same-pool choices without new inference.
@@ -17,6 +18,10 @@ def export(summary, output):
     payload = read(source)
     if payload.get("schema") != 1 or payload.get("split") not in {"val", "test"} or not isinstance(payload.get("rows"), list) or not payload["rows"]:
         raise ValueError("Replay requires a grouped validation or test summary.")
+    try:
+        declared(payload)
+    except ValueError as error:
+        raise ValueError("Replay identities or declared seeds are incomplete: " + str(error)) from error
     prepared, identities, filenames = [], set(), set()
     for original in payload["rows"]:
         if not isinstance(original.get("key"), str) or not original["key"] or type(original.get("seed")) is not int or not 0 <= original["seed"] < 2 ** 64:
@@ -71,7 +76,7 @@ def export(summary, output):
             if name == folder:
                 shutil.copyfile(path, target / row["image"])
                 rows.append(row)
-        exported = {key: deepcopy(value) for key, value in payload.items() if key not in {"rows", "summary", "categories", "cost"}}
+        exported = {key: deepcopy(value) for key, value in payload.items() if key not in {"rows", "summary", "categories", "cost", "byseed", "aggregation", "fields", "controller", "execution", "controlsignature"}}
         exported.update({"rows": rows, "replay": {"source": source.as_posix(), "sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "scope": "Frozen same-pool selector ablation; scores and labels were not used to regenerate candidates.", "generationcost": payload.get("cost"), "metricnote": "Parent final metrics were discarded; score exported images independently."}})
         write(target / "summary.json", exported)
         result[folder] = (target / "summary.json").as_posix()

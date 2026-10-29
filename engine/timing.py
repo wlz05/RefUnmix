@@ -13,6 +13,7 @@ import torch
 from PIL import Image, ImageOps
 from dataset import annotation
 from engine.model import EditConfig
+from evaluate import aggregate, declared
 
 def grid(starts, deltas, method="base", end=0.30, cleanup=True, noise=1):
     # Include the reference and deduplicate configurations.
@@ -79,7 +80,7 @@ def interval(values, groups, repeats=2000, seed=17):
     samples = sorted(statistics.fmean(value for group in generator.choices(groups, k=len(groups)) for value in group) for _ in range(repeats))
     return [samples[int(0.025 * (repeats - 1))], samples[int(0.975 * (repeats - 1))]]
 
-def summarize(rows, configs, budget=1.0, risk=0.1, locked=None, repeats=2000, bandbudget=None):
+def summarize(rows, configs, budget=1.0, risk=0.1, locked=None, repeats=2000, bandbudget=None, seeds=None):
     # Select using development data and grouped seeds.
     if not math.isfinite(budget) or budget < 0 or not math.isfinite(risk) or not 0 <= risk <= 1:
         raise ValueError("budget and risk are invalid.")
@@ -101,7 +102,8 @@ def summarize(rows, configs, budget=1.0, risk=0.1, locked=None, repeats=2000, ba
         raise ValueError("Every candidate must cover the same image and seed pairs.")
     table = []
     for name, bucket in buckets.items():
-        records = {}
+        declared({"rows": list(bucket.values()), **({"seeds": seeds} if seeds is not None else {})})
+        records, measured = {}, []
         drops = []
         banddrops = {"low": [], "high": []}
         bandviolations = []
@@ -113,6 +115,9 @@ def summarize(rows, configs, budget=1.0, risk=0.1, locked=None, repeats=2000, ba
                 raise ValueError("Candidate protection coverage is inconsistent.")
             entry = records.setdefault(key[0], {"group": row["group"], "category": row["category"], "gains": []})
             entry["gains"].append(row["semantic"] - base["semantic"])
+            values = {metric: row[metric] for metric in ("semantic", "global", "local", "mse", "psnr", "seconds", "calls", "samples")}
+            drop = None if row["psnr"] is None else base["psnr"] - row["psnr"]
+            values.update({"gain": row["semantic"] - base["semantic"], "psnrdrop": drop, "violation": None if drop is None else float(drop > budget + 1e-9), "lowdrop": None, "highdrop": None, "bandviolation": None})
             if row["psnr"] is not None:
                 drops.append(base["psnr"] - row["psnr"])
             if bandbudget is not None:
@@ -130,9 +135,12 @@ def summarize(rows, configs, budget=1.0, risk=0.1, locked=None, repeats=2000, ba
                             raise ValueError("Band distortion must be finite and nonnegative.")
                         change = 10.0 * math.log10((after + 1e-12) / (before + 1e-12))
                         banddrops[band].append(change)
+                        values[band + "drop"] = change
                         point.append(change)
                 if point:
                     bandviolations.append(float(max(point) > bandbudget + 1e-9))
+                    values["bandviolation"] = bandviolations[-1]
+            measured.append({"key": key[0], "seed": key[1], "metrics": values})
         gains = [mean(entry["gains"]) for entry in records.values()]
         violation = mean([float(value > budget + 1e-9) for value in drops])
         feasible = not drops or (mean(drops) <= budget + 1e-9 and violation <= risk + 1e-9)
@@ -142,15 +150,24 @@ def summarize(rows, configs, budget=1.0, risk=0.1, locked=None, repeats=2000, ba
         categories = {}
         for entry in records.values():
             categories.setdefault(entry["category"], []).append(mean(entry["gains"]))
-        scores = {metric: mean(row[metric] for row in bucket.values()) for metric in ("semantic", "global", "local", "mse", "psnr", "seconds", "calls", "samples")}
+        point = aggregate(measured)
+        scores = {metric: value["mean"] for metric, value in point["metrics"].items()}
+        if drops:
+            feasible = None if scores["psnrdrop"] is None or scores["violation"] is None else scores["psnrdrop"] <= budget + 1e-9 and scores["violation"] <= risk + 1e-9
+        if bandviolations:
+            unresolved = any(point["metrics"][key]["count"] > 0 and scores[key] is None for key in ("bandviolation", "lowdrop", "highdrop"))
+            feasible = None if unresolved else feasible and scores["bandviolation"] <= risk + 1e-9 and all(value <= bandbudget + 1e-9 for value in (scores["lowdrop"], scores["highdrop"]) if value is not None)
         table.append({"id": name, "config": configs[name], **scores, "gain": mean(gains), "interval": interval(gains, [entry["group"] for entry in records.values()], repeats), "psnrdrop": mean(drops), "violation": violation, "lowdrop": mean(banddrops["low"]), "highdrop": mean(banddrops["high"]), "bandviolation": bandviolation, "bandpairs": len(bandviolations), "feasible": feasible, "protectedpairs": len(drops), "records": len(records), "groups": len({entry["group"] for entry in records.values()}), "wins": sum(value > 1e-8 for value in gains), "losses": sum(value < -1e-8 for value in gains), "categories": {key: {"records": len(value), "gain": mean(value)} for key, value in categories.items()}})
+        table[-1].update({**scores, "byseed": point["byseed"], "seeds": point["seeds"], "aggregation": point["aggregation"]})
     feasible = [row for row in table if row["feasible"]]
-    chosen = locked or min(feasible, key=lambda row: (-row["gain"], row["id"] != "native", row["mse"] or 0.0, row["id"]))["id"]
+    chosen = locked or (min(feasible, key=lambda row: (-row["gain"], row["id"] != "native", math.inf if row["mse"] is None else row["mse"], row["id"]))["id"] if feasible else "native")
     if chosen not in configs:
         raise ValueError("The frozen candidate is missing.")
     pareto = []
     for row in table:
-        dominated = any(other["semantic"] >= row["semantic"] and (other["mse"] or 0.0) <= (row["mse"] or 0.0) and (other["semantic"] > row["semantic"] or (other["mse"] or 0.0) < (row["mse"] or 0.0)) for other in table)
+        if row["mse"] is None:
+            continue
+        dominated = any(other["mse"] is not None and other["semantic"] >= row["semantic"] and other["mse"] <= row["mse"] and (other["semantic"] > row["semantic"] or other["mse"] < row["mse"]) for other in table)
         if not dominated:
             pareto.append(row["id"])
     return {"selected": chosen, "locked": locked is not None, "budget": budget, "risk": risk, "bandbudget": bandbudget, "pareto": pareto, "table": table, "warning": "CLIP proxy selection is not a proof of optimality; development intervals are exploratory."}

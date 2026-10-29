@@ -156,7 +156,7 @@ class FrontierTests(unittest.TestCase):
         self.assertIn("frontier", initial)
         self.assertTrue(initial["frontier"]["components"])
         json.dumps(result.report, allow_nan=False)
-        row = {"key": "sample", "report": {"method": "path", **result.report}}
+        row = {"key": "sample", "seed": 42, "report": {"method": "path", **result.report}}
         self.assertIn("frontier:iterations", values(row))
         self.assertEqual(summarize([row])["diagnostics"]["frontier"]["recorded"], 1)
         self.assertLessEqual(result.report["damage"], result.report["rawdamage"])
@@ -182,7 +182,7 @@ class FrontierTests(unittest.TestCase):
     def testcoverage(self):
         reports = [None, {"active": True, "fittrusted": True}, {"active": False, "fittrusted": True, "frontier": {"active": False, "components": {}}}, {"active": True, "fittrusted": False, "frontier": {"active": True, "components": {}}}, {"active": True, "fittrusted": True, "frontier": {"active": True, "components": {}}}, {"active": True, "fittrusted": True, "frontier": {"active": True, "components": {"first": {"verified": False}}}}, {"active": True, "fittrusted": True, "frontier": {"active": True, "components": {"first": {"verified": True}, "second": {"verified": False}}}}, {"active": True, "fittrusted": True, "frontier": {"active": True, "components": {"first": {"verified": True}}}}]
         rows = [{"key": str(index), "report": {"method": "path", "initialleverage": report}} for index, report in enumerate(reports)]
-        coverage = summarize(rows)["diagnostics"]["frontier"]
+        coverage = summarize([{**row, "seed": 42} for row in rows])["diagnostics"]["frontier"]
         self.assertEqual(coverage["recorded"], 6)
         self.assertEqual(coverage["unrecorded"], 2)
         for key in ("inactive", "untrusted", "unresolved", "unverified", "partiallyverified", "fullyverified"):

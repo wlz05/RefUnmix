@@ -12,6 +12,7 @@ from audit import paired, read
 from data import clean, destination, locate
 from run import jsonfile, writejson
 from engine.format import fit, read as readimage
+from evaluate import aggregate, declared, intervals
 
 def build(left, right, output, seed=42):
     # Export anonymous pairs without revealing method identities.
@@ -66,7 +67,7 @@ def build(left, right, output, seed=42):
         panel.save(target / (identifier + ".png"))
     generator.shuffle(public)
     writejson(target / "tasks.json", {"schema": 1, "questions": {"completion": "Which output completes the target instruction?", "preservation": "Which output preserves the protected source content?", "naturalness": "Which output looks more natural?"}, "choices": ["A", "B", "tie", "unsure"], "tasks": public})
-    writejson(target / "key.json", {"schema": 1, "left": left, "right": right, "seed": seed, "assignments": private, "note": "Keep this file private from raters."})
+    writejson(target / "key.json", {"schema": 1, "left": left, "right": right, "seed": seed, "seeds": declared(first), "assignments": private, "note": "Keep this file private from raters."})
     return public, private
 
 def collect(key, responses, repeats=2000, seed=42):
@@ -76,8 +77,13 @@ def collect(key, responses, repeats=2000, seed=42):
     payload, ratings = jsonfile(key), jsonfile(responses)
     if payload.get("schema") != 1 or not isinstance(ratings, list) or not ratings:
         raise ValueError("Expected a private key and nonempty rating list.")
+    if not isinstance(payload.get("assignments"), list) or not payload["assignments"] or any(not isinstance(item, dict) or not isinstance(item.get("id"), str) or item.get("a") not in {"left", "right"} for item in payload["assignments"]):
+        raise ValueError("Blind assignments require IDs and valid left/right mappings.")
     lookup = {item["id"]: item for item in payload["assignments"]}
-    seen, grouped = set(), {}
+    if len(lookup) != len(payload["assignments"]):
+        raise ValueError("Blind assignment IDs must be unique.")
+    declared({"rows": payload["assignments"], **({"seeds": payload["seeds"]} if "seeds" in payload else {})})
+    seen, grouped = set(), {item: {metric: [] for metric in ("completion", "preservation", "naturalness")} for item in lookup}
     for row in ratings:
         if not isinstance(row, dict) or not isinstance(row.get("rater"), str) or not row["rater"].strip() or row.get("id") not in lookup:
             raise ValueError("Ratings need a known case and nonempty rater.")
@@ -94,15 +100,13 @@ def collect(key, responses, repeats=2000, seed=42):
                 continue
             right = assignment["a"] == "right" if choice == "A" else assignment["a"] == "left"
             value = .5 if choice == "tie" else float(right)
-            grouped.setdefault(metric, {}).setdefault(assignment["group"], {}).setdefault(assignment["key"], {}).setdefault(identity[0], []).append(value)
-    generator = np.random.default_rng(seed)
-    result = {}
-    for metric in ("completion", "preservation", "naturalness"):
-        groups = grouped.get(metric, {})
-        means = np.array([np.mean([np.mean([np.mean(values) for values in raters.values()]) for raters in sources.values()]) for sources in groups.values()])
-        samples = [float(means[generator.integers(0, len(means), len(means))].mean()) for _ in range(repeats)] if len(means) else []
-        result[metric] = {"rightpreference": float(means.mean()) if len(means) else None, "interval": np.quantile(samples, [.025, .975]).tolist() if len(means) >= 2 else None, "groups": len(means)}
-    return {"schema": 1, "metrics": result, "raters": len({rater for rater, _ in seen}), "ratings": len(seen), "seed": seed, "repeats": repeats, "scope": "Seed-averaged, rater-averaged source-group bootstrap; no reselection."}
+            grouped[row["id"]][metric].append(value)
+    if {identity[1] for identity in seen} != set(lookup):
+        raise ValueError("Every frozen blind case needs at least one rating.")
+    rows = [{"key": item["key"], "seed": item["seed"], "group": item["group"], "metrics": {metric: float(np.mean(values)) if values else None for metric, values in grouped[identifier].items()}} for identifier, item in lookup.items()]
+    point, bounds = aggregate(rows), intervals(rows, repeats, seed)
+    result = {metric: {**{key: value for key, value in values.items() if key != "mean"}, "rightpreference": values["mean"], "interval": bounds[metric], "groups": len({row["group"] for row in rows if row["metrics"][metric] is not None})} for metric, values in point["metrics"].items()}
+    return {"schema": 1, "metrics": result, "byseed": point["byseed"], "seeds": point["seeds"], "aggregation": point["aggregation"], "raters": len({rater for rater, _ in seen}), "ratings": len(seen), "seed": seed, "repeats": repeats, "scope": "Rater-averaged cases followed by seed-first means and source-group bootstrap; no reselection."}
 
 def main():
     parser = argparse.ArgumentParser(description="Export and aggregate frozen anonymous editing comparisons.")

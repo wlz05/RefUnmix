@@ -101,7 +101,7 @@ class JointTests(unittest.TestCase):
 
     def testauditpairs(self):
         from audit import paired, summarize
-        left = [{"key": key, "group": group, "seed": seed, "metrics": {"quality": 1.}, "report": {}} for key, group, seed in (("a", "image", 1), ("a", "image", 2), ("b", "image", 1), ("c", "other", 1))]
+        left = [{"key": key, "group": group, "seed": seed, "metrics": {"quality": 1.}, "report": {}} for key, group in (("a", "image"), ("b", "image"), ("c", "other")) for seed in (1, 2)]
         right = [{**row, "metrics": {"quality": 3.}} for row in left]
         report = paired(left, right, repeats=10)
         self.assertEqual(report["metrics"]["metric:quality"]["difference"], 2)

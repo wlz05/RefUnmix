@@ -114,6 +114,30 @@ class EvidenceTests(unittest.TestCase):
 
         self.directory(action)
 
+    def testtaskseedmeans(self):
+        def action():
+            Path("rated").mkdir()
+            seeds, rows = [42, 52, 3047, 3407], []
+            for key in ("a", "b", "c"):
+                for seed in seeds:
+                    path = Path("rated", key + str(seed) + ".png")
+                    Image.new("RGB", (4, 4), "blue").save(path)
+                    rows.append({"key": key, "seed": seed, "group": "family" if key != "c" else "other", "image": path.name, "resultsha256": hashlib.sha256(path.read_bytes()).hexdigest(), "metrics": {}, "report": {}})
+            payload = {"schema": 1, "split": "test", "seeds": seeds, "rows": rows}
+            self.write("rated/summary.json", payload)
+            labels = template("rated/summary.json")
+            for label in labels:
+                label.update({"success": True, "preserved": True, "artifact": False, "naturalness": 5. if label["key"] == "c" else 2.})
+            self.write("rated/labels.json", labels)
+            result = assess("rated/summary.json", "rated/labels.json", repeats=10)
+            self.assertEqual(result["metrics"]["naturalness"]["mean"], 3.)
+            self.assertEqual([result["byseed"][str(seed)]["naturalness"]["mean"] for seed in seeds], [3.] * 4)
+            payload["rows"] = [row for row in rows if row["seed"] != 52]
+            self.write("rated/summary.json", payload)
+            with self.assertRaises(ValueError):
+                template("rated/summary.json")
+        self.directory(action)
+
     def testmissinglabels(self):
         def action():
             result = self.contrast(False)

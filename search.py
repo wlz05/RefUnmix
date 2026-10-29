@@ -218,7 +218,7 @@ def main():
                 handle.flush()
                 rows.append(row)
                 print(f"{len(rows)}/{total} {row['key']} seed={row['seed']} {row['config']} score={row['semantic']:.4f}", flush=True)
-    report = summarize(rows, plan["configs"], runtime["budget"], runtime["risk"], plan["locked"], bandbudget=runtime.get("bandbudget"))
+    report = summarize(rows, plan["configs"], runtime["budget"], runtime["risk"], plan["locked"], bandbudget=runtime.get("bandbudget"), seeds=plan["seeds"])
     if plan["scan"] == "bands":
         report["bands"] = profiles(report, plan["pivot"], selecting=args.phase == "fit")
         report["predictions"] = predictions(rows)

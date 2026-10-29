@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 import math
-import statistics
 import time
 from dataclasses import asdict
 import numpy as np
@@ -13,6 +12,7 @@ from PIL import Image, ImageOps
 from dataset import annotation
 from engine.frequency import FrequencyRouter
 from engine.model import EditConfig, Result
+from evaluate import aggregate, complete
 
 def validate(value):
     if value.get("operator") == "bands":
@@ -228,14 +228,12 @@ def predictions(rows):
     times = sorted({key[2] for key in unique})
     result = []
     for time in times:
-        probes = [value for key, value in unique.items() if key[2] == time]
-        entry = {"time": time, "pairs": len(probes), "space": "latent"}
+        probes = [{"key": key[0], "seed": key[1], "metrics": {band + ":" + name: value for band in ("low", "high") for name, value in probe[band].items()}} for key, probe in unique.items() if key[2] == time]
+        complete(probes, {row["seed"] for row in rows}, {row["key"] for row in rows})
+        point = aggregate(probes)
+        entry = {"time": time, "pairs": len(probes), "space": "latent", "byseed": point["byseed"], "seeds": point["seeds"], "aggregation": point["aggregation"]}
         for band in ("low", "high"):
-            values = {}
-            for name in probes[0][band]:
-                numbers = [probe[band][name] for probe in probes if probe[band][name] is not None]
-                values[name] = statistics.fmean(numbers) if numbers else None
-            entry[band] = values
+            entry[band] = {name.split(":", 1)[1]: value["mean"] for name, value in point["metrics"].items() if name.startswith(band + ":")}
         result.append(entry)
     return result
 

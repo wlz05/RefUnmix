@@ -5,10 +5,10 @@ import argparse
 import hashlib
 import math
 from pathlib import Path
-import numpy as np
 from audit import read
 from data import clean, destination, locate
 from run import jsonfile, writejson
+from evaluate import aggregate, intervals
 
 def template(summary):
     # Bind unrated annotations to frozen image bytes.
@@ -61,13 +61,9 @@ def assess(summary, annotations, repeats=2000, seed=42):
         failures["textureartifact"] += int(label["artifact"])
     if seen != set(lookup):
         raise ValueError("Every frozen result needs one independent task annotation.")
-    generator = np.random.default_rng(seed)
-    metrics = {}
-    for name, groups in grouped.items():
-        means = np.array([np.mean([np.mean(values) for values in sources.values()]) for sources in groups.values()])
-        distribution = [float(means[generator.integers(0, len(means), len(means))].mean()) for _ in range(repeats)]
-        metrics[name] = {"mean": float(means.mean()), "interval": np.quantile(distribution, [.025, .975]).tolist() if len(means) >= 2 else None, "groups": len(means)}
-    return {"schema": 1, "split": payload.get("split"), "metrics": metrics, "failurecounts": failures, "rows": len(seen), "observations": rows, "seed": seed, "repeats": repeats, "summaryhash": hashlib.sha256(locate(Path("."), clean(summary, "summary")).read_bytes()).hexdigest(), "annotationhash": hashlib.sha256(locate(Path("."), clean(annotations, "annotations")).read_bytes()).hexdigest(), "scope": "Postselection task labels; source-grouped bootstrap; failure overlap is not causal attribution."}
+    point, bounds = aggregate(rows), intervals(rows, repeats, seed)
+    metrics = {name: {**value, "interval": bounds[name], "groups": len(grouped.get(name, {}))} for name, value in point["metrics"].items()}
+    return {"schema": 1, "split": payload.get("split"), "metrics": metrics, "byseed": point["byseed"], "seeds": point["seeds"], "aggregation": point["aggregation"], "failurecounts": failures, "rows": len(seen), "observations": rows, "seed": seed, "repeats": repeats, "summaryhash": hashlib.sha256(locate(Path("."), clean(summary, "summary")).read_bytes()).hexdigest(), "annotationhash": hashlib.sha256(locate(Path("."), clean(annotations, "annotations")).read_bytes()).hexdigest(), "scope": "Postselection task labels; source-grouped seed-first bootstrap; failure overlap is not causal attribution."}
 
 def main():
     parser = argparse.ArgumentParser(description="Report independent annotations on frozen editing outputs.")

@@ -20,6 +20,7 @@ import torch
 from engine.metrics import Protocol, connection, pixels, relocate, storage
 from assess import grouped, main, parser, population, prediction, verified
 from data import Record
+from evaluate import aggregate, declared, intervals, summary
 
 class Calculator:
     def __init__(self):
@@ -409,6 +410,69 @@ class MetricTests(unittest.TestCase):
     def testundefinedseedmean(self):
         rows = [{"key": "a", "seed": 42, "raw": {"mse": 2.}}, {"key": "a", "seed": 52, "raw": {"mse": None}}]
         self.assertIsNone(grouped(rows, "raw")["mse"]["mean"])
+
+    def testinfinitystates(self):
+        rows = [{"key": "a", "seed": seed, "metrics": {"psnr": None if seed == 42 else 20.}, "status": {"psnr": "positive infinity" if seed == 42 else "finite"}} for seed in (42, 52, 3047, 3407)]
+        result = aggregate(rows)
+        self.assertEqual(result["metrics"]["psnr"]["status"], "positive infinity")
+        self.assertIsNone(result["metrics"]["psnr"]["mean"])
+        self.assertEqual(result["byseed"]["42"]["psnr"]["status"], "positive infinity")
+        rows[1]["metrics"]["psnr"] = None
+        self.assertEqual(aggregate(rows)["metrics"]["psnr"]["status"], "undefined seed")
+        self.assertEqual(aggregate(rows)["metrics"]["psnr"]["undefinedseeds"], ["52"])
+        rows[1]["status"]["psnr"] = "negative infinity"
+        self.assertEqual(aggregate(rows)["metrics"]["psnr"]["status"], "mixed infinities")
+        json.dumps(aggregate(rows), allow_nan=False)
+        rows[0]["metrics"]["psnr"] = 30.
+        with self.assertRaisesRegex(ValueError, "disagrees"):
+            aggregate(rows)
+
+    def testinvalidnumericmean(self):
+        for value in (float("nan"), True, "1", float("inf")):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                summary([{"key": "a", "metrics": {"mse": value}}])
+        result = summary([{"key": "a", "metrics": {"psnr": float("inf")}}])
+        self.assertEqual(result["psnr"]["status"], "positive infinity")
+
+    def testdeclaredmissingseed(self):
+        payload, _, seeds = self.grid(2)
+        for values in (payload["rows"][:-1], [row for row in payload["rows"] if row["seed"] != 3047]):
+            with self.subTest(rows=len(values)), self.assertRaises(ValueError):
+                declared({"rows": values, "seeds": seeds})
+        with self.assertRaisesRegex(ValueError, "completed request count"):
+            declared({**payload, "execution": {"requests": 10}})
+        for population in ({"rows": 7}, {"requests": 3}):
+            with self.subTest(population=population), self.assertRaisesRegex(ValueError, "population count"):
+                declared({**payload, "population": population})
+
+    def testauxiliaryseedmeans(self):
+        from audit import paired, summarize
+        rows = [{"key": key, "group": "family" if key != "c" else "other", "seed": seed, "metrics": {"quality": value}, "report": {}} for key, value in (("a", 2.), ("b", 2.), ("c", 5.)) for seed in (42, 52, 3047, 3407)]
+        point = summarize(rows)
+        self.assertEqual(point["metrics"]["metric:quality"]["mean"], 3.)
+        self.assertEqual([point["byseed"][str(seed)]["metric:quality"]["mean"] for seed in (42, 52, 3047, 3407)], [3.] * 4)
+        first = [{**row, "metrics": {"quality": 0.}} for row in rows]
+        result = paired(first, rows, repeats=10)
+        self.assertEqual(result["metrics"]["metric:quality"]["difference"], 3.)
+        self.assertEqual(set(result["byseed"]), {"42", "52", "3047", "3407"})
+        with self.assertRaises(ValueError):
+            paired(first[:-1], rows[:-1], repeats=10)
+
+    def testpairedinfinitepsnr(self):
+        from audit import paired
+        first = [{"key": "a", "seed": seed, "metrics": {"psnr": 20.}, "report": {}} for seed in (42, 52, 3047, 3407)]
+        second = [{**row, "metrics": {"psnr": None}, "status": {"psnr": "positive infinity"}} for row in first]
+        result = paired(first, second, repeats=10)
+        self.assertEqual(result["metrics"]["metric:psnr"]["status"], "positive infinity")
+        self.assertIsNone(result["metrics"]["metric:psnr"]["interval"])
+        same = paired(second, second, repeats=10)
+        self.assertIsNone(same["metrics"]["metric:psnr"]["difference"])
+        self.assertEqual(same["metrics"]["metric:psnr"]["status"], "undefined seed")
+        json.dumps(same, allow_nan=False)
+
+    def testbootstrapundefinedseed(self):
+        rows = [{"key": key, "seed": seed, "group": key, "metrics": {"mse": None if seed == 52 else 2.}} for key in ("a", "b") for seed in (42, 52)]
+        self.assertIsNone(intervals(rows, repeats=10)["mse"])
 
     def teststoredseedmeans(self):
         with self.workspace(), tempfile.TemporaryDirectory(dir=".") as directory:

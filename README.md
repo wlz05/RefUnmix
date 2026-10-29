@@ -784,7 +784,7 @@ python -B RefUnmix/probe.py --image input.png --source "a blue shirt" --target "
 
 These diagnostics use the native field endpoint before reference control. Pullback runs already save them from paid endpoints; evaluation summaries first average available request values within each seed, then average the seed results, and `audit.py` includes them in paired comparisons. The probe command adds source-condition endpoints for mechanism analysis and reports its complete cost. Response fit is evaluated separately from final editing quality.
 
-Controller history records `verification` for every queried non-geometry proposal, including rejected proposals: `predictedgain`, `actualgain`, `predicteddamagechange`, and `actualdamagechange`. Each change is measured from the current anchor. Gains use the frozen control heads and scales; independent task annotations evaluate the final image. `audit.py` averages release-query changes under `release:verified...`, then averages seeds within each request for paired comparisons. This connects predicted compensation to its measured finite-step effect.
+Controller history records `verification` for every queried non-geometry proposal, including rejected proposals: `predictedgain`, `actualgain`, `predicteddamagechange`, and `actualdamagechange`. Each change is measured from the current anchor. Gains use the frozen control heads and scales; independent task annotations evaluate the final image. `audit.py` first averages release-query changes within each request, then applies the same request-within-seed and seed-level averaging used by the main tables. Paired confidence intervals resample source groups and recompute that seed-first statistic.
 
 Native probes use raw mode with priors and controller diagnostics disabled. Discrete reference paths require `--etas 0 1`. Raw inference rejects ignored prior or controller switches, and held-out consistency requires an enabled prior.
 
@@ -829,6 +829,34 @@ Final means are computed directly from the saved seed-level means. The result lo
 | Official table assessment | `byseed[seed].table[metric].mean` | `table[metric].mean` |
 
 For example, the final MSE is `(MSE42 + MSE52 + MSE3047 + MSE3407) / 4`, where each term is that seed's dataset mean. Inference reports also retain cost means in `cost.byseed`; `cost.metrics[metric].mean` follows the same seed-first order. Cost medians and p95 describe the distribution of per-request seed averages. Postselection assessment supplies the official table metrics.
+
+### Auxiliary Summaries and Undefined Metrics
+
+Audits, paired comparisons, task annotations, blind ratings, operator scans, and time-search score tables use the same seed-first reduction. Result readers validate the declared seed list and the complete request-seed grid. Historical summaries without a seed declaration use their observed seed set; retain the declared `seeds` field when transferring results. A complete declaration detects an omitted entire seed as well as a missing individual request.
+
+| Condition | Reported result |
+|-----------|-----------------|
+| Missing declared seed, missing request-seed row, or duplicate row | Stop before publishing a complete summary |
+| A request has an undefined metric | Exclude that value from its seed's metric mean and retain the valid count |
+| Any seed has no valid value for a metric | Final mean is `null`, with `status: "undefined seed"` and `undefinedseeds` |
+| Defined PSNR contains positive infinity | Mean is `null` with `status: "positive infinity"` |
+| Paired PSNR has one finite and one infinite value | Preserve the signed infinity in the difference report |
+| Paired PSNR compares two positive infinities | Difference is undefined and contributes no finite observation |
+| Positive and negative infinities meet in one mean | Mean is `null` with an explicit undefined or mixed-infinity status |
+
+An undefined seed takes precedence over an infinite value from another seed. Reports remain valid JSON and retain the individual seed states. Finite confidence intervals require a finite point estimate, at least two independent source groups, and valid seed means in every bootstrap replicate. Blind ratings average raters within each request-seed case before averaging requests and seeds; every frozen case must receive a rating, and `unsure` remains undefined.
+
+| Auxiliary report | Per-seed values | Final point estimate |
+|------------------|-----------------|----------------------|
+| Audit | `summary.byseed[seed][metric].mean` | `summary.metrics[metric].mean` |
+| Paired audit or evidence | `paired.byseed` or the corresponding comparison's `byseed` | Metric `difference` |
+| Independent task report | `byseed[seed][metric].mean` | `metrics[metric].mean` |
+| Blind comparison | `byseed[seed][metric].mean` | `metrics[metric].rightpreference` |
+| Operator scan | `byseed[configuration][seed][metric].mean` | `summary[configuration][metric].mean` |
+| Time search | Each table row's `byseed[seed][metric].mean` | That row's metric value |
+| Frequency prediction diagnostic | Each time entry's `byseed[seed][band:metric].mean` | That entry's `low[metric]` or `high[metric]` |
+
+Frozen same-pool replay exports discard the parent's `byseed` and all output-dependent aggregates. Score the exported images again with `assess.py` and regenerate independent labels for those outputs. Time-search control scores require finite inputs; postselection assessments and audits retain explicit infinite PSNR states. Time-search protection changes and violation rates follow the same seed-first reduction. Undefined protection prevents a feasibility claim and falls back to the native candidate when no verified feasible candidate remains; an undefined MSE is excluded from the two-axis Pareto set.
 
 ### Reuse the Metric Cache After Moving
 

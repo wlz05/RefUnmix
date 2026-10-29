@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 from data import clean, locate
-from evaluate import datasetargs, evaluator, identifier, items, masktensor, metrics, regions, summary
+from evaluate import AGGREGATION, aggregate, datasetargs, declared, evaluator, identifier, items, masktensor, metrics, regions, summary
 from run import common, load, localization, times, writejson
 
 def configurations(args):
@@ -43,7 +43,7 @@ def field(session, config):
         return split(lowfield)[0] + split(highfield)[1]
     raise ValueError("Unknown frozen configuration.")
 
-def choose(rows, configs, budget):
+def choose(rows, configs, budget, seeds=None):
     if not math.isfinite(budget) or budget < 0:
         raise ValueError("Budget must be finite and nonnegative.")
     if not configs or configs[0].get("kind") != "base" or len({signature(config) for config in configs}) != len(configs):
@@ -61,19 +61,22 @@ def choose(rows, configs, budget):
     if len(pairs) != count:
         raise ValueError("Duplicate validation image and seed pairs.")
     protected = [row for row in base if row.get("protectedvalid", True)]
-    baseloss = sum(row["selectionloss"] for row in protected) / len(protected) if protected else None
+    basepoint = aggregate([{**row, "metrics": {"loss": row["selectionloss"] if row.get("protectedvalid", True) else None}} for row in base])
+    baseloss = basepoint["metrics"]["loss"]["mean"]
     scores = []
     for config in configs:
         values = grouped[signature(config)]
+        declared({"rows": values, **({"seeds": seeds} if seeds is not None else {})})
         if len(values) != count or {(row["key"], row["seed"]) for row in values} != pairs:
             raise ValueError("Each configuration requires all validation image and seed pairs.")
-        score = sum(row["selectionscore"] for row in values) / count
+        point = aggregate([{**row, "metrics": {"score": row["selectionscore"], "loss": row["selectionloss"] if row.get("protectedvalid", True) else None}} for row in values])
+        score = point["metrics"]["score"]["mean"]
         valid = [row for row in values if row.get("protectedvalid", True)]
         if {(row["key"], row["seed"]) for row in valid} != {(row["key"], row["seed"]) for row in protected}:
             raise ValueError("Protection support must be fixed across candidates.")
-        loss = sum(row["selectionloss"] for row in valid) / len(valid) if valid else None
+        loss = point["metrics"]["loss"]["mean"]
         feasible = None if baseloss is None else loss <= baseloss + budget
-        scores.append({"configuration": config, "score": score, "loss": loss, "protectedcount": len(valid), "feasible": feasible})
+        scores.append({"configuration": config, "score": score, "loss": loss, "byseed": point["byseed"], "seeds": point["seeds"], "aggregation": point["aggregation"], "protectedcount": len(valid), "feasible": feasible})
     feasible = [value for value in scores if value["feasible"] is not False]
     best = max(feasible, key=lambda value: value["score"])
     return best["configuration"], scores
@@ -170,11 +173,17 @@ def main():
                 rows.append(row)
                 writejson(output / (name + ".json"), row)
                 print(json.dumps({"key": item.key, "seed": seed, "configuration": config, "score": row["selectionscore"]}, allow_nan=False), flush=True)
-    selected, table = choose(rows, configs, args.budget) if args.split == "val" else (configs[-1], None)
+    selected, table = choose(rows, configs, args.budget, sorted(set(args.seeds or [args.seed]))) if args.split == "val" else (configs[-1], None)
     import hashlib
     digest = hashlib.sha256(locate(Path("."), clean(args.manifest, "manifest")).read_bytes()).hexdigest()
-    groups = {signature(config): summary([row for row in rows if row["configuration"] == config]) for config in configs}
-    payload = {"schema": 1, "split": args.split, "renderer": reference, "manifest": args.manifest, "manifestdigest": digest, "selected": selected, "configurations": configs, "selectiontable": table, "independentcheckpoint": independent, "settings": vars(args), "summary": groups, "rows": rows, "note": "Pure operator scans do not apply the projection raw guard; validation means select configurations and test settings are frozen before inference."}
+    seeds = sorted(set(args.seeds or [args.seed]))
+    points = {}
+    for config in configs:
+        values = [row for row in rows if row["configuration"] == config]
+        declared({"rows": values, "seeds": seeds})
+        points[signature(config)] = aggregate(values)
+    groups = {key: value["metrics"] for key, value in points.items()}
+    payload = {"schema": 1, "split": args.split, "renderer": reference, "manifest": args.manifest, "manifestdigest": digest, "selected": selected, "configurations": configs, "selectiontable": table, "independentcheckpoint": independent, "settings": vars(args), "seeds": seeds, "aggregation": AGGREGATION, "summary": groups, "byseed": {key: value["byseed"] for key, value in points.items()}, "rows": rows, "note": "Pure operator scans do not apply the projection raw guard; validation means select configurations and test settings are frozen before inference."}
     writejson(output / "summary.json", payload)
 
 if __name__ == "__main__":

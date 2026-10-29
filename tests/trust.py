@@ -300,6 +300,20 @@ class TrustTests(unittest.TestCase):
             with patch("blind.jsonfile", side_effect=[key, rows]), self.assertRaises(ValueError):
                 collect("key", "responses", repeats=10)
 
+    def testhumanseedcoverage(self):
+        seeds = [42, 52, 3047, 3407]
+        cases = [{"id": key + str(seed), "key": key, "seed": seed, "group": key, "a": "right"} for key in ("a", "b") for seed in seeds]
+        payload = {"schema": 1, "seeds": seeds, "assignments": cases}
+        ratings = [{"id": case["id"], "rater": "rater", "completion": "unsure" if case["seed"] == 52 else "A", "preservation": "tie", "naturalness": "B"} for case in cases]
+        with patch("blind.jsonfile", side_effect=[payload, ratings]):
+            result = collect("key", "responses", repeats=10)
+        self.assertIsNone(result["metrics"]["completion"]["rightpreference"])
+        self.assertEqual(result["metrics"]["completion"]["undefinedseeds"], ["52"])
+        self.assertEqual(result["metrics"]["preservation"]["rightpreference"], .5)
+        self.assertEqual(set(result["byseed"]), set(map(str, seeds)))
+        with patch("blind.jsonfile", side_effect=[payload, ratings[:-1]]), self.assertRaises(ValueError):
+            collect("key", "responses", repeats=10)
+
     def testsourceoutputguard(self):
         with self.assertRaises(ValueError):
             destination("engine/result.json")

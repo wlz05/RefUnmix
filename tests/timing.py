@@ -108,6 +108,33 @@ class TimingTest(unittest.TestCase):
         self.assertEqual(report["table"][1]["records"], 2)
         self.assertEqual(report["table"][1]["interval"], [1.0, 1.0])
 
+    def testseedcoverage(self):
+        seeds = [42, 52, 3047, 3407]
+        rows = [row(name, key=key, seed=seed) for name in ("native", "trial") for key in ("a", "b") for seed in seeds]
+        for value in rows:
+            value["local"] = None if value["seed"] == 52 else 1.
+        report = summarize(rows, {"native": {}, "trial": {}}, repeats=10, seeds=seeds)
+        for value in report["table"]:
+            self.assertIsNone(value["local"])
+            self.assertIsNone(value["byseed"]["52"]["local"]["mean"])
+        with self.assertRaises(ValueError):
+            summarize([value for value in rows if value["seed"] != 52], {"native": {}, "trial": {}}, repeats=10, seeds=seeds)
+        for value in rows:
+            if value["seed"] == 52:
+                value["mse"] = value["psnr"] = None
+        result = summarize(rows, {"native": {}, "trial": {}}, repeats=10, seeds=seeds)
+        self.assertEqual(result["selected"], "native")
+        self.assertEqual(result["pareto"], [])
+        for value in result["table"]:
+            self.assertIsNone(value["psnrdrop"])
+            self.assertIsNone(value["byseed"]["52"]["psnrdrop"]["mean"])
+            self.assertIsNone(value["feasible"])
+        for value in rows:
+            value["mse"], value["psnr"] = .01, 20.
+            value["frequency"] = {"space": "rgb", "low": {"protected": None if value["seed"] == 52 else .01}, "high": {"protected": .01}}
+        result = summarize(rows, {"native": {}, "trial": {}}, repeats=10, seeds=seeds, bandbudget=1.)
+        self.assertTrue(all(value["feasible"] is None for value in result["table"]))
+
     def testmetric(self):
         original = Image.new("RGB", (8, 8), (50, 50, 50))
         region = Image.fromarray(np.pad(np.full((4, 8), 255, dtype=np.uint8), ((0, 4), (0, 0))))

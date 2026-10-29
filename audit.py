@@ -10,22 +10,21 @@ import numpy as np
 from data import clean, locate
 from run import writejson
 from engine.protocol import changes
+from evaluate import aggregate, declared, intervals, state
 
 def read(path):
     from engine.serial import read as readjson
     payload = readjson(locate(Path("."), clean(path, "summary")))
-    rows = payload.get("rows")
-    if payload.get("schema") != 1 or not isinstance(rows, list) or not rows:
+    rows = payload.get("rows") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict) or payload.get("schema") != 1 or not isinstance(rows, list) or not rows:
         raise ValueError("Expected a nonempty evaluation summary.")
-    keys = [(str(row["key"]), int(row["seed"])) for row in rows]
-    if len(set(keys)) != len(keys):
-        raise ValueError("Duplicate source and seed rows are unsupported.")
+    declared(payload)
     return payload
 
 def values(row):
     report = row.get("report", {})
     result = {"seconds": row.get("seconds"), "vram": row.get("vram")}
-    result.update({"metric:" + key: value for key, value in row.get("metrics", {}).items()})
+    result.update({"metric:" + key: value for key, value in row.get("metrics", row.get("raw", {})).items()})
     field = report.get("field", {})
     result.update({"field:" + key: field.get(key) for key in ("rank", "actualfitmean", "relativefit", "responsecosine", "modelgapmean", "relativegap")})
     result.update({"field:input" + key: value for key, value in field.get("alignment", {}).items() if key != "scope"})
@@ -147,17 +146,25 @@ def values(row):
         result["control:" + key] = report.get("control", {}).get(key)
     for key in ("intercept", "response", "cross", "total", "identityerror"):
         result["control:protected:" + key] = report.get("control", {}).get("protected", {}).get(key)
-    return {key: float(value) for key, value in result.items() if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)}
+    return {key: value if key.startswith("metric:") else float(value) for key, value in result.items() if key.startswith("metric:") or isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)}
+
+def observations(rows):
+    if any(not isinstance(row, dict) or not isinstance(row.get("key"), str) or type(row.get("seed")) is not int for row in rows):
+        raise ValueError("Audit observations require request keys and integer seeds.")
+    return [{"key": row["key"], "seed": row["seed"], "group": row.get("group", row["key"]), "metrics": values(row), "status": {"metric:" + key: value for key, value in row.get("status", {}).items()}} for row in rows]
 
 def summarize(rows):
+    point = aggregate(observations(rows))
     grouped = {}
     for row in rows:
         for key, value in values(row).items():
-            grouped.setdefault(key, {}).setdefault(str(row["key"]), []).append(value)
+            if value is not None and math.isfinite(value):
+                grouped.setdefault(key, {}).setdefault(str(row["key"]), []).append(value)
     result = {}
-    for key, groups in sorted(grouped.items()):
+    for key, metric in point["metrics"].items():
+        groups = grouped.get(key, {})
         means = np.array([np.mean(group) for group in groups.values()])
-        result[key] = {"mean": float(means.mean()), "median": float(np.median(means)), "images": len(means), "observations": sum(map(len, groups.values()))}
+        result[key] = {**metric, "median": float(np.median(means)) if len(means) else None, "images": metric["count"], "observations": sum(map(len, groups.values()))}
     states = {}
     for key in ("fallback", "trusted", "constraintmet", "protectedvalid"):
         observed = [row.get("report", {}).get(key) for row in rows]
@@ -175,16 +182,18 @@ def summarize(rows):
     unresolved = sum(parent.get("fittrusted") is True and record.get("active") is True and not record.get("components") for parent, record in frontierrecords)
     unverified = sum(bool(record.get("components")) and not any(value.get("verified") is True for value in record["components"].values()) for record in frontiers)
     frontiercoverage = {"pathrows": len(paths), "recorded": len(frontiers), "unrecorded": len(paths) - len(frontiers), "inactive": sum(record.get("active") is False for record in frontiers), "untrusted": sum(parent.get("fittrusted") is not True for parent, _ in frontierrecords), "unresolved": unresolved, "unverified": unverified, "partiallyverified": partial, "fullyverified": len(checked), "fraction": len(checked) / len(paths) if paths else None, "scope": "First-model observation counts; status categories can overlap; disabled or unresolved entries are not zero capacity."}
-    return {"metrics": result, "states": states, "diagnostics": {"initialleverage": coverage, "frontier": frontiercoverage}, "note": "Continuous metrics average seeds within each edit instance before averaging instances."}
+    return {"metrics": result, "byseed": point["byseed"], "seeds": point["seeds"], "aggregation": point["aggregation"], "states": states, "diagnostics": {"initialleverage": coverage, "frontier": frontiercoverage}, "note": "Means average requests within each seed, then seeds; medians summarize per-request seed averages."}
 
 def paired(left, right, repeats=2000, seed=42):
     if type(repeats) is not int or not 1 <= repeats <= 100000:
         raise ValueError("Bootstrap repeats must be from one to one hundred thousand.")
+    declared({"rows": left})
+    declared({"rows": right})
     first = {(str(row["key"]), int(row["seed"])): row for row in left}
     second = {(str(row["key"]), int(row["seed"])): row for row in right}
     if set(first) != set(second) or len(first) != len(left) or len(second) != len(right) or not first:
         raise ValueError("Paired summaries require identical unique source and seed sets.")
-    grouped, sourcegroups = {}, {}
+    measured, sourcegroups = [], {}
     for identity in sorted(first):
         a, b = first[identity], second[identity]
         group = str(a.get("group", identity[0]))
@@ -196,24 +205,27 @@ def paired(left, right, repeats=2000, seed=42):
         for key in ("source", "target", "imagesha256", "masksha256"):
             if a.get("report", {}).get(key) != b.get("report", {}).get(key):
                 raise ValueError("Paired summaries differ in source, prompt, or mask provenance.")
-        va, vb = values(a), values(b)
-        for key in va.keys() & vb.keys():
-            grouped.setdefault(key, {}).setdefault(identity[0], []).append(vb[key] - va[key])
-    generator = np.random.default_rng(seed)
+        va, vb = observations([a])[0], observations([b])[0]
+        record = {"key": identity[0], "seed": identity[1], "group": group, "metrics": {}, "status": {}}
+        for key in va["metrics"].keys() | vb["metrics"].keys():
+            sa, sb = state(va, key), state(vb, key)
+            value = None if not sa or not sb or sa == sb and sa in {-1, 1} else (vb["metrics"][key] if sb == 2 else math.copysign(math.inf, sb)) - (va["metrics"][key] if sa == 2 else math.copysign(math.inf, sa))
+            record["metrics"][key] = value if value is None or math.isfinite(value) else None
+            if value is not None and not math.isfinite(value):
+                record["status"][key] = "positive infinity" if value > 0 else "negative infinity"
+        measured.append(record)
+    point, bounds = aggregate(measured), intervals(measured, repeats, seed)
     result = {}
-    for key, groups in sorted(grouped.items()):
-        sources = {}
-        for identity, group in groups.items():
-            sources.setdefault(sourcegroups[identity], []).append(float(np.mean(group)))
-        means = np.array([np.mean(group) for group in sources.values()])
-        distribution = [float(means[generator.integers(0, len(means), len(means))].mean()) for _ in range(repeats)]
-        interval = np.quantile(distribution, [.025, .975]) if len(means) >= 2 else None
-        result[key] = {"difference": float(means.mean()), "interval": interval.tolist() if interval is not None else None, "images": len(means), "instances": len(groups), "pairs": sum(map(len, groups.values()))}
+    for key, value in point["metrics"].items():
+        valid = [row for row in measured if state(row, key)]
+        result[key] = {**{name: value for name, value in value.items() if name != "mean"}, "difference": value["mean"], "interval": bounds[key], "images": len({row["group"] for row in valid}), "instances": value["count"], "pairs": len(valid)}
     provenance = all(all(key in row.get("report", {}) for key in ("source", "target", "imagesha256", "masksha256")) for row in [*left, *right])
-    return {"direction": "comparison minus reference", "bootstrap": "source-grouped percentile intervals; not corrected for multiple comparisons", "provenancecomplete": provenance, "repeats": repeats, "seed": seed, "metrics": result}
+    return {"direction": "comparison minus reference", "bootstrap": "source-grouped seed-first percentile intervals; not corrected for multiple comparisons", "provenancecomplete": provenance, "repeats": repeats, "seed": seed, "metrics": result, "byseed": point["byseed"], "seeds": point["seeds"], "aggregation": point["aggregation"]}
 
 def agreement(left, right):
     # Check exact output equality instead of rounded metric equality.
+    declared({"rows": left})
+    declared({"rows": right})
     first = {(str(row["key"]), int(row["seed"])): row for row in left}
     second = {(str(row["key"]), int(row["seed"])): row for row in right}
     if len(first) != len(left) or len(second) != len(right) or first.keys() != second.keys() or not first:

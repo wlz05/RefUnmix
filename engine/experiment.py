@@ -8,6 +8,7 @@ import math
 from dataclasses import replace, asdict
 from engine.model import EditConfig
 from engine.timing import grid, interval, mean
+from evaluate import aggregate, declared, intervals
 
 def candidates(starts=None, deltas=None, end=0.30, cleanup=True, noise=1):
     # Add both single-time endpoints for every chord candidate.
@@ -52,12 +53,15 @@ def paired(rows, first, second, repeats=2000):
         raise ValueError("Paired comparisons cannot contain duplicate rows.")
     if not left or set(left) != set(right):
         raise ValueError("Paired comparisons require matching image and seed pairs.")
+    declared({"rows": list(left.values())})
+    declared({"rows": list(right.values())})
     for key in left:
         if left[key]["group"] != right[key]["group"]:
             raise ValueError("Paired source groups disagree.")
     result = {"first": first, "second": second, "direction": "first minus second; positive semantic and PSNR or negative MSE favors first", "metrics": {}}
+    measured = {key: {"key": key[0], "seed": key[1], "group": row["group"], "metrics": {}} for key, row in left.items()}
     for metric in ("semantic", "global", "local", "psnr", "mse"):
-        values, groups = {}, {}
+        groups = {}
         for key, row in left.items():
             before, after = right[key][metric], row[metric]
             if (before is None) != (after is None):
@@ -65,12 +69,14 @@ def paired(rows, first, second, repeats=2000):
             if before is not None:
                 if not math.isfinite(before) or not math.isfinite(after):
                     raise ValueError("Paired metrics must be finite.")
-                values.setdefault(key[0], []).append(after - before)
                 if key[0] in groups and groups[key[0]] != row["group"]:
                     raise ValueError("Repeated seeds must retain their source group.")
                 groups[key[0]] = row["group"]
-        gains = [mean(value) for value in values.values()]
-        result["metrics"][metric] = {"mean": mean(gains), "interval": interval(gains, list(groups.values()), repeats) if gains else None, "records": len(gains)}
+            measured[key]["metrics"][metric] = None if before is None else after - before
+    point, bounds = aggregate(list(measured.values())), intervals(list(measured.values()), repeats)
+    for metric, value in point["metrics"].items():
+        result["metrics"][metric] = {**{key: item for key, item in value.items() if key != "count"}, "interval": bounds[metric], "records": value["count"]}
+    result.update({"byseed": point["byseed"], "seeds": point["seeds"], "aggregation": point["aggregation"]})
     return result
 
 def analyze(report, rows, frozen=None, repeats=2000):
