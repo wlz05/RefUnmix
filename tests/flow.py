@@ -319,6 +319,17 @@ class FlowTests(unittest.TestCase):
             self.assertEqual(session.samples, session.limit.used)
             json.dumps(report, allow_nan=False)
 
+    def testintegratedflow(self):
+        for family in ("flux", "sd3"):
+            args = common(argparse.ArgumentParser()).parse_args(["--clip", "clip", "--size", "16", "--backbone", family, "--method", "field", "--semantic", "region"])
+            image = Image.new("RGB", (16, 16), (96, 128, 160))
+            pixels, report, session = run(editor(family), ClipJudge(Clip(), Processor()), image, "source", "target long", args)
+            self.assertEqual(pixels.shape, session.origin.shape)
+            self.assertIn("tangent", report["field"])
+            self.assertLessEqual(session.samples, 64)
+            self.assertEqual(session.samples, session.limit.used)
+            json.dumps(report, allow_nan=False)
+
     def testrgbshiftpath(self):
         session = self.session()
         path = Path(Native(session), session.field(.9, .15), mode="rgb")

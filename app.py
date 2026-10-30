@@ -44,7 +44,7 @@ def main() -> None:
             output = gr.Image(type="pil", label="Result")
         source = gr.Textbox(label="Source")
         target = gr.Textbox(label="Target")
-        method = gr.Dropdown(choices=("path", "raw", "fixed"), value=args.method if args.method in {"path", "raw", "fixed"} else "path", label="Execution")
+        method = gr.Dropdown(choices=("field", "path", "raw", "fixed"), value=args.method if args.method in {"field", "path", "raw", "fixed"} else "path", label="Execution")
         field = gr.Dropdown(choices=("pullback", "chord", "instant", "average"), value=args.field, label="Input field")
         region = gr.Image(type="pil", image_mode="L", label="Optional region mask")
         polarity = gr.Radio(choices=("edit", "protect"), value="edit", label="White mask pixels")

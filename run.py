@@ -70,7 +70,7 @@ def common(parser):
     parser.add_argument("--control", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--times", nargs="+", type=float, default=[.60, .75, .90])
     parser.add_argument("--proposal", type=str.casefold, choices=("clean", "chord"), default="clean")
-    parser.add_argument("--method", type=str.casefold, choices=("path", "raw", "fixed", "projection", "joint", "thread", "base", "global"), default="path")
+    parser.add_argument("--method", type=str.casefold, choices=("field", "path", "raw", "fixed", "projection", "joint", "thread", "base", "global"), default="path")
     parser.add_argument("--candidates", type=positive, default=12)
     parser.add_argument("--pollstep", type=float, default=.5)
     parser.add_argument("--minstep", type=float, default=1 / 16)
@@ -224,7 +224,7 @@ def pathconfig(args):
     config.validate()
     from engine.limit import Budget
     Budget(args.maxsamples, args.maxcalls, args.seconds)
-    if args.size % 16:
+    if args.method != "field" and args.size % 16:
         raise ValueError("Path control requires even latent geometry.")
     if args.reference != "auto" or args.donors or args.lowtime is not None or args.hightime is not None or args.stages:
         raise ValueError("Path control uses its own reference and two baseline bands.")
@@ -292,22 +292,24 @@ def validate(args):
     options(args.field, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry, args.fieldweight, args.fieldshrink)
     if type(args.fieldrepair) is not int or not 0 <= args.fieldrepair <= 2 or args.fieldrepair and (args.field != "pullback" or args.fieldgeometry != "coupled" or not args.cleanup or args.adapter):
         raise ValueError("Field repair requires a coupled pullback with native cleanup and no adapter.")
-    if args.semantic not in {"patches", "region"} or args.semantic == "region" and args.method not in {"path", "raw", "fixed"}:
+    if args.semantic not in {"patches", "region"} or args.semantic == "region" and args.method not in {"field", "path", "raw", "fixed"}:
         raise ValueError("Region semantics require path, raw, or fixed editing.")
     if type(args.tangent) is not bool or type(args.tangentnorm) is not bool or type(args.tangentchecks) is not int or not 1 <= args.tangentchecks <= 8 or args.tangentbasis not in {"residual", "temporal"}:
         raise ValueError("Tangent query settings are invalid.")
     if number(args.tangentgain, "Tangent gain", 0) <= 0:
         raise ValueError("Tangent gain must be positive.")
     number(args.tangentpenalty, "Tangent protection weight", 0)
-    if args.tangent and (args.field != "pullback" or args.fieldgeometry != "coupled" or args.fieldrepair or not args.cleanup or args.adapter or args.method not in {"raw", "path"} or not args.clip):
-        raise ValueError("Tangent refinement requires coupled pullback, a local scorer, native cleanup, no field repair, and raw or path output.")
+    if (args.tangent or args.method == "field") and (args.field != "pullback" or args.fieldgeometry != "coupled" or args.fieldrepair or not args.cleanup or args.adapter or args.method not in {"field", "raw", "path"} or not args.clip):
+        raise ValueError("Tangent refinement requires coupled pullback, a local scorer, native cleanup, no field repair, and field, raw, or path output.")
+    if args.method == "field" and (args.prior != "off" or args.heldout or args.control or args.frontier or args.compensation or args.factorial):
+        raise ValueError("Integrated field output excludes reference search and its diagnostics.")
     if args.field == "ect" and (args.backbone != "vp" or args.delta != 0):
         raise ValueError("ECT transport requires --backbone vp and --delta 0.")
     if args.localizationtime is not None:
         number(args.localizationtime, "Localization time", 0, 1)
-        if args.localizationtime == 0 or args.localization != "baseline" or args.method not in {"path", "raw", "fixed"}:
+        if args.localizationtime == 0 or args.localization != "baseline" or args.method not in {"field", "path", "raw", "fixed"}:
             raise ValueError("A separate localization time requires baseline localization in (0, 1].")
-    if args.field != "chord" and args.method not in {"path", "raw", "fixed"}:
+    if args.field != "chord" and args.method not in {"field", "path", "raw", "fixed"}:
         raise ValueError("Historical methods require --field chord; current fields use path/raw/fixed modes.")
     if args.method == "raw" and (args.prior != "off" or args.heldout or args.control):
         raise ValueError("Raw outputs require --prior off without held-out or controller diagnostics.")
@@ -326,7 +328,7 @@ def validate(args):
     if args.backbone != "vp":
         if args.prior not in {"flow", "off"} or args.prior == "flow" and not args.flowconsistency or args.variance is not None:
             raise ValueError("Flow backbones require --prior off or declared --flowconsistency --prior flow.")
-        if args.adapter or args.method not in {"path", "raw", "fixed"} or args.localization in {"attention", "hybrid"}:
+        if args.adapter or args.method not in {"field", "path", "raw", "fixed"} or args.localization in {"attention", "hybrid"}:
             raise ValueError("Native flow control supports path/raw/fixed modes and frozen non-attention masks.")
         if args.cleanup and not 0 < args.end < 1:
             raise ValueError("Flow field editing requires an interior continuation sigma.")
@@ -344,7 +346,7 @@ def validate(args):
     if args.method not in {"base", "raw", "fixed"} and not args.clip:
         raise ValueError("Adaptive selection requires a local --clip folder.")
     localization(args)
-    if args.method in {"path", "raw", "fixed"}:
+    if args.method in {"field", "path", "raw", "fixed"}:
         config = pathconfig(args)
     elif args.method == "projection":
         config = projectionconfig(args)
@@ -402,7 +404,7 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
         seed(args.seed, getattr(args, "deterministic", False))
     initialstats = judge.stats() if judge is not None else {}
     from engine.limit import Budget, Exhausted
-    limit = Budget(args.maxsamples, args.maxcalls, args.seconds) if args.method in {"path", "raw", "fixed"} else None
+    limit = Budget(args.maxsamples, args.maxcalls, args.seconds) if args.method in {"field", "path", "raw", "fixed"} else None
     session = editor.prepare(image, source, target, args.seed, args.noise, args.end, args.cleanup, args.scale, region=mask, polarity=polarity)
     if limit is not None:
         session.limit = limit
@@ -419,7 +421,7 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
     if args.method != "base" and session.mask is None and args.localization in {"attention", "hybrid"}:
         session.localization(source, target, args.attentionwords, args.attentionqueries)
     native, neutral, localizationbase = None, None, None
-    if args.method in {"path", "raw", "fixed"}:
+    if args.method in {"field", "path", "raw", "fixed"}:
         from engine.field import build
         from engine.native import create
         if args.adapter:
@@ -440,7 +442,7 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
     else:
         base = session.field(args.start, args.delta)
         metadata["field"] = {"requested": "chord", "actual": "chord", "status": "historical"}
-    if args.method in {"path", "raw", "fixed"}:
+    if args.method in {"field", "path", "raw", "fixed"}:
         from engine.path import Path as ReferencePath
         from engine.poll import select as search
         from engine.prior import Prior
@@ -453,13 +455,13 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
         metadata["fieldnorm"] = float(base.double().norm())
         metadata["protectionsha256"] = hashlib.sha256(scoringmask.detach().float().cpu().contiguous().numpy().tobytes()).hexdigest()
         score = None
-        if (args.method == "path" or args.tangent) and judge is not None:
+        if (args.method in {"field", "path"} or args.tangent) and judge is not None:
             options = {"layout": args.semantic} if args.semantic != "patches" else {}
             if args.attributes or args.retain:
                 options.update(attributes=args.attributes, retain=args.retain)
             score = judge.prepare(session.origin, source, target, scoringmask, args.localtext, **options)
             metadata["semanticviews"] = {"layout": args.semantic, "boxes": list(getattr(score, "boxes", ())), "scope": "Frozen inferred or supplied support; independent official masks are used only after selection."}
-        if args.tangent:
+        if args.tangent or args.method == "field":
             import numpy as np
             from engine.field import redirect, temporal
             redirect(constructed, native, score, scoringmask, args.tangentgain, args.tangentpenalty, args.tangentchecks, args.tangentnorm, args.tangentbasis, args.fieldprobe, args.fieldradius, args.fieldridge, args.fieldtolerance, args.scoretol, config.slacks)
@@ -470,18 +472,42 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
                 constructed.report["initialtemporal"] = constructed.report["temporal"]
                 contrasts = [session.difference(session.editor.index(time)).detach().double().reshape(-1).cpu().numpy() for time in constructed.report["times"]]
                 constructed.report["temporal"] = temporal(np.stack(contrasts, axis=1), base.detach().double().reshape(-1).cpu().numpy(), args.fieldtolerance)
+        if args.method == "field":
+            # Export the accepted field without a separate reference controller.
+            from engine.poll import protection
+            from engine.access import describe
+            try:
+                latent = constructed.endpoint
+                if latent is None:
+                    latent = neutral if neutral is not None and (session.scale == 0 or not base.ne(0).any().item()) else native.endpoint(base)
+                output = constructed.pixels if constructed.pixels is not None else session.decode(latent).clamp(0, 1)
+            except Exhausted as error:
+                return stopped(session, metadata, args.method, error, constructed.endpoint, judge, initialstats)
+            constructed.observe(latent)
+            damage, mass = protection(session.origin, 1 - scoringmask)
+            scores = constructed.scores if constructed.scores is not None else score(output)
+            trace = constructed.report["tangent"]
+            if "baselinedamage" not in trace:
+                trace["baselinedamage"] = damage(output)
+            report = {**metadata, "method": "field", "renderer": "native", "scores": scores, "damage": damage(output), "rawdamage": trace.get("baselinedamage"), "protectedvalid": mass > 0, "selected": "field" if trace["accepted"] else "baseline", "fallback": not trace["accepted"], "constraintmet": True, "budgetstopped": trace["budgetstopped"], "evaluations": trace["evaluations"] + int(constructed.scores is None), "candidates": [], "controller": {"enabled": False, "scope": "Response allocation is part of field construction."}, "backend": native.metadata(), "stats": session.stats(), "judgestats": {key: value - initialstats.get(key, 0) for key, value in judge.stats().items()}, "explicitregion": mask is not None, "localization": localizationreport, "adoptedfieldnorm": metadata["fieldnorm"], "scope": "Verified native endpoint of the integrated field; no reference search."}
+            report["access"] = describe(native, Prior(session, mode="off"))
+            return output.detach().clone(), report, session
         path = ReferencePath(native, base, args.representation, args.seed, neutral, constructed.endpoint, constructed.baseline if args.method == "path" else None)
         if args.method == "raw":
             from engine.poll import protection
             from engine.access import describe
             try:
-                latent, output = path.raw()
+                if constructed.endpoint is not None and constructed.pixels is not None:
+                    latent, output = constructed.endpoint, constructed.pixels
+                else:
+                    latent, output = path.raw()
             except Exhausted as error:
                 return stopped(session, metadata, args.method, error, path.fields.get((1., 1.)), judge, initialstats)
             constructed.observe(latent)
             damage, mass = protection(session.origin, 1 - scoringmask)
-            scores = score(output) if score is not None else None
-            report = {**metadata, "method": "raw", "renderer": "raw", "scores": scores, "damage": damage(output), "protectedvalid": mass > 0, "selected": "raw", "evaluations": int(score is not None), "backend": native.metadata(), "stats": session.stats(), "judgestats": {key: value - initialstats.get(key, 0) for key, value in judge.stats().items()} if judge is not None else {}, "explicitregion": mask is not None, "localization": localizationreport, "scope": "Native target continuation without reference subtraction."}
+            scores = constructed.scores if constructed.scores is not None else score(output) if score is not None else None
+            evaluations = constructed.report.get("tangent", {}).get("evaluations", 0) if constructed.scores is not None else int(score is not None)
+            report = {**metadata, "method": "raw", "renderer": "raw", "scores": scores, "damage": damage(output), "protectedvalid": mass > 0, "selected": "raw", "evaluations": evaluations, "backend": native.metadata(), "stats": session.stats(), "judgestats": {key: value - initialstats.get(key, 0) for key, value in judge.stats().items()} if judge is not None else {}, "explicitregion": mask is not None, "localization": localizationreport, "scope": "Native target continuation without reference subtraction."}
             report["access"] = describe(native, Prior(session, mode="off"))
             report["adoptedfieldnorm"] = metadata["fieldnorm"]
             return output, report, session

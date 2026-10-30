@@ -1,8 +1,8 @@
 # RefUnmix: Protected-Response Compensation for Image Editing
 
-**RefUnmix** edits through protected-response compensation. A field correction and a matched conditional-reference change can cancel their protected effects while retaining target change. The same measured response also repairs existing distortion, releasing room for further editing within a fixed protection budget.
+**RefUnmix** constructs an editing field from measured endpoint responses. It retains a coupled pullback field as the protection anchor, then allocates its unresolved request along tangent directions that improve target semantics while respecting the anchor's actual protected-content damage.
 
-RefUnmix uses frozen one-step or few-step native backbones with finite-query control. Reports include all denoiser sample evaluations, forward calls, VAE decodes, latency, and peak memory.
+The primary `--method field` profile incorporates response allocation and verification into field construction, then exports its cached native endpoint. It runs no separate reference controller. Frozen one-step or few-step continuation is queried a finite number of times; all model samples, forwards, VAE decodes, control scores, latency, and peak memory remain charged.
 
 [Quick start](#quick-start) | [Datasets](#datasets) | [Main experiments](#main-experiments-all-700-pie-bench-requests) | [Ablations](#benchmark-ablation-protocol) | [Parallel reproduction](#parallel-reproduction)
 
@@ -12,11 +12,9 @@ RefUnmix uses frozen one-step or few-step native backbones with finite-query con
 
 ### Core Insight
 
-**Preservation constrains total distortion, so an update in a protected region can help when it repairs an existing error.** RefUnmix measures this relationship in complete generated outputs. One inverse response supplies both the field offset that repairs current distortion and the field correction paired with reference release. Their joint target response determines how much change to adopt.
+**A protected update can be useful when it repairs an existing error.** The decisive quantity is the total output residual, including its cross term with the proposed change. RefUnmix uses this residual when choosing a tangent field direction and when deciding how much of it to adopt. Tangency removes first-order radial scaling; the generated endpoint determines semantic benefit and protection feasibility.
 
-Matched source/target zero-field endpoints expose the reference coordinate. Endpoint calibration supplies the initial field. Regional semantic views and optional endpoint repair support these two operations; the central control mechanism is the joint protected response.
-
-[ChordEdit](https://arxiv.org/abs/2602.19083) stabilizes coarse-step transport, [PreciseEdit](https://arxiv.org/abs/2610.23535) allocates strong transport by directional and spatial reliability, and [LOCO Edit](https://arxiv.org/html/2409.02374v3) projects editing directions using regional Jacobians. RefUnmix computes residual-aware reference-field compensation from paid output observations, then verifies the selected finite intervention. Equal-budget controls distinguish this mechanism from generic joint search.
+[ChordEdit](https://arxiv.org/abs/2602.19083) stabilizes coarse-step transport, [PreciseEdit](https://arxiv.org/abs/2610.23535) allocates strong transport by directional and spatial reliability, and [LOCO Edit](https://arxiv.org/html/2409.02374v3) uses regional Jacobian projections. RefUnmix allocates an unresolved request in the coupled field's tangent dictionary using complete generated-output responses. The optional reference-control extension is tested separately against the integrated field.
 
 ### The Complete Method Chain
 
@@ -25,25 +23,19 @@ Source image and source/target captions
                     |
        Shared-noise conditional contrasts
                     |
-       Requested displacement and subspace
+       Coupled inverse endpoint response
                     |
-      Measure native endpoint transmission
+       Baseline field and protected output
                     |
-       Invert response to construct F0
+       Unresolved request / tangent dictionary
                     |
-     Matched source/target zero-field endpoints
+       Measure only lateral output responses
                     |
-       Expose a controlled reference coordinate
+       Allocate semantics and total protected residual
                     |
-    Fit joint semantic and protected RGB responses
+       Choose feasible adoption / verify actual output
                     |
-     Repair residuals and compensate reference motion
-                    |
-     Select a common adoption step and query once
-                    |
-       Verify the actual output and reuse feedback
-                    |
-     Attainment-first selection -> Edited image
+       Export cached endpoint or retain baseline
 ```
 
 **1. Estimate the request.** Let $`z_{\mathrm{src}}=E(X)`$ and let $`H(F,C)`$ be the clean latent endpoint after applying field $`F`$ and the declared native continuation under condition $`C`$. Source and target predictions share the anchor and noise. Their contrasts at $`t`$ and $`t-\delta`$ define a request proxy and its resolved subspace:
@@ -55,7 +47,7 @@ d_k=\widehat z_0(z_k,t_k,C_{\mathrm{tgt}})
 Q_F=\mathrm{orth}[d_1,d_2],\quad c_0=Q_F^\top\bar d.
 ```
 
-The default times are 0.90 and 0.75. They provide paired conditional measurements; Haar frequency coordinates enter after field construction.
+The default times are 0.90 and 0.75. They provide paired conditional measurements. The integrated field uses tangent coordinates; the optional path comparison uses Haar amplitude coordinates.
 
 **2. Invert endpoint transmission.** Probe each resolved direction through the same continuation:
 
@@ -78,7 +70,7 @@ F_0&=Q_F(c_0+\delta_F^\star).
 
 The full response Gram matrix preserves interactions between the conditional directions. The regularizer and correction radius control inverse amplification. The native output $`Y_{\mathrm{base}}=V(H(F_0,C_{\mathrm{tgt}}))`$ defines the per-field control reference.
 
-$`F_0`$ remains in the span of the supplied temporal contrasts. With two independent contrasts it can also be written as $`\beta_1d_1+\beta_2d_2`$. Response measurements determine these coefficients. `field.temporal` records the signed weights, nonnegative-mixture fit, and input-span error; the temporal suite compares this rule with frozen mixture weights.
+$`F_0`$ remains in the span of the supplied temporal contrasts. With two independent contrasts it can also be written as $`\beta_1d_1+\beta_2d_2`$. Response measurements determine these coefficients. `field.initialtemporal` retains the initial fit when tangent allocation runs, while `field.temporal` records the final field's signed weights, nonnegative-mixture fit, and input-span error; the temporal suite compares this rule with frozen mixture weights.
 
 The measured response also separates strength from direction. Let $`\widetilde R_F`$ be its resolved SVD, $`P_F`$ its column-space projector, $`v_F=\gamma_F\bar d`$, and $`w_F=\widetilde R_Fc_0`$. For nonzero $`v_F`$, compare
 
@@ -89,6 +81,31 @@ G_F=E_{\mathrm{line}}-E_{\mathrm{span}}\ge0.
 ```
 
 $`G_F`$ measures the error reduction available through direction changes beyond any signed scalar adjustment. $`E_{\mathrm{span}}`$ measures the request component outside the resolved response space. These quantities describe linear capacity before regularization, the correction ball, and nonlinear continuation; actual endpoint fit and final task completion are recorded separately.
+
+**3. Allocate the residual inside the field.** Let $`B_b=\lVert F_b\rVert_2 Q_b`$, $`F_b=B_bc_b`$, and let $`Q_b`$ span the baseline, temporal contrasts, and unresolved latent request. With $`M=I`$, measure responses only along an orthonormal basis of $`c_b^\perp`$. For $`k`$ dictionary directions this needs $`k-1`$ probes, rather than $`k`$. Let $`S`$ denote target/local score changes divided by the frozen desired gain, and $`P`$ the protected RGB residual response. With $`r_b=\Phi_W(Y_b)`$ and $`d_b=\sqrt{D_b}`$ when $`D_b>0`$ (otherwise 1), solve
+
+```math
+v^\star=\arg\min_{c_b^\top Mv=0,\ \lVert v\rVert_M\le\Delta_b}
+\left(\lVert Sv-\mathbf1\rVert_2^2
++\gamma\lVert(r_b+Pv)/d_b\rVert_2^2
++\lambda_b\lVert v\rVert_M^2\right).
+```
+
+The protected term includes the current residual. Its cross term lets a direction repair existing damage; penalizing only $`\lVert Pv\rVert^2`$ misses this opportunity. With $`p=Pv^\star`$, adoption obeys
+
+```math
+F_\star=F_b+\alpha B_bv^\star,\qquad
+0\le\alpha\le1,\qquad
+2\alpha r_b^\top p+\alpha^2\lVert p\rVert_2^2\le0.
+```
+
+**4. Verify and export.** Up to `--tangentchecks 3` actual amplitudes are decoded and scored. Every accepted output improves the selected target heads, retains every frozen semantic floor, and satisfies the original baseline's total protection budget. Failure retains the baseline; budget exhaustion after acceptance retains the already verified result. The selected endpoint, pixels, and scores are cached and exported without another model query, decode, or control evaluation. `--method field` performs no reference subtraction or three-coordinate search. `--candidates` belongs to the optional path controller and does not set this profile's query count.
+
+The optional `--tangentnorm` comparison checks the actual endpoint displacement relative to the same target zero-field endpoint within 1%. It intersects the full norm tolerance band with the protection interval, including both connected components when present. Tangency alone does not preserve finite-step input or output norms.
+
+### Optional Reference-Control Extension
+
+`--method path` selects the earlier reference-control formulation below. It remains a comparison, and `--method path --tangent` measures the additional value of reference search after the integrated field. These outputs use a different renderer; no equivalence with native field output is assumed.
 
 **3. Recover the reference degree of freedom.** Query matched endpoints:
 
@@ -153,7 +170,7 @@ The cross term records whether the change repairs or amplifies existing distorti
 
 **Why residual repair changes the attainable edit.** Consider $`A_f=(1,0)^\top`$, $`a_\eta=(0,1)^\top`$, $`r=(0.2,-0.1)^\top`$, $`C_f=0`$, and $`c_\eta=1`$. The current damage is 0.05. Incremental cancellation has $`q=0`$, allowing positive reference adoption only up to 0.2. Residual compensation gives $`p=-0.2`$, removes the first error component, and permits adoption up to $`0.1+\sqrt{0.05}\approx0.324`$ under the same damage budget. Both fit within a control radius of 0.5 at the test's interior anchor. This is a fixed linear example, not a measured PIE result.
 
-`--releasepolicy residual` is the main control policy. `--releasepolicy increment` reproduces the earlier incremental rule. Logs record the repair `offset`, its target response, the two path-family objective values, and actual output verification. At the same fitted state and constraints, the residual family retains all incremental paths; its best regularized local objective is therefore no worse. Final generated-image improvements are evaluated independently.
+`--releasepolicy residual` is the reference-control policy. `--releasepolicy increment` reproduces the earlier incremental rule. Logs record the repair `offset`, its target response, the two path-family objective values, and actual output verification. At the same fitted state and constraints, the residual family retains all incremental paths; its best regularized local objective is therefore no worse. Final generated-image improvements are evaluated independently.
 
 **5. Close the loop on actual outputs.** Every visited candidate is decoded and scored under frozen control views. Completed candidates must satisfy the native protection budget and all semantic floors. Rejected outputs still inform response fitting. Initialization, field probes, reference queries, fallback, and enabled priors share the model allowance. Among the actual feasible outputs and $`Y_{\mathrm{base}}`$, select the highest attained minimum editing gain, then the lowest bounded preservation cost within that attainment band. Postselection PIE metrics and independent task labels score the frozen result.
 
@@ -314,7 +331,7 @@ python -B RefUnmix/doctor.py --batch 3 --model models --clip clip --device cuda:
 ### 3. Edit One Image
 
 ```bash
-python -B RefUnmix/main.py --image input.png --source "A person wearing a blue shirt." --target "A person wearing a striped shirt." --model models --clip clip --device cuda:0 --precision fp32 --field pullback --method path --prior off --maxsamples 15 --maxcalls 15 --candidates 12 --seed 42 --no-control --no-heldout --output outputs/result.png --report outputs/result.json
+python -B RefUnmix/main.py --image input.png --source "A person wearing a blue shirt." --target "A person wearing a striped shirt." --model models --clip clip --device cuda:0 --precision fp32 --field pullback --method field --semantic region --prior off --maxsamples 15 --maxcalls 15 --tangentchecks 3 --seed 42 --no-control --no-heldout --output outputs/result.png --report outputs/result.json
 ```
 
 Provide source and target image captions through `--source` and `--target`. Each run saves the edited image and a JSON report containing controls, inference costs, and checkpoint hashes.
@@ -335,9 +352,9 @@ These commands use `--prior off`. Optional consistency priors consume additional
 | `--field` | `pullback` | Field: pullback, chord, instant, average, blend, ect, or zero |
 | `--fieldrepair` | `0` | Verified endpoint residual repair: zero, one, or two rounds |
 | `--semantic` | `patches` | Local control views: separate patches or one complete-region goal |
-| `--tangent` | off | Allocate a lateral residual field under the coupled baseline protection budget |
+| `--tangent` | off | Enable tangent allocation in raw/path mode; field mode includes it directly |
 | `--tangentgain` | `0.02` | Desired increase of each frozen target control head |
-| `--tangentpenalty` | `1` | Relative protection-response penalty |
+| `--tangentpenalty` | `1` | Relative total protected-residual penalty |
 | `--tangentchecks` | `3` | Maximum real-output checks within the shared model budget |
 | `--tangentbasis` | `residual` | Include the remaining endpoint request; `temporal` restricts the dictionary |
 | `--tangentnorm` | off | Accept only actual endpoint-response norm ratios within 1% of baseline |
@@ -345,7 +362,7 @@ These commands use `--prior off`. Optional consistency priors consume additional
 | `--fieldshrink` | `0.7` | ECT shrinkage, in [0, 1]; requires epsilon VP and delta zero |
 | `--localizationtime` | start time | Shared protection probe time for native modes with baseline localization |
 | `--fieldgeometry` | `coupled` | Coupled response fit or scalar norm-matched ablation |
-| `--method` | `path` | Primary modes: path, raw, fixed |
+| `--method` | `path` | Select `field` for the integrated profile; `path` is the optional reference controller |
 | `--start`, `--delta` | `0.90`, `0.15` | Contrast times are start and start minus delta |
 | `--end` | `0.30` | Native continuation noise time |
 | `--poststeps` | `1` | Steps per native continuation, not total editor cost |
@@ -361,7 +378,7 @@ These commands use `--prior off`. Optional consistency priors consume additional
 | `--algorithm` | `trust` | Trust-region, poll, or random control search |
 | `--geometry` | `output` | Compensation geometry: output, latent, attenuate |
 | `--axes` | `all` | Active control coordinates |
-| `--release` | on | Main protected-response reference-field compensation |
+| `--release` | on | Optional path profile: protected-response reference-field compensation |
 | `--releasepolicy` | `residual` | Repair the current residual and compensate new reference motion; `increment` retains the earlier rule |
 | `--compensation` | off | Additional rescue probes after unreliable proposals |
 
@@ -502,11 +519,29 @@ Run one dataset command at a time on the single RTX 4090. `--batch` schedules in
 | Result prefix | `outputs/` | `outputs/four/` |
 | Development recipe | `outputs/developmentval/recipe.json` | `outputs/four/developmentval/recipe.json` |
 
-For the four-request alternative, replace `--batch 3` with `--batch 4` throughout the selected workflow and replace the `outputs/` prefix in its output, recipe, and subsequent assessment input paths with `outputs/four/`. Keep data and model paths unchanged. Start a fresh validation run at that width before its test replay. Sample/call limits and the twelve-candidate cap remain per request; batch width does not change the budget or the four seeds.
+For the four-request alternative, replace `--batch 3` with `--batch 4` throughout the selected workflow and replace the `outputs/` prefix in its output, recipe, and subsequent assessment input paths with `outputs/four/`. Keep data and model paths unchanged. Start a fresh validation run at that width before its test replay. Sample/call limits, field amplitude checks, and the optional path candidate cap remain per request; batch width does not change the budget or the four seeds.
 
 ### Main Experiments: All 700 PIE-Bench Requests
 
 Run the following commands from `workspace/` in one process on one RTX 4090. The command profile uses FP32, `cuda:0`, and seeds **42 52 3047 3407**. Keep the same backbone, control checkpoint, precision, and input files across compared runs. Current paper experiments use `evaluate.py` and `trial.py`.
+
+The primary integrated field uses `--method field --semantic region`. Response allocation is enabled by this method; no additional `--tangent` flag is required. Its baseline, desired gain, protection support, and semantic floors stay fixed through verification. The parser retains the earlier `path` default for existing scripts, so select `field` explicitly.
+
+**Integrated field, 64-sample cap:**
+
+```bash
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis residual --no-tangentnorm --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 64 --maxcalls 64 --output outputs/main
+```
+
+**Integrated field, 15-sample cap:**
+
+```bash
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis residual --no-tangentnorm --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 15 --maxcalls 15 --output outputs/matched
+```
+
+With two resolved temporal contrasts and one additional residual direction, the dictionary has at most three directions. A single-condition, one-step continuation uses four conditional samples, three initial pullback endpoints, one baseline endpoint, up to two lateral probes, and up to three amplitude checks: at most 13 denoiser sample evaluations for this profile. Extra localization times, noise samples, CFG, or native steps change the count. The shared cap is enforced per image-seed request; the paid baseline is retained when a full probe-plus-check does not fit.
+
+The following commands retain the earlier reference-controller comparison. They do not define the integrated field profile.
 
 | Setting | Full-controller run | Equal-budget run |
 |---------|---------------------|------------------|
@@ -518,16 +553,16 @@ Run the following commands from `workspace/` in one process on one RTX 4090. The
 | Extra rescue / prior / held-out probes | off | off |
 | Annotation-mask access | off | off |
 
-**Full-controller run, 64-sample cap:**
+**Optional reference-controller comparison, 64-sample cap:**
 
 ```bash
-python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/main
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/controller
 ```
 
-**Equal-budget run, 15-sample cap:**
+**Optional reference-controller comparison, 15-sample cap:**
 
 ```bash
-python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 15 --maxcalls 15 --output outputs/matched
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 15 --maxcalls 15 --output outputs/controllermatched
 ```
 
 With the complete release, each command exports **2,800 image-seed outputs from 700 requests**. The inference summary contains 2,800 `rows`; each benchmark suite records `variants.<name>.rows = 2800` for every arm. `--split all` evaluates every mapped request; it does not use a split manifest. The 64- and 15-sample outputs belong to different budget settings. Report their actual sample evaluations, calls, and runtime alongside quality. The budget suite below also covers 10, 12, 20, and 30.
@@ -715,7 +750,7 @@ python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json
 
 #### Verify Optional Mechanisms
 
-The main method uses `--release --no-compensation --prior off`. `release` implements protected-response reference-field compensation. The `compensation` switch enables an additional recovery probe only when the regular proposal needs a fallback and the fitted response is trusted. `prior` adds separately charged consistency probes. Their effects are measured by the `leverage` and `prior` suites; they are not required by the main configuration.
+The reference-control comparison uses `--method path --release --no-compensation --prior off`. `release` implements protected-response reference-field compensation. The `compensation` switch enables an additional recovery probe only when the regular proposal needs a fallback and the fitted response is trusted. `prior` adds separately charged consistency probes. Their effects are measured by the `leverage` and `prior` suites; they are not required by the main configuration.
 
 Compare those suites after generation:
 
@@ -815,20 +850,30 @@ Controller history records `verification` for every queried non-geometry proposa
 
 Native probes use raw mode with priors and controller diagnostics disabled. Discrete reference paths require `--etas 0 1`. Raw inference rejects ignored prior or controller switches, and held-out consistency requires an enabled prior.
 
+### Integrated Field Ablation
+
+This six-arm matrix compares `full` (integrated field), `anchor` (coupled raw baseline), `temporal` (temporal-only tangent dictionary), `matched` (actual endpoint norm within 1%), `legacy` (reference controller on the anchor), and `controlled` (reference controller after tangent allocation). All arms use the same region semantics, seeds, native steps, and model budget. Actual query counts may differ and are reported. The field arms ignore path-candidate limits; `legacy` and `controlled` retain the declared path cap of 12.
+
+```bash
+python -B RefUnmix/trial.py --suite integrated --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis residual --no-tangentnorm --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 64 --maxcalls 64 --output outputs/integrated
+```
+
+For an equal-cap comparison replace both 64 limits by 15 and use a fresh output directory. For a dry configuration check add `--dry` and omit `--output`. Independently score each arm's `summary.json` using [Official PIE Metrics](#official-pie-metrics); average all requests within each seed, then average the four seed means. Historical controller suites below retain their explicit `--method path` commands and references.
+
 ### Tangent Endpoint Response Allocation
 
 `--tangent` refines the raw field around a **coupled pullback protection anchor**. It adds a lateral residual direction selected by measured native-output responses. It can run with `--method raw`, without subsequent reference search. `--method path --tangent` uses the refined field in the existing controller. Both modes charge all calibration and verification to the same request's model budget.
 
-Let $`F_b=B_b c_b`$ be the frozen anchor field. The dictionary contains the baseline, its temporal contrasts, and the normalized unfulfilled latent endpoint request. A local solve allocates the measured target response while penalizing protected drift:
+Let $`F_b=B_b c_b`$ be the frozen anchor field. The dictionary contains the baseline, its temporal contrasts, and the normalized unfulfilled latent endpoint request. A local solve allocates the measured target response while accounting for the total protected residual:
 
 ```math
 \min_{c_b^\top Mv=0,\;\lVert v\rVert_M\le\Delta_b}
 \left(\lVert R_{\mathrm{edit}}v-s_{\mathrm{target}}\rVert_2^2
-+\gamma\lVert \widetilde R_{\mathrm{protect}}v\rVert_2^2
++\gamma\lVert(r_b+R_{\mathrm{protect}}v)/d_b\rVert_2^2
 +\lambda_b\lVert v\rVert_M^2\right).
 ```
 
-The metric tangent is defined at the final coupled coefficients, not at the initial temporal mean. `s_target` is a frozen desired control-score increase: target-caption similarity and, for nonempty edit support, the aggregated local target gain. Edit responses are normalized by `--tangentgain`; the direction penalty uses protection responses normalized by the baseline residual norm when it is nonzero. Adoption and actual verification use the original protection units. These are development settings, not values derived from the official test metric. The solve uses metric whitening and the exact tangent nullspace, then a bounded regularized inverse response.
+The metric tangent is defined at the final coupled coefficients, not at the initial temporal mean. `s_target` is a frozen desired control-score increase: target-caption similarity and, for nonempty edit support, the aggregated local target gain. Edit responses are normalized by `--tangentgain`; the direction penalty uses the total residual divided by the baseline residual norm when nonzero (`d_b=1` otherwise). Adoption and actual verification use the original protection units. These are development settings, not values derived from the official test metric. The solve uses metric whitening and the exact tangent nullspace, then a bounded regularized inverse response.
 
 The actual field is $`F_b+\alpha B_bv`$. Positive adoption must satisfy
 
@@ -837,9 +882,9 @@ The actual field is $`F_b+\alpha B_bv`$. Positive adoption must satisfy
 \qquad 0\le\alpha\le1.
 ```
 
-If a nonzero protected response is orthogonal to the existing residual, no positive amplitude preserves the identical budget in this model. Every visited amplitude is generated, decoded, and scored. Acceptance requires actual target gains, all frozen semantic floors, and actual protected damage no greater than the anchor's. A failed or interrupted request retains the paid coupled baseline. Protection weights define measurement support; they do not multiply the raw field. The standard run uses inferred support, and annotation masks remain reserved for postselection assessment unless oracle mode is explicitly requested.
+If a nonzero protected response is orthogonal to the existing residual, no positive amplitude preserves the identical budget in this model. Every visited amplitude is generated, decoded, and scored. Acceptance requires actual target gains, all frozen semantic floors, and actual protected damage no greater than the anchor's. A request with no accepted candidate retains the paid coupled baseline; interruption after acceptance retains the verified field and its matching endpoint. Protection weights define measurement support; they do not multiply the raw field. The standard run uses inferred support, and annotation masks remain reserved for postselection assessment unless oracle mode is explicitly requested.
 
-Tangency removes first-order radial scaling but does not conserve finite-step field energy. `--tangentnorm` therefore provides a separate control: it derives a nonzero norm-matching amplitude from the measured latent endpoint response and accepts only actual response norms within 1% of the baseline. It retains baseline when no such verified improvement exists. `--tangentbasis temporal` excludes the extra residual direction, testing whether an improvement is explainable by temporal reweighting alone.
+Tangency removes first-order radial scaling but does not conserve finite-step field energy. `--tangentnorm` therefore provides a separate control: it intersects the full 1% latent-response norm band with the protection interval and accepts only actual response norms within that band. The band may have two connected intervals; no exact nonzero root is required. It retains baseline when no such verified improvement exists. `--tangentbasis temporal` excludes the extra residual direction, testing whether an improvement is explainable by temporal reweighting alone.
 
 The branch requires `--field pullback --fieldgeometry coupled --cleanup --clip clip` and `--fieldrepair 0`. Standard `raw` editing remains available without CLIP; tangent `raw` explicitly loads the frozen control scorer. Its native continuation still uses `--poststeps 1`, while the complete editor performs the charged endpoint queries.
 
@@ -1054,7 +1099,7 @@ CUDA availability enables allocator-retention and CUDA random-state tests with l
 
 ## Implementation Details
 
-Backbone parameters remain frozen throughout editing. Conditional contrasts at times 0.90 and 0.75 define the default field subspace; `--start` and `--delta` set these times. Endpoint probes fit a coupled inverse response within this subspace. The controller then adjusts the field and reference path using observed outputs.
+Backbone parameters remain frozen throughout editing. Conditional contrasts at times 0.90 and 0.75 define the default field subspace; `--start` and `--delta` set these times. Endpoint probes fit a coupled inverse response within this subspace. The integrated profile allocates a tangent residual using complete output responses and exports its verified native endpoint. The optional path comparison adjusts field and reference coordinates.
 
 `--poststeps` sets the steps in each native continuation. `--maxsamples` and `--maxcalls` limit denoiser sample evaluations and forward calls, including optional probes and priors. The candidate budget is set independently by `--candidates`.
 

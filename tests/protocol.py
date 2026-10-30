@@ -94,7 +94,7 @@ class ProtocolTests(unittest.TestCase):
 
     def testtangentruntime(self):
         image = Image.new("RGB", (16, 16), (90, 128, 160))
-        for method in ("raw", "path"):
+        for method in ("field", "raw", "path"):
             args = self.args("--tangent", "--method", method)
             output, report, state = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args)
             self.assertTrue(report["controlactive"])
@@ -105,6 +105,61 @@ class ProtocolTests(unittest.TestCase):
             if method == "path":
                 self.assertEqual(report["path"]["rawreference"], "initial field before repair")
             json.dumps(report, allow_nan=False)
+
+    def testintegratedruntime(self):
+        args = self.args("--method", "field", "--semantic", "region")
+        image = Image.new("RGB", (16, 16), (90, 128, 160))
+        with patch("engine.poll.select", side_effect=AssertionError("Separate control is disabled.")), patch("engine.path.Path", side_effect=AssertionError("Reference paths are disabled.")):
+            _, report, session = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args)
+        self.assertFalse(report["controller"]["enabled"])
+        self.assertEqual(report["candidates"], [])
+        trace = report["field"]["tangent"]
+        self.assertEqual(report["evaluations"], trace["evaluations"])
+        self.assertEqual(report["judgestats"]["evaluations"], trace["evaluations"])
+        self.assertEqual(session.samples, session.limit.used)
+        self.assertEqual(session.calls, session.limit.forwards)
+        self.assertLessEqual(report["damage"], report["rawdamage"])
+        self.assertNotIn("path", report)
+
+    def testintegratedmatrix(self):
+        args = self.args("--method", "field", "--semantic", "region")
+        args.suite = "integrated"
+        plan = design(args, variants(args.suite, base=args))
+        self.assertFalse(plan["variants"]["full"]["changes"])
+        self.assertEqual(set(plan["variants"]), {"full", "anchor", "temporal", "matched", "legacy", "controlled"})
+        for name, row in plan["variants"].items():
+            self.assertEqual(row["settings"]["poststeps"], 1)
+            self.assertEqual(row["settings"]["maxsamples"], args.maxsamples)
+        args.suite = "fields"
+        with self.assertRaisesRegex(ValueError, "suite integrated"):
+            design(args, variants(args.suite, base=args))
+
+    def testintegratedflags(self):
+        for flags in (("--prior", "rec"), ("--control",), ("--compensation",), ("--frontier",), ("--field", "chord"), ("--fieldrepair", "1")):
+            with self.subTest(flags=flags), self.assertRaises(ValueError):
+                validate(self.args("--method", "field", *flags))
+
+    def testintegratedequivalence(self):
+        image = Image.new("RGB", (16, 16), (90, 128, 160))
+        left = self.args("--method", "field", "--semantic", "region")
+        right = self.args("--method", "raw", "--tangent", "--semantic", "region")
+        first = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", left)
+        second = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", right)
+        torch.testing.assert_close(first[0], second[0], rtol=0, atol=0)
+        for key in ("calls", "samples", "decodes"):
+            self.assertEqual(first[1]["stats"][key], second[1]["stats"][key])
+        self.assertEqual(first[1]["scores"], second[1]["scores"])
+
+    def testintegratedgeometry(self):
+        image = Image.new("RGB", (24, 24), (90, 128, 160))
+        args = self.args("--method", "field", "--size", "24")
+        backend = editor()
+        backend.size = 24
+        output, report, _ = run(backend, ClipJudge(Clip(), Processor()), image, "source", "target long", args)
+        self.assertEqual(tuple(output.shape[-2:]), (24, 24))
+        self.assertEqual(report["method"], "field")
+        with self.assertRaisesRegex(ValueError, "even latent"):
+            validate(self.args("--size", "24"))
 
     def testsemanticruntime(self):
         args = self.args("--semantic", "region", "--fieldrepair", "1")
@@ -216,14 +271,15 @@ class ProtocolTests(unittest.TestCase):
             with patch("sys.argv", command[2:]), patch.object(argparse.ArgumentParser, "parse_args", capture), self.assertRaises(Parsed):
                 entry()
             executions.append((entry, parsed[-1]))
-        reference = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64)
+        reference = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64 and args.method == "path")
+        integrated = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64 and args.method == "field")
         validate(reference)
         benchmark = [args for entry, args in executions if entry is main and args.split == "all" and not args.dry]
-        self.assertEqual(len(benchmark), 24)
-        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 206)
+        self.assertEqual(len(benchmark), 25)
+        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 212)
         for args in benchmark:
             plan = design(args, variants(args.suite, base=args))
-            expected = deepcopy(reference)
+            expected = deepcopy(integrated if args.suite == "integrated" else reference)
             if args.suite == "mechanism":
                 expected.maxsamples = expected.maxcalls = 256
             self.assertEqual(plan["controlsignature"], signature(expected))

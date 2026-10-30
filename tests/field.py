@@ -795,7 +795,7 @@ class TangentTests(unittest.TestCase):
             session.decodes += 1
             result = session.origin.clone()
             amount = float(latent.flatten()[1])
-            result[..., 0, 0] += .1 * (1 + amount if harmful and len(native.inputs) >= 4 else 1 - amount)
+            result[..., 0, 0] += .1 * (1 + amount if harmful and len(native.inputs) >= 3 else 1 - amount)
             result[..., 0, 1] += .1 * amount
             return result
         session.decode = decode
@@ -835,7 +835,7 @@ class TangentTests(unittest.TestCase):
 
     def testactualfallback(self):
         from engine.field import redirect
-        for maximum, harmful, match in ((3, False, False), (64, True, False), (64, False, True)):
+        for maximum, harmful, match in ((2, False, False), (64, True, False), (64, True, True)):
             with self.subTest(maximum=maximum, harmful=harmful, match=match):
                 session, native, field, mask, score = self.fixture(maximum, harmful)
                 baseline = field.value.clone()
@@ -895,6 +895,79 @@ class TangentTests(unittest.TestCase):
         redirect(field, native, retaining, mask, slacks={"retain0": 0.})
         self.assertFalse(field.report["tangent"]["accepted"])
         self.assertEqual(field.report["tangent"]["gain"], 0.)
+
+    def testresidualallocation(self):
+        from engine.geometry import tangent
+        edit, protect = np.array([[0., 1., 1.]]), np.array([[0., 1., -1.]])
+        first, _ = tangent(edit, protect, [1.], [1., 0., 0.], np.eye(3))
+        second, _ = tangent(edit, protect, [1.], [1., 0., 0.], np.eye(3), residual=[1.])
+        self.assertAlmostEqual(float((protect @ first).item()), 0.)
+        self.assertLess(float((protect @ second).item()), 0.)
+        self.assertGreater(float((edit @ second).item()), 0.)
+
+    def testnormintervals(self):
+        from engine.geometry import matching
+        generator = np.random.default_rng(42)
+        for index in range(40):
+            displacement, effect = generator.normal(size=(2, 4))
+            if index == 0:
+                effect = -3 * displacement
+            intervals = matching(displacement, effect, 1., .01)
+            for alpha in np.linspace(0, 1, 501):
+                actual = abs(np.linalg.norm(displacement + alpha * effect) / np.linalg.norm(displacement) - 1) <= .01 + 1e-13
+                predicted = any(low - 1e-14 <= alpha <= high + 1e-14 for low, high in intervals)
+                self.assertEqual(actual, predicted)
+            for scale in (1e-200, 1e200):
+                np.testing.assert_allclose(matching(scale * displacement, scale * effect), intervals, atol=1e-12)
+        self.assertEqual(matching([0.], [1.]), [])
+        self.assertEqual(matching([1.], [0.]), [(0., 1.)])
+        self.assertEqual(len(matching([1.], [-3.])), 2)
+
+    def testtolerantnorm(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        redirect(field, native, score, mask, match=True)
+        report = field.report["tangent"]
+        self.assertTrue(report["accepted"])
+        self.assertLessEqual(abs(report["endpointnormratio"] - 1), .01)
+        self.assertLessEqual(report["damage"], report["baselinedamage"])
+        self.assertEqual(report["probes"], report["rank"] - 1)
+
+    def testacceptedbudget(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture(3)
+        redirect(field, native, score, mask)
+        report = field.report["tangent"]
+        self.assertTrue(report["accepted"])
+        self.assertTrue(report["budgetstopped"])
+        self.assertEqual(report["checks"], 1)
+        self.assertEqual(report["samples"], 3)
+        self.assertEqual(report["calls"], session.limit.forwards)
+        self.assertEqual(report["decodes"], report["evaluations"])
+        self.assertEqual(report["endpoints"], 1 + report["probes"] + report["checks"])
+        self.assertAlmostEqual(report["inputnormratio"], float(field.value.double().norm()))
+        self.assertTrue(torch.equal(native.endpoint.__self__.inputs[-1], field.value))
+        self.assertEqual(score(field.pixels), field.scores)
+        self.assertEqual(session.limit.phase, "front")
+
+    def testcachedbaseline(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        field.endpoint = native.endpoint(field.value)
+        before = session.samples
+        redirect(field, native, score, mask)
+        report = field.report["tangent"]
+        self.assertEqual(report["samples"], session.samples - before)
+        self.assertEqual(report["endpoints"], report["probes"] + report["checks"])
+        self.assertEqual(report["evaluations"], report["endpoints"] + 1)
+
+    def testprotectedgeometry(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        session.decode = lambda latent: torch.ones(1, 3, 1, 1)
+        with self.assertRaisesRegex(ValueError, "source geometry"):
+            redirect(field, native, score, mask)
+        self.assertEqual(session.limit.phase, "front")
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,7 @@ import math
 import numpy as np
 from engine.theory import fit
 
-def tangent(edit, protect, target, anchor, metric, penalty=1., ridge=.05, radius=1., tolerance=1e-6):
+def tangent(edit, protect, target, anchor, metric, penalty=1., ridge=.05, radius=1., tolerance=1e-6, residual=None):
     # Allocate endpoint response inside the baseline tangent space.
     edit, protect, target, anchor, metric = (np.asarray(value, dtype=float) for value in (edit, protect, target, anchor, metric))
     count = len(anchor) if anchor.ndim == 1 else 0
@@ -16,6 +16,9 @@ def tangent(edit, protect, target, anchor, metric, penalty=1., ridge=.05, radius
             raise ValueError("Tangent controls must be finite and nonnegative.")
     if ridge <= 0 or not 0 < tolerance < 1:
         raise ValueError("Tangent regularization and rank tolerance must be positive.")
+    residual = np.zeros(protect.shape[0]) if residual is None else np.asarray(residual, dtype=float)
+    if residual.shape != (protect.shape[0],) or not np.isfinite(residual).all():
+        raise ValueError("Tangent protection residuals must match the measured response.")
     try:
         root = np.linalg.cholesky(metric).T
     except np.linalg.LinAlgError as error:
@@ -34,7 +37,7 @@ def tangent(edit, protect, target, anchor, metric, penalty=1., ridge=.05, radius
         report["status"] = "no tangent direction"
         return np.zeros(count), report
     response = np.vstack((edit @ basis, math.sqrt(penalty) * protect @ basis))
-    requested = np.r_[target, np.zeros(protect.shape[0])]
+    requested = np.r_[target, -math.sqrt(penalty) * residual]
     from engine.field import solve
     coefficients, fitted = solve(response, requested, np.zeros(basis.shape[1]), ridge, bound=radius)
     value = basis @ coefficients
@@ -42,7 +45,7 @@ def tangent(edit, protect, target, anchor, metric, penalty=1., ridge=.05, radius
     defect = abs(float(anchor @ metric @ value))
     if not np.isfinite(value).all() or not math.isfinite(norm) or norm > radius * radius * (1 + 1e-9) or defect > tolerance * max(length * math.sqrt(max(norm, 0.)), np.finfo(float).tiny):
         raise ValueError("Tangent allocation failed its original constraints.")
-    report.update(status="solved", norm=math.sqrt(max(norm, 0.)), tangenterror=defect, model=fitted, predicted=(edit @ value).tolist(), protectednorm=float(np.linalg.norm(protect @ value)))
+    report.update(status="solved", norm=math.sqrt(max(norm, 0.)), tangenterror=defect, model=fitted, predicted=(edit @ value).tolist(), protectednorm=float(np.linalg.norm(protect @ value)), residualnorm=float(np.linalg.norm(residual + protect @ value)))
     return value, report
 
 def adoption(residual, effect, maximum=1.):
@@ -55,6 +58,35 @@ def adoption(residual, effect, maximum=1.):
         raise ValueError("Adoption coefficients exceed numerical range.")
     bound = maximum if square == 0 else min(maximum, -cross / square) if cross < 0 else 0.
     return max(0., bound), {"cross": cross, "quadratic": square, "maximum": maximum}
+
+def matching(displacement, effect, maximum=1., tolerance=.01):
+    # Intersect the full norm tolerance band with positive adoption.
+    displacement, effect = np.asarray(displacement, dtype=float), np.asarray(effect, dtype=float)
+    if displacement.ndim != 1 or not len(displacement) or effect.shape != displacement.shape or any(not np.isfinite(value).all() for value in (displacement, effect)) or any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in (maximum, tolerance)) or maximum < 0 or not 0 < tolerance < 1:
+        raise ValueError("Norm matching requires finite aligned responses and valid bounds.")
+    scale = max(float(np.max(np.abs(displacement))), float(np.max(np.abs(effect))))
+    if scale == 0 or not np.any(displacement != 0) or maximum == 0:
+        return []
+    first, second = displacement / scale, effect / scale
+    square, cross, level = float(second @ second), float(2 * first @ second), float(first @ first)
+    if level == 0:
+        return []
+    if square == 0:
+        return [(0., maximum)]
+    upper = ((1 + tolerance) ** 2 - 1) * level
+    lower = ((1 - tolerance) ** 2 - 1) * level
+    root = math.sqrt(cross * cross + 4 * square * upper)
+    end = 2 * upper / (root + cross) if cross >= 0 else (root - cross) / (2 * square)
+    end = min(maximum, end)
+    discriminant = cross * cross + 4 * square * lower
+    if cross >= 0 or discriminant <= 0:
+        return [(0., end)] if end > 0 else []
+    root = math.sqrt(discriminant)
+    left, right = -2 * lower / (-cross + root), (-cross + root) / (2 * square)
+    result = [(0., min(left, end))] if min(left, end) > 0 else []
+    if right <= end:
+        result.append((right, end))
+    return result
 
 def response(model, points, values, regularization=.0001, initial=None):
     # Reuse the same measured chords in clean latent space.

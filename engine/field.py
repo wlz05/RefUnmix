@@ -58,6 +58,8 @@ class Field:
     prediction: torch.Tensor | None = None
     endpoint: torch.Tensor | None = None
     baseline: torch.Tensor | None = None
+    pixels: torch.Tensor | None = None
+    scores: dict | None = None
 
     def observe(self, endpoint, reference=None, request=None):
         # Diagnose a paid endpoint without another generation query.
@@ -452,7 +454,7 @@ def refine(field, native, contrasts, rounds, ridge, probe, radius, tolerance):
 @torch.no_grad()
 def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=False, family="residual", probe=.25, radius=1., ridge=.05, tolerance=1e-6, slack=.02, slacks=None):
     # Redistribute residuals using measured semantic and protected responses.
-    from engine.geometry import tangent, adoption
+    from engine.geometry import tangent, adoption, matching
     from engine.poll import feedback
     import torch.nn.functional as functional
     if not callable(score) or type(checks) is not int or not 1 <= checks <= 8 or type(match) is not bool or family not in {"residual", "temporal"}:
@@ -471,11 +473,14 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
     session, limit = native.session, native.session.limit
     baseline = tensor(field.value).detach().clone()
     length = norm(baseline.double())
-    report = {"status": "baseline", "accepted": False, "alpha": 0., "gain": 0., "calls": 0, "samples": 0, "decodes": 0, "checks": 0, "rounding": 0, "family": family, "matched": match, "normtolerance": .01, "history": [], "usesclip": True, "fieldmasking": False, "scope": "Frozen control-score gains and actual native-output protection; independent official scoring follows selection."}
+    report = {"status": "baseline", "accepted": False, "alpha": 0., "gain": 0., "calls": 0, "samples": 0, "decodes": 0, "checks": 0, "probes": 0, "endpoints": 0, "evaluations": 0, "rounding": 0, "budgetstopped": False, "family": family, "matched": match, "normtolerance": .01, "history": [], "usesclip": True, "fieldmasking": False, "scope": "Frozen control-score gains and actual native-output protection; independent official scoring follows selection."}
     field.report["tangent"] = report
     if length == 0 or radius == 0 or session.scale == 0 or field.request is None or field.neutral is None:
         report["reason"] = "A resolved nonzero coupled baseline is required."
         return
+    for value in (field.request, field.neutral):
+        if tensor(value).shape != baseline.shape or value.device != baseline.device:
+            raise ValueError("Tangent requests and references must match the field geometry.")
     tensor(mask, 1)
     if torch.any((mask < 0) | (mask > 1)).item():
         raise ValueError("Tangent measurement masks must be in [0, 1].")
@@ -483,7 +488,9 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
     mass = float(weights.sum())
     root = (weights / mass).sqrt() if mass else torch.zeros_like(weights)
     def residual(pixels):
-        return ((tensor(pixels, 3).double() - session.origin.double()) * root).reshape(-1).cpu().numpy()
+        if tensor(pixels, 3).shape != session.origin.shape or pixels.device != session.origin.device:
+            raise ValueError("Protected images must match the source geometry.")
+        return ((pixels.double() - session.origin.double()) * root).reshape(-1).cpu().numpy()
     def selected(values, names):
         if not isinstance(values, dict) or any(key not in values or isinstance(values[key], bool) or not isinstance(values[key], (int, float)) or not math.isfinite(values[key]) for key in names):
             raise ValueError("Tangent control scores must preserve finite named heads.")
@@ -496,12 +503,16 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
         endpoint = field.endpoint
         if endpoint is None:
             endpoint = tensor(native.endpoint(baseline)).detach().clone()
-        if endpoint.shape != baseline.shape or endpoint.device != baseline.device:
+            report["endpoints"] += 1
+        if tensor(endpoint).shape != baseline.shape or endpoint.device != baseline.device:
             raise ValueError("Tangent endpoints must match the baseline geometry.")
         field.endpoint = field.baseline = endpoint.detach().clone()
         field.report["baselinefieldnorm"] = length
         image = session.decode(endpoint).clamp(0, 1)
+        r = residual(image)
         scores = score(image)
+        report["evaluations"] += 1
+        field.pixels, field.scores = image.detach().clone(), dict(scores)
         floors = feedback(scores)
         if slacks.keys() - floors.keys():
             raise ValueError("Tangent semantic slacks must match the frozen score heads.")
@@ -509,40 +520,51 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
         if scores.get("localviews", 0) > 0 and "local" in scores:
             names.append("local")
         current = selected(scores, names)
-        r = residual(image)
         damage = float(r @ r)
         displacement = (endpoint.double() - field.neutral.double()).reshape(-1).cpu().numpy()
         responselevel = float(np.linalg.norm(displacement))
         request = field.request.double() - (endpoint.double() - field.neutral.double())
         pool = [baseline]
         for time in field.report.get("times", []):
-            pool.append(session.difference(session.editor.index(time)))
+            contrast = session.difference(session.editor.index(time))
+            if norm(contrast.double()) > 0:
+                pool.append((contrast.double() * (length / norm(contrast.double()))).float())
         if family == "residual" and norm(request) > 0:
             pool.append((request * (length / norm(request))).float())
         basis, _ = orthogonal(pool, tolerance)
         count = basis.shape[1]
         anchor = basis.T @ baseline.double().reshape(-1).cpu().numpy() / length
+        if np.linalg.norm(basis @ anchor - baseline.double().reshape(-1).cpu().numpy() / length) > tolerance:
+            report["reason"] = "The resolved dictionary does not preserve the protection anchor."
+            return
         report.update(rank=count, baselinefieldnorm=length, baselineendpointnorm=responselevel, baselinedamage=damage, damage=damage, gain=0., inputnormratio=1., endpointnormratio=1. if responselevel > 0 else None, protectedvalid=mass > 0, heads=names, desired=[gain] * len(names))
         if count < 2:
             report["reason"] = "The measured dictionary has no lateral direction."
             return
-        step = probe / math.sqrt(count)
+        _, _, vectors = np.linalg.svd((anchor / np.linalg.norm(anchor))[None], full_matrices=True)
+        lateral = vectors[1:].T
+        width = lateral.shape[1]
+        step = probe / math.sqrt(width)
         if limit is not None:
-            limit.require((count + 1) * native.cost(0.), (count + 1) * native.queries())
+            limit.require((width + 1) * native.cost(0.), (width + 1) * native.queries())
         edit, protect, latent = [], [], []
-        for index in range(count):
-            direction = torch.from_numpy((length * step * basis[:, index]).reshape(baseline.shape)).to(baseline.device, torch.float32)
+        for index in range(width):
+            direction = torch.from_numpy((length * step * basis @ lateral[:, index]).reshape(baseline.shape)).to(baseline.device, torch.float32)
             measured = tensor(native.endpoint(tensor(baseline + direction)))
+            report["endpoints"] += 1
+            report["probes"] += 1
             if measured.shape != baseline.shape or measured.device != baseline.device:
                 raise ValueError("Tangent probes must preserve baseline geometry.")
             pixels = session.decode(measured).clamp(0, 1)
+            observedresidual = residual(pixels)
             observed = score(pixels)
+            report["evaluations"] += 1
             edit.append((selected(observed, names) - current) / step)
-            protect.append((residual(pixels) - r) / step)
+            protect.append((observedresidual - r) / step)
             latent.append(((measured.double() - endpoint.double()) / step).reshape(-1).cpu().numpy())
-        edit, protect, latent = np.stack(edit, axis=1), np.stack(protect, axis=1), np.stack(latent, axis=1)
+        edit, protect, latent = (np.stack(values, axis=1) @ lateral.T for values in (edit, protect, latent))
         protectscale = math.sqrt(damage) if damage > 0 else 1.
-        value, allocation = tangent(edit / gain, protect / protectscale, np.ones(len(names)), anchor, np.eye(count), penalty, ridge, radius, tolerance)
+        value, allocation = tangent(edit / gain, protect / protectscale, np.ones(len(names)), anchor, np.eye(count), penalty, ridge, radius, tolerance, r / protectscale)
         report["allocation"] = allocation
         direction = torch.from_numpy((length * basis @ value).reshape(baseline.shape)).to(baseline.device, torch.float32)
         relative = norm(direction.double()) / length
@@ -557,39 +579,50 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
             return
         predicted = (edit @ value) / gain
         divisor = float(predicted @ predicted + penalty * (effect @ effect) / (protectscale * protectscale) + allocation["model"]["damping"] * (value @ value))
-        alpha = min(maximum, max(0., float(predicted.sum()) / divisor)) if divisor > 0 else 0.
+        numerator = float(predicted.sum() - penalty * (r @ effect) / (protectscale * protectscale))
+        alpha = min(maximum, max(0., numerator / divisor)) if divisor > 0 else 0.
+        report["amplitudemodel"] = {"linear": numerator, "quadratic": divisor, "unmatched": alpha}
+        intervals = [(0., maximum)]
         if match:
             motion = latent @ value
-            square = float(motion @ motion)
-            alpha = float(-2 * displacement @ motion / square) if square > 0 else 0.
-            if not 0 < alpha <= maximum:
+            intervals = matching(displacement, motion, maximum, report["normtolerance"])
+            report["normintervals"] = [list(row) for row in intervals]
+            if not intervals:
                 report["reason"] = "No positive norm-matched adoption fits the protection interval."
                 return
         if alpha <= 0 or np.min(predicted) <= 0:
             report["reason"] = "No common positive predicted target gain."
             return
-        best = 0.
-        for index in range(checks):
-            actualalpha = alpha * (.5 ** index) if not match else alpha * (1 + (0., -.05, .05, -.1, .1, -.2, .2, -.3)[index])
+        proposals = [min(high, max(low, alpha)) for low, high in intervals]
+        proposals += [value * .5 ** index for value in proposals[:] for index in range(1, checks + 1)]
+        proposals += [value for row in intervals for value in (row[1], (row[0] + row[1]) / 2, row[0])]
+        proposals = sorted(set(value for value in proposals if value > 0 and any(low <= value <= high for low, high in intervals)), key=lambda value: (divisor * value * value - 2 * numerator * value, -value))
+        best, seen = 0., []
+        for actualalpha in proposals:
+            if len(report["history"]) >= checks:
+                break
             if not 0 < actualalpha <= maximum:
                 continue
             candidate = tensor(baseline + actualalpha * direction)
             applied = candidate.double() - baseline.double()
             appliednorm = norm(applied) / length
             applieddefect = abs(float((baseline.double() * applied).sum())) / (length * length)
-            if appliednorm == 0 or applieddefect > tolerance * appliednorm:
+            if appliednorm == 0 or applieddefect > tolerance * appliednorm or any(torch.equal(candidate, previous) for previous in seen):
                 report["rounding"] += 1
                 continue
+            seen.append(candidate.detach().clone())
             measured = tensor(native.endpoint(candidate))
+            report["endpoints"] += 1
             if measured.shape != baseline.shape or measured.device != baseline.device:
                 raise ValueError("Tangent candidates must preserve baseline geometry.")
             pixels = session.decode(measured).clamp(0, 1)
+            observedresidual = residual(pixels)
             observed = score(pixels)
+            report["evaluations"] += 1
             changes = (selected(observed, names) - current) / gain
             controlled = feedback(observed)
             if controlled.keys() != floors.keys():
                 raise ValueError("Tangent score heads changed during verification.")
-            observedresidual = residual(pixels)
             observedcost = float(observedresidual @ observedresidual)
             level = norm(measured.double() - field.neutral.double())
             ratio = level / responselevel if responselevel > 0 else None
@@ -600,13 +633,14 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
             report["history"].append({"alpha": actualalpha, "gain": quality, "changes": changes.tolist(), "damage": observedcost, "endpointnorm": level, "endpointnormratio": ratio, "tangenterror": applieddefect, "feasible": bool(feasible), "matched": bool(matched), "accepted": accepted})
             if accepted:
                 field.value, field.endpoint, field.prediction = candidate.detach().clone(), measured.detach().clone(), None
+                field.pixels, field.scores = pixels.detach().clone(), dict(observed)
                 best = quality
                 report.update(status="accepted", accepted=True, alpha=actualalpha, gain=quality, damage=observedcost, endpointnormratio=ratio)
-        report["inputnormratio"] = norm(field.value.double()) / length
     except Exhausted as error:
         report["reason"] = str(error)
+        report["budgetstopped"] = True
     finally:
-        report.update(calls=session.calls - before[0], samples=session.samples - before[1], decodes=session.decodes - before[2], checks=len(report["history"]))
+        report.update(calls=session.calls - before[0], samples=session.samples - before[1], decodes=session.decodes - before[2], checks=len(report["history"]), inputnormratio=norm(field.value.double()) / length)
         if limit is not None:
             limit.phase = previous
 

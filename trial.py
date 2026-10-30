@@ -17,6 +17,9 @@ from engine.reproduce import digest
 def variants(suite, consistency="ddpm", base=None):
     # Freeze one main configuration across all ablation suites.
     shared = defaults(base)
+    if suite == "integrated":
+        common = {**shared, "field": "pullback", "fieldgeometry": "coupled", "fieldrepair": 0, "prior": "off", "heldout": False, "control": False, "compensation": False, "frontier": False, "tangent": False}
+        return {"full": {**common, "method": "field"}, "anchor": {**common, "method": "raw"}, "temporal": {**common, "method": "field", "tangentbasis": "temporal"}, "matched": {**common, "method": "field", "tangentnorm": True}, "legacy": {**common, "method": "path"}, "controlled": {**common, "method": "path", "tangent": True}}
     if suite == "tangent":
         raw = {**shared, "method": "raw", "field": "pullback", "fieldgeometry": "coupled", "fieldrepair": 0, "prior": "off", "control": False, "heldout": False, "compensation": False, "frontier": False}
         return {"full": shared, "anchorraw": {**raw, "tangent": False}, "tangentraw": {**raw, "tangent": True, "tangentnorm": False, "tangentbasis": "residual"}, "matchedraw": {**raw, "tangent": True, "tangentnorm": True, "tangentbasis": "residual"}, "temporalraw": {**raw, "tangent": True, "tangentnorm": False, "tangentbasis": "temporal"}, "controlled": {**shared, "tangent": True, "tangentbasis": "residual", "tangentnorm": False}}
@@ -81,6 +84,10 @@ def variants(suite, consistency="ddpm", base=None):
 
 def design(args, controls):
     # Verify the full arm before loading checkpoints.
+    if args.method == "field" and args.suite != "integrated":
+        raise ValueError("Integrated field experiments require --suite integrated; historical suites use --method path.")
+    if args.suite == "integrated" and (args.method != "field" or args.tangent or args.tangentbasis != "residual" or args.tangentnorm or args.fieldrepair or args.field != "pullback" or args.fieldgeometry != "coupled" or args.semantic != "region"):
+        raise ValueError("Integrated trials require the coupled field profile with region semantics and default tangent controls.")
     if args.suite == "tangent" and (args.field != "pullback" or args.fieldgeometry != "coupled" or args.fieldrepair or args.adapter or not args.cleanup or args.tangent):
         raise ValueError("Tangent trials require the unmodified coupled pullback reference configuration.")
     if args.suite == "semantic" and (args.field != "pullback" or args.fieldgeometry != "coupled" or args.method != "path" or not args.cleanup or args.adapter or args.goals):
@@ -164,7 +171,7 @@ def frozen(args, chosen):
 def main():
     parser = datasetargs(common(argparse.ArgumentParser(description="Run declared benchmark or validation/test ablations.")))
     parser.set_defaults(split="val", output="./trials")
-    parser.add_argument("--suite", type=str.casefold, choices=("tangent", "residual", "semantic", "alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
+    parser.add_argument("--suite", type=str.casefold, choices=("integrated", "tangent", "residual", "semantic", "alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
     parser.add_argument("--recipe", default=None)
     parser.add_argument("--dry", action="store_true", help="Print effective variants without loading data or checkpoints.")
     args = parser.parse_args()

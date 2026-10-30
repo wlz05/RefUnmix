@@ -24,8 +24,8 @@ def options(args):
     width = getattr(args, "batch", 1)
     if type(width) is not int or not 1 <= width <= 4:
         raise ValueError("Batch width must be an integer from one to four.")
-    if width > 1 and (getattr(args, "adapter", None) or args.method not in {"path", "raw", "fixed"} or args.localization in {"attention", "hybrid"}):
-        raise ValueError("Parallel requests require native path/raw/fixed modes without attention hooks; use --batch 1 for other modes.")
+    if width > 1 and (getattr(args, "adapter", None) or args.method not in {"field", "path", "raw", "fixed"} or args.localization in {"attention", "hybrid"}):
+        raise ValueError("Parallel requests require native field/path/raw/fixed modes without attention hooks; use --batch 1 for other modes.")
     if width > 1 and getattr(args, "deterministic", False):
         raise ValueError("Strict deterministic reproduction requires --batch 1.")
     return width
