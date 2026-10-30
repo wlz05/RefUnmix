@@ -969,6 +969,85 @@ class TangentTests(unittest.TestCase):
             redirect(field, native, score, mask)
         self.assertEqual(session.limit.phase, "front")
 
+    def testfixedamplitude(self):
+        from engine.field import rescale
+        for factor in (0., .5, .75, 1., 1.25, 1.5, 2.):
+            session = Session()
+            field = build(session, Native(session))
+            initial = field.value.clone()
+            before = session.samples, session.calls
+            rescale(field, factor)
+            torch.testing.assert_close(field.value, initial * factor)
+            self.assertEqual((session.samples, session.calls), before)
+            self.assertEqual(field.report["radial"]["factor"], factor)
+            if factor == 0:
+                torch.testing.assert_close(field.endpoint, field.neutral)
+            elif factor != 1:
+                self.assertIsNone(field.endpoint)
+
+    def testfeedbackresidual(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        original = session.decode
+        def nonlinear(latent):
+            pixels = original(latent)
+            amount = float(latent.flatten()[1])
+            pixels[..., 0, 1] -= .07 * amount * amount
+            return pixels
+        session.decode = nonlinear
+        redirect(field, native, score, mask, feedback=True)
+        report = field.report["tangent"]
+        self.assertTrue(report["feedback"])
+        self.assertTrue(report["updates"])
+        self.assertGreater(report["updates"][0]["error"]["semantic"], 0)
+        self.assertTrue(all(row["queries"] == 0 for row in report["updates"]))
+        self.assertLessEqual(report["checks"], 3)
+        self.assertEqual(report["samples"], 1 + report["probes"] + report["checks"])
+        self.assertLessEqual(report["damage"], report["baselinedamage"])
+        self.assertEqual(session.limit.used, session.samples)
+        self.assertEqual(score(field.pixels), field.scores)
+        json.dumps(report, allow_nan=False)
+
+    def testfeedbackbudget(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture(3)
+        redirect(field, native, score, mask, feedback=True)
+        report = field.report["tangent"]
+        self.assertTrue(report["accepted"])
+        self.assertTrue(report["budgetstopped"])
+        self.assertEqual(report["checks"], 1)
+        self.assertEqual(report["calls"], 3)
+        self.assertEqual(session.limit.phase, "front")
+
+    def testattentionoperator(self):
+        from engine.geometry import tangent
+        value, report = tangent([[0., 2., .1]], [[0., .5, 1.]], [1.], [1., 0., 0.], np.eye(3), residual=[.2])
+        attention = report["attention"]
+        self.assertTrue(all(0 <= gate <= 1 for gate in attention["gates"]))
+        self.assertAlmostEqual(sum(attention["energy"]), 1.)
+        self.assertAlmostEqual(value[0], 0.)
+
+    def testzerorequestnorm(self):
+        from engine.field import Field
+        field = Field(torch.zeros(1, 1, 2, 2), {}, torch.zeros(1, 1, 2, 2))
+        field.observe(field.neutral)
+        self.assertEqual(field.report["responsenorm"], 0)
+        self.assertEqual(field.report["responsestatus"], "zero response")
+
+    def testfeedbackfailure(self):
+        from engine.field import redirect
+        from unittest.mock import patch
+        session, native, field, mask, score = self.fixture()
+        with patch("engine.theory.fit", side_effect=np.linalg.LinAlgError("Singular response.")):
+            redirect(field, native, score, mask, feedback=True)
+        report = field.report["tangent"]
+        self.assertTrue(report["accepted"])
+        self.assertEqual(report["checks"], 1)
+        self.assertIn("feedbackfailure", report)
+        self.assertEqual(score(field.pixels), field.scores)
+        self.assertEqual(session.limit.phase, "front")
+        self.assertLessEqual(report["damage"], report["baselinedamage"])
+
 if __name__ == "__main__":
     unittest.main()
 

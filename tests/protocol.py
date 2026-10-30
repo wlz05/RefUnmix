@@ -161,6 +161,47 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "even latent"):
             validate(self.args("--size", "24"))
 
+    def testamplitudematrix(self):
+        args = self.args("--method", "field", "--semantic", "region")
+        args.suite = "amplitude"
+        plan = design(args, variants(args.suite, base=args))
+        self.assertEqual(len(plan["variants"]), 10)
+        self.assertFalse(plan["variants"]["full"]["changes"])
+        self.assertTrue(plan["variants"]["feedback"]["settings"]["tangentfeedback"])
+        for name, factor in (("zero", 0.), ("half", .5), ("weak", .75), ("anchor", 1.), ("strong", 1.25), ("large", 1.5), ("double", 2.)):
+            settings = plan["variants"][name]["settings"]
+            self.assertEqual(settings["scale"], args.scale)
+            self.assertEqual(settings["fieldfactor"], factor)
+            self.assertEqual(settings["method"], "raw")
+
+    def testamplitudefields(self):
+        image = Image.new("RGB", (16, 16), (90, 128, 160))
+        hashes = []
+        sizes = []
+        for factor in (0., .5, .75, 1., 1.25, 1.5, 2.):
+            args = self.args("--method", "raw", "--fieldfactor", str(factor))
+            _, report, session = run(editor(), None, image, "source", "target long", args)
+            hashes.append(report["anchorfieldsha256"])
+            sizes.append(report["fieldnorm"])
+            self.assertEqual(session.samples, session.limit.used)
+            self.assertIn("responsenorm", report["field"])
+        self.assertEqual(len(set(hashes)), 1)
+        for value, factor in zip(sizes, (0., .5, .75, 1., 1.25, 1.5, 2.)):
+            self.assertAlmostEqual(value, factor * sizes[3], places=6)
+
+    def testfeedbackruntime(self):
+        args = self.args("--method", "field", "--semantic", "region", "--tangentfeedback")
+        image = Image.new("RGB", (16, 16), (90, 128, 160))
+        _, report, state = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args)
+        self.assertEqual(state.samples, state.limit.used)
+        self.assertFalse(report["controller"]["enabled"])
+        self.assertLessEqual(report["field"]["tangent"]["checks"], 3)
+
+    def testamplitudeflags(self):
+        for flags in (("--method", "field"), ("--tangent",), ("--fieldrepair", "1"), ("--field", "chord"), ("--fieldfactor", "nan"), ("--fieldfactor", "-1")):
+            with self.subTest(flags=flags), self.assertRaises(ValueError):
+                validate(self.args("--method", "raw", "--fieldfactor", "1.5", *flags))
+
     def testsemanticruntime(self):
         args = self.args("--semantic", "region", "--fieldrepair", "1")
         image = Image.new("RGB", (16, 16), (90, 128, 160))
@@ -275,13 +316,15 @@ class ProtocolTests(unittest.TestCase):
         integrated = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64 and args.method == "field")
         validate(reference)
         benchmark = [args for entry, args in executions if entry is main and args.split == "all" and not args.dry]
-        self.assertEqual(len(benchmark), 25)
-        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 212)
+        self.assertEqual(len(benchmark), 27)
+        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 232)
         for args in benchmark:
             plan = design(args, variants(args.suite, base=args))
-            expected = deepcopy(integrated if args.suite == "integrated" else reference)
+            expected = deepcopy(integrated if args.suite in {"integrated", "amplitude"} else reference)
             if args.suite == "mechanism":
                 expected.maxsamples = expected.maxcalls = 256
+            elif args.suite == "amplitude":
+                expected.maxsamples, expected.maxcalls = args.maxsamples, args.maxcalls
             self.assertEqual(plan["controlsignature"], signature(expected))
             self.assertEqual((args.batch, args.device, args.precision, args.seeds), (3, "cuda:0", "fp32", [42, 52, 3047, 3407]))
             self.assertIsNone(args.manifest)
@@ -290,6 +333,42 @@ class ProtocolTests(unittest.TestCase):
         testing = next(args for entry, args in executions if entry is main and args.split == "test")
         self.assertEqual(settings(validation), settings(testing))
         self.assertEqual(Path(testing.recipe), Path(validation.output) / "recipe.json")
+
+    def testdocumentedcurves(self):
+        from assess import parser as assessment
+        from audit import main as auditmain
+        from engine.curve import RADIAL
+        lines = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(encoding="utf-8").splitlines()
+        commands = [shlex.split(line) for line in lines if line.startswith("python -B RefUnmix/assess.py --input outputs/amplitude/") or line.startswith("python -B RefUnmix/assess.py --input outputs/amplitudefifteen/")]
+        self.assertEqual(len(commands), 20)
+        groups = {}
+        for command in commands:
+            args = assessment().parse_args(command[3:])
+            label = Path(args.input).parent.name
+            group = Path(args.input).parts[1]
+            groups.setdefault(group, set()).add(label)
+            self.assertEqual(Path(args.output).stem, label)
+            self.assertEqual(args.seeds, [42, 52, 3047, 3407])
+            self.assertEqual(args.scope, "benchmark")
+            self.assertEqual(args.protocol, "protocol/metrics.py")
+            self.assertEqual(args.cache, "cache/metrics")
+            self.assertTrue(args.network)
+            self.assertFalse(Path(args.input).is_absolute())
+        expected = set(RADIAL) | {"full", "matched", "feedback"}
+        self.assertEqual(groups, {"amplitude": expected, "amplitudefifteen": expected})
+        original = argparse.ArgumentParser.parse_args
+        parsed = []
+        class Parsed(BaseException):
+            pass
+        def capture(parser, *values, **options):
+            parsed.append(original(parser, *values, **options))
+            raise Parsed()
+        commands = [shlex.split(line) for line in lines if line.startswith("python -B RefUnmix/audit.py") and "--sweep" in line]
+        self.assertEqual(len(commands), 2)
+        for command in commands:
+            with patch("sys.argv", command[2:]), patch.object(argparse.ArgumentParser, "parse_args", capture), self.assertRaises(Parsed):
+                auditmain()
+        self.assertEqual([args.sweep for args in parsed], ["outputs/amplitudemetrics", "outputs/amplitudemetricsfifteen"])
 
     def testrenderidentity(self):
         first = self.args()

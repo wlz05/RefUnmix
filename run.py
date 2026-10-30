@@ -55,6 +55,7 @@ def common(parser):
     parser.add_argument("--fieldtolerance", type=float, default=1e-6)
     parser.add_argument("--fieldgeometry", type=str.casefold, choices=("coupled", "scalar"), default="coupled")
     parser.add_argument("--fieldrepair", type=int, choices=(0, 1, 2), default=0)
+    parser.add_argument("--fieldfactor", type=float, default=1.)
     parser.add_argument("--semantic", type=str.casefold, choices=("patches", "region"), default="patches")
     parser.add_argument("--tangent", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--tangentgain", type=float, default=.02)
@@ -62,6 +63,7 @@ def common(parser):
     parser.add_argument("--tangentchecks", type=int, default=3)
     parser.add_argument("--tangentbasis", type=str.casefold, choices=("residual", "temporal"), default="residual")
     parser.add_argument("--tangentnorm", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--tangentfeedback", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--end", type=float, default=.30)
     parser.add_argument("--scale", type=float, default=1.)
     parser.add_argument("--cleanup", action=argparse.BooleanOptionalAction, default=True)
@@ -299,6 +301,11 @@ def validate(args):
     if number(args.tangentgain, "Tangent gain", 0) <= 0:
         raise ValueError("Tangent gain must be positive.")
     number(args.tangentpenalty, "Tangent protection weight", 0)
+    number(args.fieldfactor, "Field amplitude factor", 0)
+    if args.fieldfactor != 1 and (args.method != "raw" or args.field != "pullback" or args.fieldgeometry != "coupled" or args.fieldrepair or args.tangent or args.tangentfeedback or not args.cleanup or args.adapter):
+        raise ValueError("Amplitude sweeps require an unmodified coupled raw field with native cleanup.")
+    if type(args.tangentfeedback) is not bool or args.tangentfeedback and not (args.tangent or args.method == "field"):
+        raise ValueError("Residual feedback requires tangent field allocation.")
     if (args.tangent or args.method == "field") and (args.field != "pullback" or args.fieldgeometry != "coupled" or args.fieldrepair or not args.cleanup or args.adapter or args.method not in {"field", "raw", "path"} or not args.clip):
         raise ValueError("Tangent refinement requires coupled pullback, a local scorer, native cleanup, no field repair, and field, raw, or path output.")
     if args.method == "field" and (args.prior != "off" or args.heldout or args.control or args.frontier or args.compensation or args.factorial):
@@ -433,6 +440,10 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
             localizationtime = args.start if args.localizationtime is None else args.localizationtime
             localizationbase = session.difference(session.editor.index(localizationtime))
             constructed = build(session, native, args.field, args.start, args.delta, args.fieldridge, args.fieldprobe, args.fieldradius, args.fieldtolerance, args.fieldgeometry, args.fieldweight, args.fieldshrink, args.fieldrepair)
+            metadata["anchorfieldsha256"] = hashlib.sha256(constructed.value.detach().float().cpu().contiguous().numpy().tobytes()).hexdigest()
+            if args.fieldfactor != 1:
+                from engine.field import rescale
+                rescale(constructed, args.fieldfactor)
             base, neutral = constructed.value, constructed.neutral
             metadata["field"] = constructed.report
             cached = constructed.endpoint is not None or neutral is not None and (session.scale == 0 or not base.ne(0).any().item())
@@ -464,7 +475,7 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
         if args.tangent or args.method == "field":
             import numpy as np
             from engine.field import redirect, temporal
-            redirect(constructed, native, score, scoringmask, args.tangentgain, args.tangentpenalty, args.tangentchecks, args.tangentnorm, args.tangentbasis, args.fieldprobe, args.fieldradius, args.fieldridge, args.fieldtolerance, args.scoretol, config.slacks)
+            redirect(constructed, native, score, scoringmask, args.tangentgain, args.tangentpenalty, args.tangentchecks, args.tangentnorm, args.tangentbasis, args.fieldprobe, args.fieldradius, args.fieldridge, args.fieldtolerance, args.scoretol, config.slacks, args.tangentfeedback)
             base = constructed.value
             metadata["fieldsha256"] = hashlib.sha256(base.detach().float().cpu().contiguous().numpy().tobytes()).hexdigest()
             metadata["fieldnorm"] = float(base.double().norm())
@@ -483,6 +494,8 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
                 output = constructed.pixels if constructed.pixels is not None else session.decode(latent).clamp(0, 1)
             except Exhausted as error:
                 return stopped(session, metadata, args.method, error, constructed.endpoint, judge, initialstats)
+            if constructed.neutral is None and not base.ne(0).any().item():
+                constructed.neutral = latent.detach().clone()
             constructed.observe(latent)
             damage, mass = protection(session.origin, 1 - scoringmask)
             scores = constructed.scores if constructed.scores is not None else score(output)
@@ -503,6 +516,8 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
                     latent, output = path.raw()
             except Exhausted as error:
                 return stopped(session, metadata, args.method, error, path.fields.get((1., 1.)), judge, initialstats)
+            if constructed.neutral is None and not base.ne(0).any().item():
+                constructed.neutral = latent.detach().clone()
             constructed.observe(latent)
             damage, mass = protection(session.origin, 1 - scoringmask)
             scores = constructed.scores if constructed.scores is not None else score(output) if score is not None else None

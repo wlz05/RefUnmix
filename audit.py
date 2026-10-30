@@ -34,6 +34,11 @@ def values(row):
     result.update({"field:tangent" + key: field.get("tangent", {}).get(key) for key in ("rank", "alpha", "gain", "damage", "baselinedamage", "tangenterror", "directionnorm", "inputnormratio", "endpointnormratio", "calls", "samples", "decodes", "checks", "probes", "evaluations", "endpoints")})
     if isinstance(field.get("tangent", {}).get("accepted"), bool):
         result["field:tangentaccepted"] = int(field["tangent"]["accepted"])
+    updates = field.get("tangent", {}).get("updates", [])
+    if field.get("tangent", {}).get("feedback") is True:
+        result["field:tangentupdates"] = len(updates)
+        for name in ("semantic", "protect", "latent"):
+            result["field:tangent" + name + "error"] = sum(row["error"][name] for row in updates)
     for key in ("gain", "damagechange", "evaluations"):
         result["selection:" + key] = report.get(key)
     for key in ("interactionenergy", "interactionratio", "damageinteraction", "damageoverlap", "damagenonlinear"):
@@ -259,12 +264,19 @@ def main():
     parser = argparse.ArgumentParser(description="Audit measured interactions and paired held-out outcomes.")
     parser.add_argument("--summary", required=True)
     parser.add_argument("--compare", default=None)
+    parser.add_argument("--sweep", default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--repeats", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-    reference = read(args.summary)
-    result = {"schema": 1, "split": reference.get("split"), "summary": summarize(reference["rows"])}
+    if args.sweep and args.compare:
+        raise ValueError("Sweep analysis and paired-summary comparison are separate modes.")
+    if args.sweep:
+        from engine.curve import load
+        result = load(args.summary, args.sweep, args.repeats, args.seed)
+    else:
+        reference = read(args.summary)
+        result = {"schema": 1, "split": reference.get("split"), "summary": summarize(reference["rows"])}
     if args.compare:
         comparison = read(args.compare)
         if reference.get("split") != comparison.get("split") or reference.get("oracle") != comparison.get("oracle"):

@@ -65,12 +65,16 @@ class Field:
         # Diagnose a paid endpoint without another generation query.
         neutral = self.neutral if reference is None else reference
         target = self.request if request is None else request
-        if endpoint is None or neutral is None or target is None:
+        if endpoint is None or neutral is None:
             return
         tensor(endpoint)
         tensor(neutral)
         if endpoint.shape != neutral.shape or endpoint.device != neutral.device:
             raise ValueError("Observed field endpoints must match the cached reference.")
+        if target is None:
+            length = norm(endpoint.double() - neutral.double())
+            self.report.update(responsenorm=length, responsestatus="zero response" if length == 0 else "measured without request")
+            return
         self.report.update(measure(endpoint.double() - neutral.double(), target, self.prediction))
         self.report["observed"] = "Native field endpoint before reference control."
 
@@ -452,12 +456,27 @@ def refine(field, native, contrasts, rounds, ridge, probe, radius, tolerance):
         report.update({"calls": session.calls - before[0], "samples": session.samples - before[1], "endpointcached": field.endpoint is not None})
 
 @torch.no_grad()
-def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=False, family="residual", probe=.25, radius=1., ridge=.05, tolerance=1e-6, slack=.02, slacks=None):
+def rescale(field, factor):
+    # Scale the constructed field without rebuilding its inverse response.
+    factor = number(factor, "Field amplitude factor", 0)
+    baseline = tensor(field.value).detach().clone()
+    field.report["radial"] = {"factor": factor, "anchorfieldnorm": norm(baseline.double()), "scope": "Fixed coupled field multiplied after construction; native scale is unchanged."}
+    if factor == 1:
+        return
+    field.value = tensor((baseline.double() * factor).float()).detach().clone()
+    field.baseline = None
+    field.endpoint = field.neutral.detach().clone() if factor == 0 and field.neutral is not None else None
+    field.pixels, field.scores, field.prediction = None, None, None
+    if "temporal" in field.report:
+        field.report["initialtemporal"] = field.report.pop("temporal")
+
+@torch.no_grad()
+def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=False, family="residual", probe=.25, radius=1., ridge=.05, tolerance=1e-6, slack=.02, slacks=None, feedback=False):
     # Redistribute residuals using measured semantic and protected responses.
     from engine.geometry import tangent, adoption, matching
-    from engine.poll import feedback
+    from engine.poll import feedback as feedbackscores
     import torch.nn.functional as functional
-    if not callable(score) or type(checks) is not int or not 1 <= checks <= 8 or type(match) is not bool or family not in {"residual", "temporal"}:
+    if not callable(score) or type(checks) is not int or not 1 <= checks <= 8 or type(match) is not bool or type(feedback) is not bool or family not in {"residual", "temporal"}:
         raise ValueError("Tangent refinement requires a scorer and valid query controls.")
     for value, label in ((gain, "Tangent gain"), (probe, "Tangent probe"), (ridge, "Tangent ridge")):
         if number(value, label, 0) <= 0:
@@ -475,6 +494,7 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
     length = norm(baseline.double())
     report = {"status": "baseline", "accepted": False, "alpha": 0., "gain": 0., "calls": 0, "samples": 0, "decodes": 0, "checks": 0, "probes": 0, "endpoints": 0, "evaluations": 0, "rounding": 0, "budgetstopped": False, "family": family, "matched": match, "normtolerance": .01, "history": [], "usesclip": True, "fieldmasking": False, "scope": "Frozen control-score gains and actual native-output protection; independent official scoring follows selection."}
     field.report["tangent"] = report
+    report.update(feedback=feedback, updates=[])
     if length == 0 or radius == 0 or session.scale == 0 or field.request is None or field.neutral is None:
         report["reason"] = "A resolved nonzero coupled baseline is required."
         return
@@ -513,7 +533,7 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
         scores = score(image)
         report["evaluations"] += 1
         field.pixels, field.scores = image.detach().clone(), dict(scores)
-        floors = feedback(scores)
+        floors = feedbackscores(scores)
         if slacks.keys() - floors.keys():
             raise ValueError("Tangent semantic slacks must match the frozen score heads.")
         names = ["target"] if "target" in floors else ["score"]
@@ -564,45 +584,45 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
             latent.append(((measured.double() - endpoint.double()) / step).reshape(-1).cpu().numpy())
         edit, protect, latent = (np.stack(values, axis=1) @ lateral.T for values in (edit, protect, latent))
         protectscale = math.sqrt(damage) if damage > 0 else 1.
-        value, allocation = tangent(edit / gain, protect / protectscale, np.ones(len(names)), anchor, np.eye(count), penalty, ridge, radius, tolerance, r / protectscale)
-        report["allocation"] = allocation
-        direction = torch.from_numpy((length * basis @ value).reshape(baseline.shape)).to(baseline.device, torch.float32)
-        relative = norm(direction.double()) / length
-        defect = abs(float((baseline.double() * direction.double()).sum())) / (length * length)
-        if defect > tolerance * max(relative, np.finfo(float).tiny):
-            raise ValueError("The applied residual direction lost its tangent constraint.")
-        effect = protect @ value
-        maximum, coefficients = adoption(r, effect)
-        report.update(tangenterror=defect, directionnorm=relative, protection=coefficients, maximum=maximum)
-        if maximum <= 0 or not np.any(value != 0):
-            report["reason"] = "No positive predicted adoption satisfies baseline protection."
-            return
-        predicted = (edit @ value) / gain
-        divisor = float(predicted @ predicted + penalty * (effect @ effect) / (protectscale * protectscale) + allocation["model"]["damping"] * (value @ value))
-        numerator = float(predicted.sum() - penalty * (r @ effect) / (protectscale * protectscale))
-        alpha = min(maximum, max(0., numerator / divisor)) if divisor > 0 else 0.
-        report["amplitudemodel"] = {"linear": numerator, "quadratic": divisor, "unmatched": alpha}
-        intervals = [(0., maximum)]
-        if match:
-            motion = latent @ value
-            intervals = matching(displacement, motion, maximum, report["normtolerance"])
-            report["normintervals"] = [list(row) for row in intervals]
-            if not intervals:
-                report["reason"] = "No positive norm-matched adoption fits the protection interval."
-                return
-        if alpha <= 0 or np.min(predicted) <= 0:
-            report["reason"] = "No common positive predicted target gain."
-            return
-        proposals = [min(high, max(low, alpha)) for low, high in intervals]
-        proposals += [value * .5 ** index for value in proposals[:] for index in range(1, checks + 1)]
-        proposals += [value for row in intervals for value in (row[1], (row[0] + row[1]) / 2, row[0])]
-        proposals = sorted(set(value for value in proposals if value > 0 and any(low <= value <= high for low, high in intervals)), key=lambda value: (divisor * value * value - 2 * numerator * value, -value))
-        best, seen = 0., []
-        for actualalpha in proposals:
-            if len(report["history"]) >= checks:
-                break
-            if not 0 < actualalpha <= maximum:
-                continue
+        report.update(feedback=feedback, updates=[])
+        def plan():
+            value, allocation = tangent(edit / gain, protect / protectscale, np.ones(len(names)), anchor, np.eye(count), penalty, ridge, radius, tolerance, r / protectscale)
+            report["allocation"] = allocation
+            direction = torch.from_numpy((length * basis @ value).reshape(baseline.shape)).to(baseline.device, torch.float32)
+            relative = norm(direction.double()) / length
+            defect = abs(float((baseline.double() * direction.double()).sum())) / (length * length)
+            if defect > tolerance * max(relative, np.finfo(float).tiny):
+                raise ValueError("The applied residual direction lost its tangent constraint.")
+            effect = protect @ value
+            maximum, coefficients = adoption(r, effect)
+            report.update(tangenterror=defect, directionnorm=relative, protection=coefficients, maximum=maximum)
+            if maximum <= 0 or not np.any(value != 0):
+                report["reason"] = "No positive predicted adoption satisfies baseline protection."
+                return []
+            predicted = (edit @ value) / gain
+            divisor = float(predicted @ predicted + penalty * (effect @ effect) / (protectscale * protectscale) + allocation["model"]["damping"] * (value @ value))
+            numerator = float(predicted.sum() - penalty * (r @ effect) / (protectscale * protectscale))
+            alpha = min(maximum, max(0., numerator / divisor)) if divisor > 0 else 0.
+            report["amplitudemodel"] = {"linear": numerator, "quadratic": divisor, "unmatched": alpha}
+            intervals = [(0., maximum)]
+            if match:
+                intervals = matching(displacement, latent @ value, maximum, report["normtolerance"])
+                report["normintervals"] = [list(row) for row in intervals]
+                if not intervals:
+                    report["reason"] = "No positive norm-matched adoption fits the protection interval."
+                    return []
+            if alpha <= 0 or np.min(predicted) <= 0:
+                report["reason"] = "No common positive predicted target gain."
+                return []
+            amplitudes = [min(high, max(low, alpha)) for low, high in intervals]
+            amplitudes += [value * .5 ** index for value in amplitudes[:] for index in range(1, checks + 1)]
+            amplitudes += [value for row in intervals for value in (row[1], (row[0] + row[1]) / 2, row[0])]
+            amplitudes = sorted(set(value for value in amplitudes if value > 0 and any(low <= value <= high for low, high in intervals)), key=lambda value: (divisor * value * value - 2 * numerator * value, -value))
+            return [(alpha, value, direction, predicted) for alpha in amplitudes]
+
+        best, seen, proposals = 0., [], plan()
+        while proposals and len(report["history"]) < checks:
+            actualalpha, value, direction, predicted = proposals.pop(0)
             candidate = tensor(baseline + actualalpha * direction)
             applied = candidate.double() - baseline.double()
             appliednorm = norm(applied) / length
@@ -620,7 +640,7 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
             observed = score(pixels)
             report["evaluations"] += 1
             changes = (selected(observed, names) - current) / gain
-            controlled = feedback(observed)
+            controlled = feedbackscores(observed)
             if controlled.keys() != floors.keys():
                 raise ValueError("Tangent score heads changed during verification.")
             observedcost = float(observedresidual @ observedresidual)
@@ -630,17 +650,54 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
             matched = not match or ratio is not None and abs(ratio - 1) <= .01
             quality = float(changes.min())
             accepted = bool(feasible and matched and quality > max(best, tolerance))
-            report["history"].append({"alpha": actualalpha, "gain": quality, "changes": changes.tolist(), "damage": observedcost, "endpointnorm": level, "endpointnormratio": ratio, "tangenterror": applieddefect, "feasible": bool(feasible), "matched": bool(matched), "accepted": accepted})
+            violations = [key for key in floors if controlled[key] < floors[key] - slacks.get(key, slack)]
+            if observedcost > damage + 1e-10 * max(damage, np.finfo(float).tiny):
+                violations.append("protection")
+            if not matched:
+                violations.append("norm")
+            if quality <= tolerance:
+                violations.append("target gain")
+            report["history"].append({"alpha": actualalpha, "gain": quality, "changes": changes.tolist(), "predicted": (actualalpha * predicted).tolist(), "model": len(report["updates"]), "damage": observedcost, "endpointnorm": level, "endpointnormratio": ratio, "tangenterror": applieddefect, "violations": violations, "feasible": bool(feasible), "matched": bool(matched), "accepted": accepted})
             if accepted:
                 field.value, field.endpoint, field.prediction = candidate.detach().clone(), measured.detach().clone(), None
                 field.pixels, field.scores = pixels.detach().clone(), dict(observed)
                 best = quality
                 report.update(status="accepted", accepted=True, alpha=actualalpha, gain=quality, damage=observedcost, endpointnormratio=ratio)
+                from copy import deepcopy
+                report["selectedallocation"] = deepcopy(report["allocation"])
+            if feedback and len(report["history"]) < checks:
+                from engine.theory import fit
+                chord = lateral.T @ (basis.T @ applied.reshape(-1).cpu().numpy() / length)
+                square = float(chord @ chord)
+                if square <= np.finfo(float).tiny:
+                    break
+                observations = (changes * gain, observedresidual - r, (measured.double() - endpoint.double()).reshape(-1).cpu().numpy())
+                updated, errors = [], {}
+                previousmodel = edit, protect, latent
+                try:
+                    with np.errstate(over="raise", invalid="raise", divide="raise"):
+                        lengthchord = math.sqrt(square)
+                        for name, matrix, observedchange in zip(("semantic", "protect", "latent"), previousmodel, observations):
+                            response = matrix @ lateral
+                            error = observedchange - response @ chord
+                            errors[name] = float(np.linalg.norm(error))
+                            fitted = fit(response, (chord / lengthchord)[:, None], (observedchange / lengthchord)[:, None], ridge) @ lateral.T
+                            if not np.isfinite(fitted).all() or not math.isfinite(errors[name]):
+                                raise ValueError("The corrected response exceeds numerical range.")
+                            updated.append(fitted)
+                        edit, protect, latent = updated
+                        proposals = plan()
+                except (ValueError, np.linalg.LinAlgError, FloatingPointError) as error:
+                    edit, protect, latent = previousmodel
+                    report["feedbackfailure"] = str(error)
+                    break
+                report["updates"].append({"check": len(report["history"]), "error": errors, "queries": 0, "scope": "Regularized secant correction from an already paid candidate."})
     except Exhausted as error:
         report["reason"] = str(error)
         report["budgetstopped"] = True
     finally:
         report.update(calls=session.calls - before[0], samples=session.samples - before[1], decodes=session.decodes - before[2], checks=len(report["history"]), inputnormratio=norm(field.value.double()) / length)
+        report["tangenterror"] = abs(float((baseline.double() * (field.value.double() - baseline.double())).sum())) / (length * length)
         if limit is not None:
             limit.phase = previous
 

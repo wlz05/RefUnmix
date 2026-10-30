@@ -192,6 +192,7 @@ The base field can run independently. The same finite-query controller can opera
 RefUnmix/
 |-- engine/             # Frozen backends, fields, references, control, and metrics
 |   |-- field.py        # Coupled pullback field and matched scalar control
+|   |-- curve.py        # Fixed-field and matched operating-point comparisons
 |   |-- session.py      # Native diffusion interface and cached predictions
 |   |-- flow.py         # Native FLUX and SD3 velocity interfaces
 |   |-- native.py       # One-step or few-step continuation
@@ -353,6 +354,8 @@ These commands use `--prior off`. Optional consistency priors consume additional
 | `--fieldrepair` | `0` | Verified endpoint residual repair: zero, one, or two rounds |
 | `--semantic` | `patches` | Local control views: separate patches or one complete-region goal |
 | `--tangent` | off | Enable tangent allocation in raw/path mode; field mode includes it directly |
+| `--fieldfactor` | `1` | Multiply a fixed coupled raw field after construction for amplitude diagnostics |
+| `--tangentfeedback` | off | Reallocate with prediction errors from paid checks, sharing the original check cap |
 | `--tangentgain` | `0.02` | Desired increase of each frozen target control head |
 | `--tangentpenalty` | `1` | Relative total protected-residual penalty |
 | `--tangentchecks` | `3` | Maximum real-output checks within the shared model budget |
@@ -849,6 +852,108 @@ These diagnostics use the native field endpoint before reference control. Pullba
 Controller history records `verification` for every queried non-geometry proposal, including rejected proposals: `predictedgain`, `actualgain`, `predicteddamagechange`, and `actualdamagechange`. Each change is measured from the current anchor. Gains use the frozen control heads and scales; independent task annotations evaluate the final image. `audit.py` first averages release-query changes within each request, then applies the same request-within-seed and seed-level averaging used by the main tables. Paired confidence intervals resample source groups and recompute that seed-first statistic.
 
 Native probes use raw mode with priors and controller diagnostics disabled. Discrete reference paths require `--etas 0 1`. Raw inference rejects ignored prior or controller switches, and held-out consistency requires an enabled prior.
+
+### Fixed-Field Amplitude and Matched Comparisons
+
+This matrix isolates amplitude from direction. Every request first constructs the same coupled anchor $`F_b`$ with native `--scale 1`. Radial arms apply $`F_a=aF_b`$ after construction; changing `--scale` would change the inverse response problem and is not this experiment. `anchorfieldsha256` and `protectionsha256` must match across all arms. All paths below are relative to the workspace layout above.
+
+| Arm | Field or verification |
+|---|---|
+| `zero`, `half`, `weak` | Fixed anchor multiplied by 0, 0.5, 0.75 |
+| `anchor`, `strong`, `large`, `double` | Fixed anchor multiplied by 1, 1.25, 1.5, 2 |
+| `full` | Static tangent response allocation |
+| `matched` | Tangent field with actual endpoint-response norm within 1% of anchor |
+| `feedback` | Residual feedback using already paid output observations |
+
+**Generate all ten arms on one RTX 4090:**
+
+```bash
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite amplitude --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --fieldfactor 1 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis residual --no-tangentnorm --no-tangentfeedback --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 64 --maxcalls 64 --output outputs/amplitude
+```
+
+The matrix uses all 700 official PIE requests and seeds 42, 52, 3047, and 3407. Each seed averages all test requests first; the final result averages those four seed results. `--batch 3` shares weights across three requests; use 4 consistently for the four-request workflow. No annotation mask guides generation. `tangentchecks=3` includes every initial or feedback amplitude check; feedback does not add a second candidate allowance or calibration loop. The radial arms have no controller. Report actual samples, calls, decodes, scores, and runtime, since a common cap does not imply equal work.
+
+For a configuration check, use the generation command with `--dry` and omit `--output`. The zero arm exports the target-conditioned zero-field endpoint.
+
+**Generate the separate 15-sample matrix:**
+
+```bash
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite amplitude --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --fieldfactor 1 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis residual --no-tangentnorm --no-tangentfeedback --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 15 --maxcalls 15 --output outputs/amplitudefifteen
+```
+
+**Score every frozen arm with the official calculator:**
+
+```bash
+python -B RefUnmix/assess.py --input outputs/amplitude/full/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetrics/full.json
+python -B RefUnmix/assess.py --input outputs/amplitude/anchor/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetrics/anchor.json
+python -B RefUnmix/assess.py --input outputs/amplitude/zero/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetrics/zero.json
+python -B RefUnmix/assess.py --input outputs/amplitude/half/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetrics/half.json
+python -B RefUnmix/assess.py --input outputs/amplitude/weak/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetrics/weak.json
+python -B RefUnmix/assess.py --input outputs/amplitude/strong/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetrics/strong.json
+python -B RefUnmix/assess.py --input outputs/amplitude/large/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetrics/large.json
+python -B RefUnmix/assess.py --input outputs/amplitude/double/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetrics/double.json
+python -B RefUnmix/assess.py --input outputs/amplitude/matched/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetrics/matched.json
+python -B RefUnmix/assess.py --input outputs/amplitude/feedback/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetrics/feedback.json
+```
+
+The calculator and cache setup are given in [Official PIE Metrics](#official-pie-metrics). These commands score stored images after selection. Keep the same calculator, mapping, metric weights, and PNG encoding for every arm.
+
+**Produce all four diagnostics and the feedback comparison:**
+
+```bash
+python -B RefUnmix/audit.py --summary outputs/amplitude/summary.json --sweep outputs/amplitudemetrics --repeats 2000 --seed 42 --output outputs/amplitudecomparison.json
+```
+
+The report contains:
+
+- `curve`: all seven fixed radial operating points, including seed-level results.
+- `equaledit`: radial protection at the full field's mean official CLIP-Edited. It records every adjacent crossing, including nonmonotone curves, and the lowest-MSE crossing.
+- `equalbudget`: radial CLIP-Edited at the full field's mean official protected-region MSE. PSNR, LPIPS, SSIM, and other metrics accompany the comparison; mean PSNR is never reconstructed from mean MSE.
+- `normmatched`: paired anchor-versus-matched results, with every request's actual latent endpoint norm checked against the same target zero-field reference. Failed edits remain baseline outputs; zero response anchors remain in quality coverage with undefined norm ratios.
+- `feedback`: paired static-versus-feedback outcomes under the same maximum number of real checks.
+
+`equaledit` and `equalbudget` describe postselection benchmark curves. A crossing uses one fixed interpolation weight across every request and all four seeds. It is a curve estimate, not a generated image or a per-request oracle. The report also lists actually generated feasible grid points. It never extrapolates beyond measured points or assumes monotone CLIP response. Source-grouped paired intervals condition on the selected curve weights; they do not include operating-point selection uncertainty. Official test scores do not select a deployed method, prompt, or hyperparameter.
+
+The comparison loader verifies inference hashes, complete request/seed populations, fixed metric coverage, the calculator and mapping identities, original field hashes, and protection support. Missing seeds, stale scores, changed anchors, or violated norm matching stop analysis. Undefined metric seeds remain undefined; infinite PSNR retains explicit status. The official MSE used for curve matching is distinct from the method's inferred-support protection constraint; both are reported under their declared support.
+
+**Score and compare the separate 15-sample matrix:**
+
+```bash
+python -B RefUnmix/assess.py --input outputs/amplitudefifteen/full/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetricsfifteen/full.json
+python -B RefUnmix/assess.py --input outputs/amplitudefifteen/anchor/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetricsfifteen/anchor.json
+python -B RefUnmix/assess.py --input outputs/amplitudefifteen/zero/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetricsfifteen/zero.json
+python -B RefUnmix/assess.py --input outputs/amplitudefifteen/half/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetricsfifteen/half.json
+python -B RefUnmix/assess.py --input outputs/amplitudefifteen/weak/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetricsfifteen/weak.json
+python -B RefUnmix/assess.py --input outputs/amplitudefifteen/strong/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetricsfifteen/strong.json
+python -B RefUnmix/assess.py --input outputs/amplitudefifteen/large/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetricsfifteen/large.json
+python -B RefUnmix/assess.py --input outputs/amplitudefifteen/double/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetricsfifteen/double.json
+python -B RefUnmix/assess.py --input outputs/amplitudefifteen/matched/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetricsfifteen/matched.json
+python -B RefUnmix/assess.py --input outputs/amplitudefifteen/feedback/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/amplitudemetricsfifteen/feedback.json
+python -B RefUnmix/audit.py --summary outputs/amplitudefifteen/summary.json --sweep outputs/amplitudemetricsfifteen --repeats 2000 --seed 42 --output outputs/amplitudecomparisonfifteen.json
+```
+
+Both matrices use fresh output directories. Run one generation or assessment command at a time on the single GPU. A failed optional numerical feedback update retains the best verified endpoint and records `feedbackfailure`; it does not discard a completed edit.
+
+### Response-Conditioned Residual Feedback
+
+`--tangentfeedback` enables the optional feedback arm. The query is the unresolved semantic/protection residual; keys are measured output response modes and values are tangent input directions. For the stacked tangent response $`A=U\Sigma V^\top`$ and requested response $`b`$, the regularized allocation is
+
+```math
+y=V\,\mathrm{diag}\left(\frac{\sigma_i}{\sigma_i^2+\lambda+\mu}\right)U^\top b,
+\qquad \mu\ge0.
+```
+
+The filter depends on both residual alignment and response strength. Signed coefficients can cancel errors; a positive softmax over raw residual magnitudes cannot express this allocation. Logged spectral gates and coefficient-energy shares describe the same inverse operator, not a newly trained attention network. Individual modes are not unique at repeated singular values.
+
+A second solve with unchanged responses and objective repeats the same optimum. Feedback instead uses the actual prediction discrepancy of a paid candidate with tangent coordinates $`u`$:
+
+```math
+\epsilon^{(2)}=z_{\mathrm{observed}}-A u,\qquad
+A^+=A+\frac{\epsilon^{(2)}u^\top}{\lVert u\rVert_2^2+\nu},
+\qquad \nu=\zeta_F\lVert u\rVert_2^2>0.
+```
+
+Semantic, protected-pixel, and latent responses use their own observed discrepancies. The update is the unique minimizer of a regularized secant-fit objective. Reallocation uses the corrected responses while preserving the original anchor, tangent space, total protection budget, radius, semantic floors, and remaining check count. Both accepted and rejected outputs provide response evidence; only actually verified feasible images can be exported. This feedback corrects transmission within the measured dictionary and does not create unmeasured directions. [FASTER](https://arxiv.org/abs/2610.04538) reuses endpoint supervision to train a per-image network, [ARRO](https://arxiv.org/abs/2610.06021) learns from requested and unintended output changes, and [RBE](https://arxiv.org/abs/2412.12912) studies regional Jacobian components. This branch reuses finite observations to update a small analytic response operator without training the backbone or an auxiliary network.
 
 ### Integrated Field Ablation
 

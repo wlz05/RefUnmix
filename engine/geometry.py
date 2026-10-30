@@ -40,12 +40,18 @@ def tangent(edit, protect, target, anchor, metric, penalty=1., ridge=.05, radius
     requested = np.r_[target, -math.sqrt(penalty) * residual]
     from engine.field import solve
     coefficients, fitted = solve(response, requested, np.zeros(basis.shape[1]), ridge, bound=radius)
+    left, singular, _ = np.linalg.svd(response, full_matrices=False)
+    damping = fitted["damping"] + fitted["multiplier"]
+    gates = singular ** 2 / (singular ** 2 + damping)
+    modal = singular * (left.T @ requested) / (singular ** 2 + damping)
+    energy = modal ** 2
+    attention = energy / energy.sum() if energy.sum() > 0 else np.zeros_like(energy)
     value = basis @ coefficients
     norm = float(value @ metric @ value)
     defect = abs(float(anchor @ metric @ value))
     if not np.isfinite(value).all() or not math.isfinite(norm) or norm > radius * radius * (1 + 1e-9) or defect > tolerance * max(length * math.sqrt(max(norm, 0.)), np.finfo(float).tiny):
         raise ValueError("Tangent allocation failed its original constraints.")
-    report.update(status="solved", norm=math.sqrt(max(norm, 0.)), tangenterror=defect, model=fitted, predicted=(edit @ value).tolist(), protectednorm=float(np.linalg.norm(protect @ value)), residualnorm=float(np.linalg.norm(residual + protect @ value)))
+    report.update(status="solved", norm=math.sqrt(max(norm, 0.)), tangenterror=defect, model=fitted, predicted=(edit @ value).tolist(), protectednorm=float(np.linalg.norm(protect @ value)), residualnorm=float(np.linalg.norm(residual + protect @ value)), attention={"gates": gates.tolist(), "energy": attention.tolist(), "singular": singular.tolist(), "unresolved": float(np.linalg.norm(requested - left @ (left.T @ requested))), "scope": "Response-mode diagnostics of the same regularized inverse; individual modes are not unique at repeated singular values."})
     return value, report
 
 def adoption(residual, effect, maximum=1.):
