@@ -174,6 +174,52 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(settings["fieldfactor"], factor)
             self.assertEqual(settings["method"], "raw")
 
+    def testconditionalmatrix(self):
+        args = self.args("--method", "field", "--semantic", "region", "--tangentbasis", "shared", "--tangentpolicy", "conditional")
+        args.suite = "conditional"
+        plan = design(args, variants(args.suite, base=args))
+        self.assertEqual(len(plan["variants"]), 7)
+        self.assertFalse(plan["variants"]["full"]["changes"])
+        self.assertEqual(set(plan["variants"]["expanded"]["changes"]), {"tangentpolicy"})
+        self.assertEqual(set(plan["variants"]["residual"]["changes"]), {"tangentbasis"})
+        for name in ("full", "expanded", "feedback", "matched"):
+            self.assertEqual(plan["variants"][name]["settings"]["tangentbasis"], "shared")
+
+    def testconditionalruntime(self):
+        args = self.args("--method", "field", "--semantic", "region", "--tangentbasis", "shared", "--tangentpolicy", "conditional")
+        image = Image.new("RGB", (16, 16), (90, 128, 160))
+        _, report, state = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args)
+        trace = report["field"]["tangent"]
+        self.assertEqual(trace["policy"], "conditional")
+        self.assertEqual(state.samples, state.limit.used)
+        self.assertEqual(state.calls, state.limit.forwards)
+        self.assertLessEqual(report["damage"], report["rawdamage"])
+        self.assertEqual(trace["sources"], 1)
+        json.dumps(report, allow_nan=False)
+
+    def testconditionalflags(self):
+        for flags in (("--method", "raw"), ("--method", "fixed")):
+            with self.assertRaises(ValueError):
+                validate(self.args("--tangentpolicy", "conditional", *flags))
+        args = self.args("--method", "field", "--semantic", "region", "--tangentpolicy", "conditional")
+        args.suite = "conditional"
+        with self.assertRaisesRegex(ValueError, "shared coupled"):
+            design(args, variants(args.suite, base=args))
+
+    def testconditionalreferencecache(self):
+        from engine.native import Native
+        original, calls = Native.endpoint, []
+        def endpoint(native, field, eta=0.):
+            if eta == 1 and not field.ne(0).any().item():
+                calls.append(eta)
+            return original(native, field, eta)
+        args = self.args("--method", "path", "--tangent", "--tangentbasis", "shared", "--tangentpolicy", "conditional")
+        image = Image.new("RGB", (16, 16), (90, 128, 160))
+        with patch.object(Native, "endpoint", endpoint):
+            _, report, state = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args)
+        self.assertEqual(calls, [1.])
+        self.assertEqual(state.samples, state.limit.used)
+
     def testamplitudefields(self):
         image = Image.new("RGB", (16, 16), (90, 128, 160))
         hashes = []
@@ -283,6 +329,36 @@ class ProtocolTests(unittest.TestCase):
         load.assert_not_called()
         self.assertEqual(len(json.loads(stream.getvalue())["design"]["variants"]), 12)
 
+    def testfieldbenchmarkplans(self):
+        for suite, count in (("integrated", 6), ("amplitude", 10), ("conditional", 7)):
+            arguments = ["trial.py", "--suite", suite, "--split", "all", "--method", "field", "--semantic", "region", "--model", "missing", "--clip", "missing", "--dry"]
+            if suite == "conditional":
+                arguments += ["--tangentbasis", "shared", "--tangentpolicy", "conditional"]
+            stream = io.StringIO()
+            with self.subTest(suite=suite), patch("sys.argv", arguments), patch("trial.items") as items, patch("trial.load") as load, contextlib.redirect_stdout(stream):
+                main()
+            self.assertEqual(len(json.loads(stream.getvalue())["design"]["variants"]), count)
+            items.assert_not_called()
+            load.assert_not_called()
+
+    def testdocumentedexecution(self):
+        lines = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(encoding="utf-8").splitlines()
+        commands = [shlex.split(line) for line in lines if line.startswith("python -B RefUnmix/trial.py") and "--split all" in line and "--dry" not in line]
+        self.assertEqual(len(commands), 29)
+        for command in commands:
+            arguments = command[2:]
+            if "--output" in arguments:
+                index = arguments.index("--output")
+                arguments = arguments[:index] + arguments[index + 2:]
+            arguments += ["--dry"]
+            stream = io.StringIO()
+            with self.subTest(suite=arguments[arguments.index("--suite") + 1]), patch("sys.argv", arguments), patch("trial.items") as items, patch("trial.load") as load, contextlib.redirect_stdout(stream):
+                main()
+            payload = json.loads(stream.getvalue())
+            self.assertFalse(payload["design"]["variants"][payload["design"]["main"]]["changes"])
+            items.assert_not_called()
+            load.assert_not_called()
+
     def testbenchmarkpartitions(self):
         for options in (("--manifest", "split.json"), ("--recipe", "recipe.json")):
             arguments = ["trial.py", "--split", "all", "--clip", "clip", "--dry", *options]
@@ -313,18 +389,20 @@ class ProtocolTests(unittest.TestCase):
                 entry()
             executions.append((entry, parsed[-1]))
         reference = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64 and args.method == "path")
-        integrated = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64 and args.method == "field")
+        integrated = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64 and args.method == "field" and args.tangentbasis == "residual")
         validate(reference)
         benchmark = [args for entry, args in executions if entry is main and args.split == "all" and not args.dry]
-        self.assertEqual(len(benchmark), 27)
-        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 232)
+        self.assertEqual(len(benchmark), 29)
+        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 246)
         for args in benchmark:
             plan = design(args, variants(args.suite, base=args))
-            expected = deepcopy(integrated if args.suite in {"integrated", "amplitude"} else reference)
+            expected = deepcopy(integrated if args.suite in {"integrated", "amplitude", "conditional"} else reference)
             if args.suite == "mechanism":
                 expected.maxsamples = expected.maxcalls = 256
-            elif args.suite == "amplitude":
+            elif args.suite in {"amplitude", "conditional"}:
                 expected.maxsamples, expected.maxcalls = args.maxsamples, args.maxcalls
+                if args.suite == "conditional":
+                    expected.tangentbasis, expected.tangentpolicy = "shared", "conditional"
             self.assertEqual(plan["controlsignature"], signature(expected))
             self.assertEqual((args.batch, args.device, args.precision, args.seeds), (3, "cuda:0", "fp32", [42, 52, 3047, 3407]))
             self.assertIsNone(args.manifest)
@@ -337,10 +415,10 @@ class ProtocolTests(unittest.TestCase):
     def testdocumentedcurves(self):
         from assess import parser as assessment
         from audit import main as auditmain
-        from engine.curve import RADIAL
+        from engine.curve import CONDITIONAL, RADIAL
         lines = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(encoding="utf-8").splitlines()
-        commands = [shlex.split(line) for line in lines if line.startswith("python -B RefUnmix/assess.py --input outputs/amplitude/") or line.startswith("python -B RefUnmix/assess.py --input outputs/amplitudefifteen/")]
-        self.assertEqual(len(commands), 20)
+        commands = [shlex.split(line) for line in lines if any(line.startswith("python -B RefUnmix/assess.py --input outputs/" + name + "/") for name in ("amplitude", "amplitudefifteen", "conditional", "conditionalfifteen"))]
+        self.assertEqual(len(commands), 34)
         groups = {}
         for command in commands:
             args = assessment().parse_args(command[3:])
@@ -355,7 +433,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertTrue(args.network)
             self.assertFalse(Path(args.input).is_absolute())
         expected = set(RADIAL) | {"full", "matched", "feedback"}
-        self.assertEqual(groups, {"amplitude": expected, "amplitudefifteen": expected})
+        self.assertEqual(groups, {"amplitude": expected, "amplitudefifteen": expected, "conditional": CONDITIONAL, "conditionalfifteen": CONDITIONAL})
         original = argparse.ArgumentParser.parse_args
         parsed = []
         class Parsed(BaseException):
@@ -364,11 +442,11 @@ class ProtocolTests(unittest.TestCase):
             parsed.append(original(parser, *values, **options))
             raise Parsed()
         commands = [shlex.split(line) for line in lines if line.startswith("python -B RefUnmix/audit.py") and "--sweep" in line]
-        self.assertEqual(len(commands), 2)
+        self.assertEqual(len(commands), 4)
         for command in commands:
             with patch("sys.argv", command[2:]), patch.object(argparse.ArgumentParser, "parse_args", capture), self.assertRaises(Parsed):
                 auditmain()
-        self.assertEqual([args.sweep for args in parsed], ["outputs/amplitudemetrics", "outputs/amplitudemetricsfifteen"])
+        self.assertEqual({args.sweep for args in parsed}, {"outputs/amplitudemetrics", "outputs/amplitudemetricsfifteen", "outputs/conditionalmetrics", "outputs/conditionalmetricsfifteen"})
 
     def testrenderidentity(self):
         first = self.args()

@@ -297,6 +297,31 @@ class BatchTests(unittest.TestCase):
                 for key in ("calls", "samples", "decodes", "textcalls"):
                     self.assertEqual(result[1]["stats"][key], expected[seed][1]["stats"][key])
 
+    def testconditionalbatch(self):
+        args = self.args("--method", "field", "--semantic", "region", "--tangentfeedback", "--tangentbasis", "shared", "--tangentpolicy", "conditional", "--maxsamples", "32", "--maxcalls", "32")
+        image = Image.new("RGB", (16, 16), (70, 90, 120))
+        seeds = (42, 52, 3047, 3407)
+        expected = {}
+        for seed in seeds:
+            args.seed = seed
+            expected[seed] = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args)
+        for width in (3, 4):
+            state = torch.random.get_rng_state().clone()
+            with self.subTest(width=width), Batch((editor(), ClipJudge(Clip(), Processor()), None), width, .002) as batching:
+                def work(seed):
+                    local = deepcopy(args)
+                    local.seed, local.batch = seed, width
+                    backend, scorer, _ = batching.replicas()
+                    return seed, run(backend, scorer, image, "source", "target long", local)
+                actual = []
+                for offset in range(0, len(seeds), width):
+                    actual.extend(batching.map(work, seeds[offset:offset + width]))
+            self.assertTrue(torch.equal(state, torch.random.get_rng_state()))
+            for seed, result in actual:
+                torch.testing.assert_close(result[0], expected[seed][0])
+                for key in ("calls", "samples", "decodes", "textcalls"):
+                    self.assertEqual(result[1]["stats"][key], expected[seed][1]["stats"][key])
+
     def testnegativeentropy(self):
         args = self.args("--seed", "-1", "--algorithm", "random", "--representation", "random")
         image = Image.new("RGB", (16, 16), (70, 90, 120))

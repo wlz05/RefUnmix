@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from engine.curve import RADIAL, blend, compare, crossings, load
+from engine.curve import RADIAL, blend, compare, conditional, crossings, load
 from engine.reproduce import digest
 
 class CurveTests(unittest.TestCase):
@@ -99,6 +99,16 @@ class CurveTests(unittest.TestCase):
                 blend(arms, weights)
         self.assertEqual(blend(arms, {"anchor": 1., "weak": 0.})[0]["metrics"], arms["anchor"][0]["metrics"])
 
+    def testconditionalcomparisons(self):
+        arms, inference = self.fixture()
+        mapping = {"full": "full", "anchor": "anchor", "expanded": "full", "plain": "full", "residual": "full", "feedback": "feedback", "matched": "matched"}
+        result = conditional({key: arms[value] for key, value in mapping.items()}, {key: inference[value] for key, value in mapping.items()}, repeats=10)
+        self.assertEqual(result["comparisons"]["rule"]["reference"], "expanded")
+        self.assertEqual(result["comparisons"]["rule"]["comparison"], "full")
+        self.assertEqual(result["normmatched"]["coverage"]["matched"], 8)
+        self.assertEqual(result["arms"]["full"]["seeds"], [42, 52, 3047, 3407])
+        json.dumps(result, allow_nan=False)
+
     def testloading(self):
         arms, inference = self.fixture()
         original = Path.cwd()
@@ -119,6 +129,24 @@ class CurveTests(unittest.TestCase):
                 Path("suite.json").write_text(json.dumps(suite), encoding="utf-8")
                 result = load("suite.json", "metrics", repeats=10)
                 self.assertEqual(len(result["curve"]), 7)
+                secondary = json.loads(json.dumps(suite))
+                secondary["settings"]["suite"] = "conditional"
+                names = {"full", "anchor", "expanded", "plain", "residual", "feedback", "matched"}
+                for name in ("expanded", "plain", "residual"):
+                    source = Path("runs") / (name + ".json")
+                    signature = hashlib.sha256(name.encode()).hexdigest()
+                    payload = json.loads(Path("runs/full.json").read_text(encoding="utf-8"))
+                    payload["controlsignature"]["sha256"] = signature
+                    source.write_text(json.dumps(payload), encoding="utf-8")
+                    secondary["variants"][name] = {"path": source.as_posix()}
+                    secondary["design"]["variants"][name] = {"sha256": signature, "settings": {"fieldfactor": 1.}}
+                    scored = json.loads(Path("metrics/full.json").read_text(encoding="utf-8"))
+                    scored["inputsha256"] = digest(source)
+                    Path("metrics", name + ".json").write_text(json.dumps(scored), encoding="utf-8")
+                secondary["variants"] = {name: value for name, value in secondary["variants"].items() if name in names}
+                Path("conditional.json").write_text(json.dumps(secondary), encoding="utf-8")
+                result = load("conditional.json", "metrics", repeats=10)
+                self.assertEqual(set(result["arms"]), names)
                 source = Path("runs/full.json")
                 source.write_text(source.read_text(encoding="utf-8") + "\n", encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "exact inference"):

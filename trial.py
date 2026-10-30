@@ -17,6 +17,8 @@ from engine.reproduce import digest
 def variants(suite, consistency="ddpm", base=None):
     # Freeze one main configuration across all ablation suites.
     shared = defaults(base)
+    if suite == "conditional":
+        return {"full": shared, "anchor": {**shared, "method": "raw", "tangent": False, "tangentbasis": "residual", "tangentpolicy": "joint"}, "expanded": {**shared, "tangentpolicy": "joint"}, "plain": {**shared, "tangentbasis": "residual", "tangentpolicy": "joint"}, "residual": {**shared, "tangentbasis": "residual"}, "feedback": {**shared, "tangentfeedback": True}, "matched": {**shared, "tangentnorm": True}}
     if suite == "amplitude":
         raw = {**shared, "method": "raw", "tangent": False, "tangentfeedback": False, "tangentnorm": False}
         result = {"full": shared, "matched": {**shared, "tangentnorm": True}, "feedback": {**shared, "tangentfeedback": True}}
@@ -90,9 +92,11 @@ def variants(suite, consistency="ddpm", base=None):
 
 def design(args, controls):
     # Verify the full arm before loading checkpoints.
-    if args.method == "field" and args.suite not in {"integrated", "amplitude"}:
-        raise ValueError("Integrated field experiments require --suite integrated or amplitude; historical suites use --method path.")
-    if args.suite in {"integrated", "amplitude"} and (args.method != "field" or args.tangent or args.tangentbasis != "residual" or args.tangentnorm or args.tangentfeedback or args.fieldfactor != 1 or args.fieldrepair or args.field != "pullback" or args.fieldgeometry != "coupled" or args.semantic != "region"):
+    if args.method == "field" and args.suite not in {"integrated", "amplitude", "conditional"}:
+        raise ValueError("Integrated field experiments require --suite integrated, amplitude, or conditional; historical suites use --method path.")
+    if args.suite == "conditional" and (args.method != "field" or args.tangent or args.tangentbasis != "shared" or args.tangentpolicy != "conditional" or args.tangentnorm or args.tangentfeedback or args.fieldfactor != 1 or args.fieldrepair or args.field != "pullback" or args.fieldgeometry != "coupled" or args.semantic != "region"):
+        raise ValueError("Conditional trials require shared coupled fields, conditional policy, and region semantics.")
+    if args.suite in {"integrated", "amplitude"} and (args.method != "field" or args.tangent or args.tangentbasis != "residual" or args.tangentpolicy != "joint" or args.tangentnorm or args.tangentfeedback or args.fieldfactor != 1 or args.fieldrepair or args.field != "pullback" or args.fieldgeometry != "coupled" or args.semantic != "region"):
         raise ValueError("Integrated trials require the coupled field profile with region semantics and default tangent controls.")
     if args.suite == "tangent" and (args.field != "pullback" or args.fieldgeometry != "coupled" or args.fieldrepair or args.adapter or not args.cleanup or args.tangent):
         raise ValueError("Tangent trials require the unmodified coupled pullback reference configuration.")
@@ -177,12 +181,12 @@ def frozen(args, chosen):
 def main():
     parser = datasetargs(common(argparse.ArgumentParser(description="Run declared benchmark or validation/test ablations.")))
     parser.set_defaults(split="val", output="./trials")
-    parser.add_argument("--suite", type=str.casefold, choices=("amplitude", "integrated", "tangent", "residual", "semantic", "alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
+    parser.add_argument("--suite", type=str.casefold, choices=("conditional", "amplitude", "integrated", "tangent", "residual", "semantic", "alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
     parser.add_argument("--recipe", default=None)
     parser.add_argument("--dry", action="store_true", help="Print effective variants without loading data or checkpoints.")
     args = parser.parse_args()
-    if args.method != "path" or args.split not in {"all", "val", "test"}:
-        raise ValueError("Native trials require path mode and all, val, or test records.")
+    if args.method not in {"path", "field"} or args.split not in {"all", "val", "test"}:
+        raise ValueError("Native trials require path or field mode and all, val, or test records.")
     if args.split == "all" and (args.manifest or args.recipe):
         raise ValueError("All-record benchmark trials require no manifest or validation recipe.")
     if args.split != "all" and not args.manifest:

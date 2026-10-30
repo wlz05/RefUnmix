@@ -9,6 +9,7 @@ from engine.serial import read
 from evaluate import aggregate, declared, state
 
 RADIAL = {"zero": 0., "half": .5, "weak": .75, "anchor": 1., "strong": 1.25, "large": 1.5, "double": 2.}
+CONDITIONAL = {"full", "anchor", "expanded", "plain", "residual", "feedback", "matched"}
 
 def index(rows):
     declared({"rows": rows})
@@ -138,15 +139,32 @@ def compare(arms, radial=RADIAL, reference="full", baseline="anchor", matched="m
             output["feedback"]["activity"] = {"requests": len(traces), "updated": sum(bool(trace.get("updates")) for trace in traces), "accepted": sum(trace.get("accepted") is True for trace in traces), "updates": sum(len(trace.get("updates", [])) for trace in traces), "checks": sum(trace.get("checks", 0) for trace in traces), "updatequeries": sum(row.get("queries", 0) for trace in traces for row in trace.get("updates", []))}
     return output
 
+def conditional(arms, inference=None, repeats=2000, seed=42):
+    # Compare protection rules within the same measured field dictionary.
+    if set(arms) != CONDITIONAL:
+        raise ValueError("Conditional comparisons require the complete seven-arm matrix.")
+    verified = compare(arms, radial={"anchor": 1.}, inference=inference, repeats=repeats, seed=seed)
+    pairs = {"dictionary": ("plain", "expanded"), "rule": ("expanded", "full"), "capacity": ("residual", "full"), "feedback": ("full", "feedback"), "anchor": ("anchor", "full")}
+    result = {"schema": 1, "arms": {name: aggregate(rows) for name, rows in arms.items()}, "comparisons": {name: {"reference": first, "comparison": second, **paired(arms[first], arms[second], repeats, seed)} for name, (first, second) in pairs.items()}, "normmatched": verified["normmatched"], "scope": "Fixed configurations with model-space projection and realized control-head retention; final official image metrics are independently scored."}
+    if inference is not None:
+        traces = [row["report"]["field"].get("tangent", {}) for row in inference["full"]]
+        locks = [trace.get("conditionalcapacity", {}) for trace in traces]
+        history = [row for trace in traces for row in trace.get("history", [])]
+        result["activity"] = {"requests": len(traces), "queried": sum(trace.get("checks", 0) > 0 for trace in traces), "accepted": sum(trace.get("accepted") is True for trace in traces), "repairable": sum(lock.get("nullity", 0) > 0 for lock in locks), "repaired": sum(lock.get("status") == "repaired" and lock.get("after", 0) < lock.get("before", 0) for lock in locks), "repairchecks": sum(row.get("kind") == "conditional" for row in history), "seedchecks": sum(row.get("kind") == "seed" for row in history), "targetrejections": sum("realized target" in row.get("violations", []) for row in history), "noqueryrepairs": sum(lock.get("queries") == 0 for lock in locks), "sourceendpoints": sum(trace.get("sources", 0) for trace in traces), "sourcecalls": sum(trace.get("shared", {}).get("queries", 0) for trace in traces)}
+        result["activity"].update(selectedrepair=sum(trace.get("selectedkind") == "conditional" for trace in traces), retainedseed=sum(trace.get("selectedkind") == "seed" for trace in traces))
+    return result
+
 def load(summary, metrics, repeats=2000, seed=42):
     # Bind official scores to the exact inference files and anchor fields.
     suitepath = locate(Path("."), clean(summary, "summary"))
     suitehash = digest(suitepath)
     suite = read(suitepath)
-    if suite.get("schema") != 1 or suite.get("settings", {}).get("suite") != "amplitude" or not isinstance(suite.get("variants"), dict):
-        raise ValueError("Curve analysis requires an amplitude suite summary.")
-    if set(suite["variants"]) != set(RADIAL) | {"full", "matched", "feedback"}:
-        raise ValueError("The complete amplitude matrix is required for curve analysis.")
+    kind = suite.get("settings", {}).get("suite")
+    if suite.get("schema") != 1 or kind not in {"amplitude", "conditional"} or not isinstance(suite.get("variants"), dict):
+        raise ValueError("Response analysis requires an amplitude or conditional suite summary.")
+    expected = CONDITIONAL if kind == "conditional" else set(RADIAL) | {"full", "matched", "feedback"}
+    if set(suite["variants"]) != expected:
+        raise ValueError("The complete response matrix is required for analysis.")
     directory = locate(Path("."), clean(metrics, "metrics"))
     arms, inference, protocol, mapping, hashes = {}, {}, None, None, {suitepath: suitehash}
     for name, variant in suite["variants"].items():
@@ -178,12 +196,13 @@ def load(summary, metrics, repeats=2000, seed=42):
             arms[name].append({"key": key[0], "seed": key[1], "group": original.get("group", key[0]), "report": original["report"], "metrics": row["table"], "status": row.get("status", {})})
         if index(arms[name]).keys() != observed.keys():
             raise ValueError("Official curve scores are missing inference requests.")
-    if set(arms) != set(RADIAL) | {"full", "matched", "feedback"}:
-        raise ValueError("The complete amplitude matrix is required for curve analysis.")
+    if set(arms) != expected:
+        raise ValueError("The complete response matrix is required for analysis.")
     anchor = index(inference["anchor"])
     for name, rows in inference.items():
         settings = suite["design"]["variants"][name]["settings"]
-        if settings.get("fieldfactor") != RADIAL.get(name, 1.):
+        factor = RADIAL.get(name, 1.) if kind == "amplitude" else 1.
+        if settings.get("fieldfactor") != factor:
             raise ValueError("The amplitude matrix changed a declared radial factor.")
         for row in rows:
             report = row["report"]
@@ -191,11 +210,11 @@ def load(summary, metrics, repeats=2000, seed=42):
             for key in ("anchorfieldsha256", "protectionsha256", "source", "target", "imagesha256", "masksha256"):
                 if key not in report or key not in reference or report[key] != reference[key]:
                     raise ValueError("Amplitude comparisons changed the field anchor, request, or protection support.")
-            if name in RADIAL:
+            if name in RADIAL and (kind == "amplitude" or name == "anchor"):
                 first, second = reference.get("fieldnorm"), report.get("fieldnorm")
                 if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 for value in (first, second)) or not math.isclose(second, RADIAL[name] * first, rel_tol=1e-5, abs_tol=1e-12):
                     raise ValueError("A radial output changed the constructed field direction or amplitude.")
-    result = compare(arms, inference=inference, repeats=repeats, seed=seed)
+    result = (conditional if kind == "conditional" else compare)(arms, inference=inference, repeats=repeats, seed=seed)
     if any(digest(path) != value for path, value in hashes.items()):
         raise ValueError("A curve input changed during analysis.")
     result.update(protocolsha256=protocol, mappingsha256=mapping, suitehash=suitehash)

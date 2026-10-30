@@ -1048,6 +1048,156 @@ class TangentTests(unittest.TestCase):
         self.assertEqual(session.limit.phase, "front")
         self.assertLessEqual(report["damage"], report["baselinedamage"])
 
+    def testequivalentrepair(self):
+        from engine.geometry import equivalent
+        semantic = np.array([[0., 1., 0., 0.]])
+        protected = np.array([[0., 1., 1., 0.]])
+        initial = np.array([0., .6, .8, 0.])
+        result, report = equivalent(semantic, protected, [0.], initial, [1., 0., 0., 0.], np.eye(4))
+        np.testing.assert_allclose(semantic @ result, semantic @ initial, atol=1e-12)
+        self.assertLess(report["after"], report["before"])
+        self.assertLessEqual(np.linalg.norm(result), 1 + 1e-10)
+        self.assertAlmostEqual(result[0], 0.)
+        self.assertEqual(report["queries"], 0)
+        self.assertEqual(report["nullity"], 2)
+        json.dumps(report, allow_nan=False)
+
+    def testequivalentcovariance(self):
+        from engine.geometry import equivalent
+        semantic = np.array([[0., 1., .2, 0.]])
+        protected = np.array([[0., .2, 1., .3], [.1, 0., .1, 1.]])
+        metric, anchor = np.diag([1., 2., 3., 4.]), np.array([1., 0., 0., 0.])
+        initial = np.array([0., .2, .1, .1])
+        transform = np.array([[1., .2, 0., .1], [0., 2., .1, 0.], [0., 0., 1., .3], [.1, 0., 0., 1.]])
+        first, _ = equivalent(semantic, protected, [.1, -.2], initial, anchor, metric)
+        second, _ = equivalent(semantic @ transform, protected @ transform, [.1, -.2], np.linalg.solve(transform, initial), np.linalg.solve(transform, anchor), transform.T @ metric @ transform)
+        np.testing.assert_allclose(first, transform @ second, atol=1e-9)
+
+    def testequivalentcapacity(self):
+        from engine.geometry import equivalent
+        initial = [0., .5, .3]
+        result, report = equivalent([[0., 1., 0.], [0., 0., 1.]], [[0., 1., 1.]], [.1], initial, [1., 0., 0.], np.eye(3))
+        np.testing.assert_array_equal(result, initial)
+        self.assertEqual(report["nullity"], 0)
+        with self.assertRaises(ValueError):
+            equivalent([[0., 1.]], [[0., 1.]], [0.], [0., 2.], [1., 0.], np.eye(2))
+
+    def testequivalentclosedform(self):
+        from engine.geometry import equivalent
+        result, report = equivalent([[0., 1., 0.]], [[0., 1., 1.]], [0.], [0., .5, 0.], [1., 0., 0.], np.eye(3))
+        self.assertAlmostEqual(result[1], .5)
+        self.assertAlmostEqual(result[2], -.5 / 1.05)
+        self.assertAlmostEqual(report["damping"], .05)
+
+    def testsharedcache(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        field.source = torch.zeros_like(field.value)
+        redirect(field, native, score, mask, family="shared", policy="conditional")
+        report = field.report["tangent"]
+        self.assertEqual(report["sources"], 0)
+        self.assertEqual(report["shared"]["queries"], 0)
+        self.assertTrue(report["shared"]["cached"])
+
+    def testconditionalfield(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        native.offset = torch.tensor([0., 0., 0., .2])
+        field.neutral = native.offset.reshape_as(field.value)
+        original = native.endpoint
+        def endpoint(value, eta=0.):
+            result = original(value, eta)
+            if eta == 1:
+                result = result.clone()
+                result.flatten()[2] += .3
+            return result
+        native.endpoint = endpoint
+        def decode(latent):
+            session.decodes += 1
+            result = session.origin.clone()
+            change = latent.flatten()
+            result[..., 0, 0] += .1 * (1 + float(change[1]) + float(change[3]) - .2)
+            result[..., 0, 1] += .1 * float(change[1])
+            return result
+        session.decode = decode
+        redirect(field, native, score, mask, family="shared", policy="conditional")
+        report = field.report["tangent"]
+        self.assertEqual(report["sources"], 1)
+        self.assertEqual(report["probes"], report["rank"] - 1)
+        self.assertEqual(report["samples"], 1 + report["sources"] + report["probes"] + report["checks"])
+        self.assertTrue(report["accepted"])
+        lock = report["selectedallocation"]["conditional"]
+        self.assertGreater(lock["nullity"], 0)
+        self.assertLessEqual(lock["after"], lock["before"])
+        self.assertLessEqual(report["damage"], report["baselinedamage"])
+        self.assertLess(lock["semanticerror"], 1e-8)
+        self.assertEqual(report["history"][0]["kind"], "seed")
+        seedgain = np.array(report["history"][0]["changes"])
+        for row in report["history"]:
+            if row["accepted"]:
+                self.assertTrue(np.all(np.array(row["changes"]) >= seedgain - 1e-6))
+        self.assertEqual(session.limit.used, session.samples)
+        json.dumps(report, allow_nan=False)
+
+    def testsharedbudget(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture(3)
+        redirect(field, native, score, mask, family="shared", policy="conditional")
+        report = field.report["tangent"]
+        self.assertTrue(report["budgetstopped"])
+        self.assertEqual(report["sources"], 0)
+        self.assertEqual(report["samples"], 1)
+        self.assertFalse(report["accepted"])
+        self.assertEqual(session.limit.phase, "front")
+
+    def testconditionalsolverfailure(self):
+        from engine.field import redirect
+        from unittest.mock import patch
+        session, native, field, mask, score = self.fixture()
+        with patch("engine.geometry.equivalent", side_effect=ValueError("Unresolved semantic geometry.")):
+            redirect(field, native, score, mask, policy="conditional")
+        report = field.report["tangent"]
+        self.assertTrue(report["accepted"])
+        self.assertEqual(report["selectedallocation"]["conditional"]["status"], "joint seed")
+        self.assertIn("conditionalfailure", report)
+        self.assertEqual(score(field.pixels), field.scores)
+        self.assertEqual(session.limit.phase, "front")
+
+    def testrealizedtargetlock(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        redirect(field, native, score, mask, policy="conditional")
+        report = field.report["tangent"]
+        self.assertEqual(report["selectedkind"], "seed")
+        self.assertTrue(report["history"][0]["accepted"])
+        rejected = [row for row in report["history"][1:] if not row["retained"]]
+        self.assertTrue(rejected)
+        self.assertTrue(all("realized target" in row["violations"] and not row["accepted"] for row in rejected))
+        self.assertEqual(report["checks"], 3)
+        self.assertEqual(report["samples"], 1 + report["probes"] + report["checks"])
+        self.assertEqual(score(field.pixels), field.scores)
+
+    def testprotectioncannoteraseedit(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        def decode(latent):
+            session.decodes += 1
+            amount = float(latent.flatten()[1])
+            pixels = session.origin.clone()
+            pixels[..., 0, 0] += .1 - amount + 4 * amount * amount
+            pixels[..., 0, 1] += .1 * amount
+            return pixels
+        session.decode = decode
+        redirect(field, native, score, mask, policy="conditional")
+        report = field.report["tangent"]
+        seed = report["history"][0]
+        misleading = [row for row in report["history"][1:] if row["damage"] < seed["damage"] and row["gain"] < seed["gain"]]
+        self.assertTrue(seed["accepted"])
+        self.assertTrue(misleading)
+        self.assertTrue(all(not row["accepted"] and "realized target" in row["violations"] for row in misleading))
+        self.assertEqual(report["selectedkind"], "seed")
+        self.assertEqual(report["damage"], seed["damage"])
+
 if __name__ == "__main__":
     unittest.main()
 

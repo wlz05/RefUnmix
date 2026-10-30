@@ -65,6 +65,89 @@ def adoption(residual, effect, maximum=1.):
     bound = maximum if square == 0 else min(maximum, -cross / square) if cross < 0 else 0.
     return max(0., bound), {"cross": cross, "quadratic": square, "maximum": maximum}
 
+def equivalent(edit, protect, residual, value, anchor, metric, ridge=.05, radius=1., tolerance=1e-6):
+    # Repair protection inside a fixed semantic response class.
+    edit, protect, residual, value, anchor, metric = (np.asarray(item, dtype=float) for item in (edit, protect, residual, value, anchor, metric))
+    count = len(value) if value.ndim == 1 else 0
+    if not count or anchor.shape != value.shape or edit.ndim != 2 or edit.shape[1] != count or protect.ndim != 2 or protect.shape[1] != count or residual.shape != (protect.shape[0],) or metric.shape != (count, count) or not np.allclose(metric, metric.T, rtol=1e-12, atol=1e-14) or any(not np.isfinite(item).all() for item in (edit, protect, residual, value, anchor, metric)):
+        raise ValueError("Equivalent responses require finite matching coefficient geometry.")
+    if any(isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item) for item in (ridge, radius, tolerance)) or ridge <= 0 or radius < 0 or not 0 < tolerance < 1:
+        raise ValueError("Equivalent response controls are invalid.")
+    try:
+        root = np.linalg.cholesky(metric).T
+    except np.linalg.LinAlgError as error:
+        raise ValueError("Equivalent response metrics must be positive definite.") from error
+    normal = root @ anchor
+    length = float(np.linalg.norm(normal))
+    if length == 0 or not math.isfinite(length):
+        raise ValueError("Equivalent response repair requires a nonzero anchor.")
+    _, _, vectors = np.linalg.svd((normal / length)[None], full_matrices=True)
+    tangent = np.linalg.solve(root, vectors[1:].T)
+    initial = tangent.T @ metric @ value
+    norm = float(np.linalg.norm(initial))
+    if norm > radius * (1 + 1e-9) or np.linalg.norm(root @ (tangent @ initial - value)) > tolerance * max(norm, np.finfo(float).tiny):
+        raise ValueError("The semantic anchor must already satisfy the tangent ball.")
+    initialresidual = residual + protect @ value
+    before = float(initialresidual @ initialresidual)
+    if not math.isfinite(before):
+        raise ValueError("Equivalent response residuals exceed numerical range.")
+    response = edit @ tangent
+    _, singular, right = np.linalg.svd(response, full_matrices=True)
+    cutoff = tolerance * float(singular[0]) if len(singular) else 0.
+    rank = int(np.sum(singular > max(cutoff, np.finfo(float).tiny)))
+    null = right[rank:].T
+    report = {"status": "no equivalent direction", "rank": rank, "nullity": null.shape[1], "before": before, "after": before, "movement": 0., "semanticerror": 0., "norm": norm, "queries": 0, "scope": "Protection repair at a fixed measured semantic response, verified again on actual output."}
+    if not null.shape[1] or radius == 0:
+        return value.copy(), report
+    # Separate fixed semantics from the shifted protection coordinates.
+    center = null.T @ initial
+    fixed = initial - null @ center
+    bound = math.sqrt(max(0., radius * radius - float(fixed @ fixed)))
+    matrix = protect @ tangent @ null
+    base = residual + protect @ tangent @ fixed
+    gram = matrix.T @ matrix
+    damping = ridge * max(float(np.trace(gram)) / len(center), 1e-12)
+    hessian = gram + damping * np.eye(len(center))
+    target = -matrix.T @ base + damping * center
+    eigenvalues, rotation = np.linalg.eigh(hessian)
+    if eigenvalues[0] <= 0 or not np.isfinite(target).all():
+        raise ValueError("Equivalent repair equations exceed numerical range.")
+    rotated = rotation.T @ target
+    multiplier = 0.
+    if bound == 0:
+        coordinates = np.zeros_like(center)
+    else:
+        coordinates = rotation @ (rotated / eigenvalues)
+        if np.linalg.norm(coordinates) > bound:
+            lower, upper = 0., max(float(np.linalg.norm(target)) / bound, float(eigenvalues[-1]))
+            if not math.isfinite(upper):
+                raise ValueError("Equivalent repair multipliers exceed numerical range.")
+            for _ in range(100):
+                middle = lower + (upper - lower) / 2
+                if np.linalg.norm(rotated / (eigenvalues + middle)) > bound:
+                    lower = middle
+                else:
+                    upper = middle
+            multiplier = upper
+            coordinates = rotation @ (rotated / (eigenvalues + multiplier))
+    result = tangent @ (fixed + null @ coordinates)
+    move = result - value
+    finalresidual = residual + protect @ result
+    after = float(finalresidual @ finalresidual)
+    error = float(np.linalg.norm(edit @ move))
+    whitened = root @ move
+    movement = float(whitened @ whitened)
+    objective = after + damping * movement
+    allowed = tolerance * max(float(np.linalg.norm(response)) * math.sqrt(max(movement, 0.)), np.finfo(float).tiny)
+    report.update(status="repaired", after=after, movement=math.sqrt(max(movement, 0.)), semanticerror=error, norm=float(np.linalg.norm(root @ result)), damping=damping, multiplier=multiplier, objective=objective)
+    if not np.isfinite(result).all() or not all(math.isfinite(item) for item in (after, error, movement, objective)):
+        raise ValueError("Equivalent repair exceeds numerical range.")
+    tangenterror = abs(float(normal @ (root @ result)))
+    if report["norm"] > radius * (1 + 1e-9) or objective > before + 1e-10 * max(before, np.finfo(float).tiny) or error > allowed or tangenterror > tolerance * max(length * report["norm"], np.finfo(float).tiny):
+        report.update(status="unchanged after constraint check", attemptedafter=after, attemptedsemanticerror=error, after=before, semanticerror=0., movement=0., norm=norm)
+        return value.copy(), report
+    return result, report
+
 def matching(displacement, effect, maximum=1., tolerance=.01):
     # Intersect the full norm tolerance band with positive adoption.
     displacement, effect = np.asarray(displacement, dtype=float), np.asarray(effect, dtype=float)

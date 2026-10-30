@@ -1,6 +1,6 @@
 # RefUnmix: Protected-Response Compensation for Image Editing
 
-**RefUnmix** constructs an editing field from measured endpoint responses. It retains a coupled pullback field as the protection anchor, then allocates its unresolved request along tangent directions that improve target semantics while respecting the anchor's actual protected-content damage.
+**RefUnmix** constructs an editing field by protecting within a fixed target-response class. A coupled pullback field supplies the anchor; measured endpoint responses identify alternative input directions that retain the proposed target change while reducing protected distortion.
 
 The primary `--method field` profile incorporates response allocation and verification into field construction, then exports its cached native endpoint. It runs no separate reference controller. Frozen one-step or few-step continuation is queried a finite number of times; all model samples, forwards, VAE decodes, control scores, latency, and peak memory remain charged.
 
@@ -31,7 +31,9 @@ Source image and source/target captions
                     |
        Measure only lateral output responses
                     |
-       Allocate semantics and total protected residual
+       Propose a target response from the residual
+                    |
+       Repair protection within its response class
                     |
        Choose feasible adoption / verify actual output
                     |
@@ -85,13 +87,13 @@ $`G_F`$ measures the error reduction available through direction changes beyond 
 **3. Allocate the residual inside the field.** Let $`B_b=\lVert F_b\rVert_2 Q_b`$, $`F_b=B_bc_b`$, and let $`Q_b`$ span the baseline, temporal contrasts, and unresolved latent request. With $`M=I`$, measure responses only along an orthonormal basis of $`c_b^\perp`$. For $`k`$ dictionary directions this needs $`k-1`$ probes, rather than $`k`$. Let $`S`$ denote target/local score changes divided by the frozen desired gain, and $`P`$ the protected RGB residual response. With $`r_b=\Phi_W(Y_b)`$ and $`d_b=\sqrt{D_b}`$ when $`D_b>0`$ (otherwise 1), solve
 
 ```math
-v^\star=\arg\min_{c_b^\top Mv=0,\ \lVert v\rVert_M\le\Delta_b}
+v_0=\arg\min_{c_b^\top Mv=0,\ \lVert v\rVert_M\le\Delta_b}
 \left(\lVert Sv-\mathbf1\rVert_2^2
 +\gamma\lVert(r_b+Pv)/d_b\rVert_2^2
 +\lambda_b\lVert v\rVert_M^2\right).
 ```
 
-The protected term includes the current residual. Its cross term lets a direction repair existing damage; penalizing only $`\lVert Pv\rVert^2`$ misses this opportunity. With $`p=Pv^\star`$, adoption obeys
+The conditional profile sets $`v^\star=\mathcal C_{Sv_0}(v_0)`$ by minimizing the regularized protected residual at fixed target response; the joint comparison sets $`v^\star=v_0`$. Details and the shared-response dictionary appear in [Protection at a Fixed Target Response](#protection-at-a-fixed-target-response). The protected term includes the current residual. Its cross term lets a direction repair existing damage; penalizing only $`\lVert Pv\rVert^2`$ misses this opportunity. With $`p=Pv^\star`$, adoption obeys
 
 ```math
 F_\star=F_b+\alpha B_bv^\star,\qquad
@@ -332,7 +334,7 @@ python -B RefUnmix/doctor.py --batch 3 --model models --clip clip --device cuda:
 ### 3. Edit One Image
 
 ```bash
-python -B RefUnmix/main.py --image input.png --source "A person wearing a blue shirt." --target "A person wearing a striped shirt." --model models --clip clip --device cuda:0 --precision fp32 --field pullback --method field --semantic region --prior off --maxsamples 15 --maxcalls 15 --tangentchecks 3 --seed 42 --no-control --no-heldout --output outputs/result.png --report outputs/result.json
+python -B RefUnmix/main.py --image input.png --source "A person wearing a blue shirt." --target "A person wearing a striped shirt." --model models --clip clip --device cuda:0 --precision fp32 --field pullback --method field --semantic region --tangentbasis shared --tangentpolicy conditional --prior off --maxsamples 15 --maxcalls 15 --tangentchecks 3 --seed 42 --no-control --no-heldout --output outputs/result.png --report outputs/result.json
 ```
 
 Provide source and target image captions through `--source` and `--target`. Each run saves the edited image and a JSON report containing controls, inference costs, and checkpoint hashes.
@@ -359,7 +361,8 @@ These commands use `--prior off`. Optional consistency priors consume additional
 | `--tangentgain` | `0.02` | Desired increase of each frozen target control head |
 | `--tangentpenalty` | `1` | Relative total protected-residual penalty |
 | `--tangentchecks` | `3` | Maximum real-output checks within the shared model budget |
-| `--tangentbasis` | `residual` | Include the remaining endpoint request; `temporal` restricts the dictionary |
+| `--tangentbasis` | `residual` | Temporal/request directions; `shared` adds a matched common-mode candidate |
+| `--tangentpolicy` | `joint` | `conditional` repairs protection within the proposed target-response class |
 | `--tangentnorm` | off | Accept only actual endpoint-response norm ratios within 1% of baseline |
 | `--fieldweight` | `0.5` | Second-time weight for blend, in [0, 1] |
 | `--fieldshrink` | `0.7` | ECT shrinkage, in [0, 1]; requires epsilon VP and delta zero |
@@ -528,21 +531,29 @@ For the four-request alternative, replace `--batch 3` with `--batch 4` throughou
 
 Run the following commands from `workspace/` in one process on one RTX 4090. The command profile uses FP32, `cuda:0`, and seeds **42 52 3047 3407**. Keep the same backbone, control checkpoint, precision, and input files across compared runs. Current paper experiments use `evaluate.py` and `trial.py`.
 
-The primary integrated field uses `--method field --semantic region`. Response allocation is enabled by this method; no additional `--tangent` flag is required. Its baseline, desired gain, protection support, and semantic floors stay fixed through verification. The parser retains the earlier `path` default for existing scripts, so select `field` explicitly.
+The primary conditional field uses `--method field --semantic region --tangentbasis shared --tangentpolicy conditional`. Response allocation is enabled by this method; no additional `--tangent` flag is required. Its baseline, desired gain, protection support, and semantic floors stay fixed through verification. The parser retains the earlier `path` default for existing scripts, so select `field` explicitly.
 
-**Integrated field, 64-sample cap:**
-
-```bash
-python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis residual --no-tangentnorm --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 64 --maxcalls 64 --output outputs/main
-```
-
-**Integrated field, 15-sample cap:**
+**Conditional field, 64-sample cap:**
 
 ```bash
-python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis residual --no-tangentnorm --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 15 --maxcalls 15 --output outputs/matched
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis shared --tangentpolicy conditional --no-tangentnorm --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 64 --maxcalls 64 --output outputs/main
 ```
 
-With two resolved temporal contrasts and one additional residual direction, the dictionary has at most three directions. A single-condition, one-step continuation uses four conditional samples, three initial pullback endpoints, one baseline endpoint, up to two lateral probes, and up to three amplitude checks: at most 13 denoiser sample evaluations for this profile. Extra localization times, noise samples, CFG, or native steps change the count. The shared cap is enforced per image-seed request; the paid baseline is retained when a full probe-plus-check does not fit.
+**Conditional field, 15-sample cap:**
+
+```bash
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis shared --tangentpolicy conditional --no-tangentnorm --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 15 --maxcalls 15 --output outputs/matched
+```
+
+The main shared dictionary adds one matched source zero-field endpoint and at most one lateral direction. With two temporal directions, one residual, one shared candidate, and three checks, the single-condition one-step profile uses at most 15 sample evaluations. All costs remain per request.
+
+**Static residual/joint field reference, 64-sample cap:**
+
+```bash
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis residual --tangentpolicy joint --no-tangentnorm --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 64 --maxcalls 64 --output outputs/static
+```
+
+This earlier profile uses at most 13 sample evaluations under the same one-step assumptions. Historical suites retain their explicit reference settings; `conditional/full` matches the current main configuration. Extra noise samples, CFG, native steps, or localization times change the cost. Start fresh output directories when changing the configuration.
 
 The following commands retain the earlier reference-controller comparison. They do not define the integrated field profile.
 
@@ -852,6 +863,88 @@ These diagnostics use the native field endpoint before reference control. Pullba
 Controller history records `verification` for every queried non-geometry proposal, including rejected proposals: `predictedgain`, `actualgain`, `predicteddamagechange`, and `actualdamagechange`. Each change is measured from the current anchor. Gains use the frozen control heads and scales; independent task annotations evaluate the final image. `audit.py` first averages release-query changes within each request, then applies the same request-within-seed and seed-level averaging used by the main tables. Paired confidence intervals resample source groups and recompute that seed-first statistic.
 
 Native probes use raw mode with priors and controller diagnostics disabled. Discrete reference paths require `--etas 0 1`. Raw inference rejects ignored prior or controller switches, and held-out consistency requires an enabled prior.
+
+### Protection at a Fixed Target Response
+
+Similarity is ambiguous: source-like responses may represent preserved content or an edit that has not happened. The conditional branch instead asks whether protected damage can be reduced while retaining the target response of a proposed field direction.
+
+Let $`S`$ and $`P`$ be measured target/local and protected-output responses in tangent coordinates, and let $`v_0`$ be the initial joint proposal. Define $`q=S v_0`$. The conditional repair is
+
+```math
+\mathcal C_q(v_0)=\arg\min_{v\in\mathcal T_b,\,Sv=q,\,\lVert v\rVert_M\le\Delta}
+\left(\lVert r_b+Pv\rVert_2^2+\lambda_c\lVert v-v_0\rVert_M^2\right).
+```
+
+The original proposal is feasible. Therefore the repaired proposal preserves the resolved predicted target response and cannot increase its modeled protected residual. This is a change of priority from a weighted semantic/protection compromise to protection within a target-response equivalence class. The regularized projection has a unique solution; its shifted ball is solved in the semantic nullspace. Its algebraic solve uses no model queries. The actual native output is still generated and checked against the original protection budget and frozen semantic floors. Amplitude selection follows repair, so the equality concerns the direction at a fixed amplitude; actual image scores are reported independently.
+
+The conditional policy uses its first real check for the unmodified joint proposal when feasible. Once an edit is accepted, subsequent candidates must retain every selected target/local control-head gain within the declared numerical tolerance. At tied target gain, lower actual damage can replace the retained edit. The same feasible amplitude is tested preferentially after projection. `tangentchecks` includes this seed and all repairs; budget exhaustion preserves the best verified image. Logs distinguish seed checks, repair checks, target-lock rejections, and whether the final image came from a repair. This is a measured control-head guarantee; independent official metrics score the frozen image afterward.
+
+A two-dimensional tangent dictionary may already be spanned by two independent target heads. In that case no semantic-neutral direction exists. The `shared` dictionary adds one matched common-mode candidate:
+
+```math
+h_s=H(0,C_{\mathrm{src}}),\qquad h_t=H(0,C_{\mathrm{tgt}}),\qquad
+b_c=(I-\Pi_{h_t-h_s})\left(\frac{h_s+h_t}{2}-z_{\mathrm{src}}\right).
+```
+
+$`\Pi_d`$ projects onto a nonzero conditional chord; it is zero when the chord vanishes. This candidate is orthogonalized with the existing field, temporal contrasts, and unresolved request. The paid source zero-field endpoint is cached and reused by the optional reference controller. Common-mode evidence supplies a possible correction direction; its semantic role is determined by the measured response, not inferred from similarity alone. No spatial region or feature is frozen merely because predictions agree.
+
+Use `--method field --tangentbasis shared --tangentpolicy conditional`. The earlier static profile remains `--tangentbasis residual --tangentpolicy joint`. The shared configuration adds one source zero-field endpoint and at most one tangent probe; all are charged to the request. With two temporal directions, one residual, one common-mode candidate, and three real checks, the one-step single-condition profile uses at most 15 sample evaluations. A zero common mode or absent semantic nullspace retains the corresponding original proposal. Logs record nullity, predicted semantic defect, damage before/after projection, source endpoints, and actual acceptance.
+
+[CEF](https://arxiv.org/abs/2609.33735) separates prompt- and trajectory-induced fields, [SynPS](https://arxiv.org/abs/2512.14423) modulates attention sharing with similarity evidence, and [ARRO](https://arxiv.org/abs/2610.06021) learns from requested and unintended changes. This experiment fixes a measured target response and tests whether the available input dictionary contains a lower-damage realization. Nullspace projection itself is established mathematics; the intervention and its equal-query comparisons determine the method's contribution.
+
+**Seven-arm comparison:**
+
+| Arm | Dictionary and rule |
+|---|---|
+| `anchor` | Coupled raw field |
+| `plain` | Residual dictionary, joint allocation |
+| `expanded` | Shared dictionary, joint allocation |
+| `residual` | Residual dictionary, conditional protection |
+| `full` | Shared dictionary, conditional protection |
+| `feedback` | Full branch with paid-response feedback |
+| `matched` | Full branch with actual endpoint norm within 1% of anchor |
+
+`expanded` versus `full` uses the same dictionary, initial probes, and query limits and changes only the protection rule. `plain` versus `expanded` isolates added common-mode evidence. `residual` records whether the original dictionary already has a usable nullspace. Match actual cost as well as the common cap.
+
+**64-sample matrix, one RTX 4090, three concurrent requests:**
+
+```bash
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite conditional --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --fieldfactor 1 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis shared --tangentpolicy conditional --no-tangentnorm --no-tangentfeedback --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 64 --maxcalls 64 --output outputs/conditional
+```
+
+**Official assessment and fixed-configuration comparison:**
+
+```bash
+python -B RefUnmix/assess.py --input outputs/conditional/full/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetrics/full.json
+python -B RefUnmix/assess.py --input outputs/conditional/anchor/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetrics/anchor.json
+python -B RefUnmix/assess.py --input outputs/conditional/plain/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetrics/plain.json
+python -B RefUnmix/assess.py --input outputs/conditional/expanded/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetrics/expanded.json
+python -B RefUnmix/assess.py --input outputs/conditional/residual/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetrics/residual.json
+python -B RefUnmix/assess.py --input outputs/conditional/feedback/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetrics/feedback.json
+python -B RefUnmix/assess.py --input outputs/conditional/matched/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetrics/matched.json
+python -B RefUnmix/audit.py --summary outputs/conditional/summary.json --sweep outputs/conditionalmetrics --repeats 2000 --seed 42 --output outputs/conditionalcomparison.json
+```
+
+**15-sample matrix, one RTX 4090, three concurrent requests:**
+
+```bash
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite conditional --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --fieldfactor 1 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis shared --tangentpolicy conditional --no-tangentnorm --no-tangentfeedback --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 15 --maxcalls 15 --output outputs/conditionalfifteen
+```
+
+**Official assessment and fixed-configuration comparison:**
+
+```bash
+python -B RefUnmix/assess.py --input outputs/conditionalfifteen/full/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetricsfifteen/full.json
+python -B RefUnmix/assess.py --input outputs/conditionalfifteen/anchor/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetricsfifteen/anchor.json
+python -B RefUnmix/assess.py --input outputs/conditionalfifteen/plain/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetricsfifteen/plain.json
+python -B RefUnmix/assess.py --input outputs/conditionalfifteen/expanded/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetricsfifteen/expanded.json
+python -B RefUnmix/assess.py --input outputs/conditionalfifteen/residual/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetricsfifteen/residual.json
+python -B RefUnmix/assess.py --input outputs/conditionalfifteen/feedback/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetricsfifteen/feedback.json
+python -B RefUnmix/assess.py --input outputs/conditionalfifteen/matched/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/conditionalmetricsfifteen/matched.json
+python -B RefUnmix/audit.py --summary outputs/conditionalfifteen/summary.json --sweep outputs/conditionalmetricsfifteen --repeats 2000 --seed 42 --output outputs/conditionalcomparisonfifteen.json
+```
+
+All seven configurations retain all 700 requests and seeds 42, 52, 3047, and 3407. Aggregate requests within each seed, then average the four seed results. The comparison validates hashes, populations, official metrics, and the common protection support. It reports dictionary, rule, nullspace-capacity, feedback, and norm-matching comparisons without selecting outputs using official scores. Use `--batch 4` consistently for the four-request alternative.
 
 ### Fixed-Field Amplitude and Matched Comparisons
 
