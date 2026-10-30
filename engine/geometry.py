@@ -5,6 +5,57 @@ import math
 import numpy as np
 from engine.theory import fit
 
+def tangent(edit, protect, target, anchor, metric, penalty=1., ridge=.05, radius=1., tolerance=1e-6):
+    # Allocate endpoint response inside the baseline tangent space.
+    edit, protect, target, anchor, metric = (np.asarray(value, dtype=float) for value in (edit, protect, target, anchor, metric))
+    count = len(anchor) if anchor.ndim == 1 else 0
+    if not count or target.ndim != 1 or not len(target) or edit.ndim != 2 or edit.shape != (len(target), count) or protect.ndim != 2 or protect.shape[1] != count or metric.shape != (count, count) or any(not np.isfinite(value).all() for value in (edit, protect, target, anchor, metric)) or not np.allclose(metric, metric.T, rtol=1e-12, atol=1e-14):
+        raise ValueError("Tangent responses require finite matching coefficient geometry.")
+    for value in (penalty, ridge, radius, tolerance):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ValueError("Tangent controls must be finite and nonnegative.")
+    if ridge <= 0 or not 0 < tolerance < 1:
+        raise ValueError("Tangent regularization and rank tolerance must be positive.")
+    try:
+        root = np.linalg.cholesky(metric).T
+    except np.linalg.LinAlgError as error:
+        raise ValueError("Tangent metrics must be positive definite.") from error
+    normal = root @ anchor
+    length = float(np.linalg.norm(normal))
+    if not math.isfinite(length):
+        raise ValueError("Tangent anchors exceed numerical range.")
+    report = {"rank": 0, "anchorzero": length == 0, "tangenterror": 0., "norm": 0., "status": "zero anchor", "scope": "Regularized endpoint response allocation under one metric tangent constraint."}
+    if length == 0 or radius == 0:
+        return np.zeros(count), report
+    _, _, vectors = np.linalg.svd((normal / length)[None], full_matrices=True)
+    basis = np.linalg.solve(root, vectors[1:].T)
+    report["rank"] = basis.shape[1]
+    if not basis.shape[1]:
+        report["status"] = "no tangent direction"
+        return np.zeros(count), report
+    response = np.vstack((edit @ basis, math.sqrt(penalty) * protect @ basis))
+    requested = np.r_[target, np.zeros(protect.shape[0])]
+    from engine.field import solve
+    coefficients, fitted = solve(response, requested, np.zeros(basis.shape[1]), ridge, bound=radius)
+    value = basis @ coefficients
+    norm = float(value @ metric @ value)
+    defect = abs(float(anchor @ metric @ value))
+    if not np.isfinite(value).all() or not math.isfinite(norm) or norm > radius * radius * (1 + 1e-9) or defect > tolerance * max(length * math.sqrt(max(norm, 0.)), np.finfo(float).tiny):
+        raise ValueError("Tangent allocation failed its original constraints.")
+    report.update(status="solved", norm=math.sqrt(max(norm, 0.)), tangenterror=defect, model=fitted, predicted=(edit @ value).tolist(), protectednorm=float(np.linalg.norm(protect @ value)))
+    return value, report
+
+def adoption(residual, effect, maximum=1.):
+    # Bound positive adoption by the unchanged protection budget.
+    residual, effect = np.asarray(residual, dtype=float), np.asarray(effect, dtype=float)
+    if residual.ndim != 1 or effect.shape != residual.shape or any(not np.isfinite(value).all() for value in (residual, effect)) or isinstance(maximum, bool) or not isinstance(maximum, (int, float)) or not math.isfinite(maximum) or maximum < 0:
+        raise ValueError("Adoption requires finite matching protected responses.")
+    square, cross = float(effect @ effect), float(2 * residual @ effect)
+    if not math.isfinite(square) or not math.isfinite(cross):
+        raise ValueError("Adoption coefficients exceed numerical range.")
+    bound = maximum if square == 0 else min(maximum, -cross / square) if cross < 0 else 0.
+    return max(0., bound), {"cross": cross, "quadratic": square, "maximum": maximum}
+
 def response(model, points, values, regularization=.0001, initial=None):
     # Reuse the same measured chords in clean latent space.
     points, values = np.asarray(points, dtype=float), np.asarray(values, dtype=float)

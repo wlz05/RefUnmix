@@ -378,6 +378,7 @@ def refine(field, native, contrasts, rounds, ridge, probe, radius, tolerance):
     initial = field.value.detach().clone()
     scale = norm(initial.double())
     report["initialnorm"] = scale
+    field.report["baselinefieldnorm"] = scale
     bound = radius * scale
     if scale == 0 or not math.isfinite(bound) or bound <= 0:
         report.update(status="zero radius", calls=0, samples=0, endpointcached=False)
@@ -447,6 +448,167 @@ def refine(field, native, contrasts, rounds, ridge, probe, radius, tolerance):
         if field.endpoint is not None:
             report["finalerror"] = norm(field.request - (field.endpoint.double() - field.neutral.double()))
         report.update({"calls": session.calls - before[0], "samples": session.samples - before[1], "endpointcached": field.endpoint is not None})
+
+@torch.no_grad()
+def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=False, family="residual", probe=.25, radius=1., ridge=.05, tolerance=1e-6, slack=.02, slacks=None):
+    # Redistribute residuals using measured semantic and protected responses.
+    from engine.geometry import tangent, adoption
+    from engine.poll import feedback
+    import torch.nn.functional as functional
+    if not callable(score) or type(checks) is not int or not 1 <= checks <= 8 or type(match) is not bool or family not in {"residual", "temporal"}:
+        raise ValueError("Tangent refinement requires a scorer and valid query controls.")
+    for value, label in ((gain, "Tangent gain"), (probe, "Tangent probe"), (ridge, "Tangent ridge")):
+        if number(value, label, 0) <= 0:
+            raise ValueError(label + " must be positive.")
+    number(penalty, "Tangent protection weight", 0)
+    number(radius, "Tangent radius", 0)
+    number(slack, "Tangent semantic slack", 0)
+    slacks = {} if slacks is None else slacks
+    if not isinstance(slacks, dict) or any(not isinstance(key, str) or isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 for key, value in slacks.items()):
+        raise ValueError("Tangent semantic slacks must be named finite nonnegative values.")
+    if not 0 < number(tolerance, "Tangent tolerance") < 1:
+        raise ValueError("Tangent tolerance must be between zero and one.")
+    session, limit = native.session, native.session.limit
+    baseline = tensor(field.value).detach().clone()
+    length = norm(baseline.double())
+    report = {"status": "baseline", "accepted": False, "alpha": 0., "gain": 0., "calls": 0, "samples": 0, "decodes": 0, "checks": 0, "rounding": 0, "family": family, "matched": match, "normtolerance": .01, "history": [], "usesclip": True, "fieldmasking": False, "scope": "Frozen control-score gains and actual native-output protection; independent official scoring follows selection."}
+    field.report["tangent"] = report
+    if length == 0 or radius == 0 or session.scale == 0 or field.request is None or field.neutral is None:
+        report["reason"] = "A resolved nonzero coupled baseline is required."
+        return
+    tensor(mask, 1)
+    if torch.any((mask < 0) | (mask > 1)).item():
+        raise ValueError("Tangent measurement masks must be in [0, 1].")
+    weights = functional.interpolate((1 - mask.detach()).to(session.origin.device, torch.float64), session.origin.shape[-2:], mode="bilinear", align_corners=False)
+    mass = float(weights.sum())
+    root = (weights / mass).sqrt() if mass else torch.zeros_like(weights)
+    def residual(pixels):
+        return ((tensor(pixels, 3).double() - session.origin.double()) * root).reshape(-1).cpu().numpy()
+    def selected(values, names):
+        if not isinstance(values, dict) or any(key not in values or isinstance(values[key], bool) or not isinstance(values[key], (int, float)) or not math.isfinite(values[key]) for key in names):
+            raise ValueError("Tangent control scores must preserve finite named heads.")
+        return np.array([values[key] for key in names], dtype=float)
+    before = session.calls, session.samples, session.decodes
+    previous = limit.phase if limit is not None else None
+    try:
+        if limit is not None:
+            limit.phase = "tangent"
+        endpoint = field.endpoint
+        if endpoint is None:
+            endpoint = tensor(native.endpoint(baseline)).detach().clone()
+        if endpoint.shape != baseline.shape or endpoint.device != baseline.device:
+            raise ValueError("Tangent endpoints must match the baseline geometry.")
+        field.endpoint = field.baseline = endpoint.detach().clone()
+        field.report["baselinefieldnorm"] = length
+        image = session.decode(endpoint).clamp(0, 1)
+        scores = score(image)
+        floors = feedback(scores)
+        if slacks.keys() - floors.keys():
+            raise ValueError("Tangent semantic slacks must match the frozen score heads.")
+        names = ["target"] if "target" in floors else ["score"]
+        if scores.get("localviews", 0) > 0 and "local" in scores:
+            names.append("local")
+        current = selected(scores, names)
+        r = residual(image)
+        damage = float(r @ r)
+        displacement = (endpoint.double() - field.neutral.double()).reshape(-1).cpu().numpy()
+        responselevel = float(np.linalg.norm(displacement))
+        request = field.request.double() - (endpoint.double() - field.neutral.double())
+        pool = [baseline]
+        for time in field.report.get("times", []):
+            pool.append(session.difference(session.editor.index(time)))
+        if family == "residual" and norm(request) > 0:
+            pool.append((request * (length / norm(request))).float())
+        basis, _ = orthogonal(pool, tolerance)
+        count = basis.shape[1]
+        anchor = basis.T @ baseline.double().reshape(-1).cpu().numpy() / length
+        report.update(rank=count, baselinefieldnorm=length, baselineendpointnorm=responselevel, baselinedamage=damage, damage=damage, gain=0., inputnormratio=1., endpointnormratio=1. if responselevel > 0 else None, protectedvalid=mass > 0, heads=names, desired=[gain] * len(names))
+        if count < 2:
+            report["reason"] = "The measured dictionary has no lateral direction."
+            return
+        step = probe / math.sqrt(count)
+        if limit is not None:
+            limit.require((count + 1) * native.cost(0.), (count + 1) * native.queries())
+        edit, protect, latent = [], [], []
+        for index in range(count):
+            direction = torch.from_numpy((length * step * basis[:, index]).reshape(baseline.shape)).to(baseline.device, torch.float32)
+            measured = tensor(native.endpoint(tensor(baseline + direction)))
+            if measured.shape != baseline.shape or measured.device != baseline.device:
+                raise ValueError("Tangent probes must preserve baseline geometry.")
+            pixels = session.decode(measured).clamp(0, 1)
+            observed = score(pixels)
+            edit.append((selected(observed, names) - current) / step)
+            protect.append((residual(pixels) - r) / step)
+            latent.append(((measured.double() - endpoint.double()) / step).reshape(-1).cpu().numpy())
+        edit, protect, latent = np.stack(edit, axis=1), np.stack(protect, axis=1), np.stack(latent, axis=1)
+        protectscale = math.sqrt(damage) if damage > 0 else 1.
+        value, allocation = tangent(edit / gain, protect / protectscale, np.ones(len(names)), anchor, np.eye(count), penalty, ridge, radius, tolerance)
+        report["allocation"] = allocation
+        direction = torch.from_numpy((length * basis @ value).reshape(baseline.shape)).to(baseline.device, torch.float32)
+        relative = norm(direction.double()) / length
+        defect = abs(float((baseline.double() * direction.double()).sum())) / (length * length)
+        if defect > tolerance * max(relative, np.finfo(float).tiny):
+            raise ValueError("The applied residual direction lost its tangent constraint.")
+        effect = protect @ value
+        maximum, coefficients = adoption(r, effect)
+        report.update(tangenterror=defect, directionnorm=relative, protection=coefficients, maximum=maximum)
+        if maximum <= 0 or not np.any(value != 0):
+            report["reason"] = "No positive predicted adoption satisfies baseline protection."
+            return
+        predicted = (edit @ value) / gain
+        divisor = float(predicted @ predicted + penalty * (effect @ effect) / (protectscale * protectscale) + allocation["model"]["damping"] * (value @ value))
+        alpha = min(maximum, max(0., float(predicted.sum()) / divisor)) if divisor > 0 else 0.
+        if match:
+            motion = latent @ value
+            square = float(motion @ motion)
+            alpha = float(-2 * displacement @ motion / square) if square > 0 else 0.
+            if not 0 < alpha <= maximum:
+                report["reason"] = "No positive norm-matched adoption fits the protection interval."
+                return
+        if alpha <= 0 or np.min(predicted) <= 0:
+            report["reason"] = "No common positive predicted target gain."
+            return
+        best = 0.
+        for index in range(checks):
+            actualalpha = alpha * (.5 ** index) if not match else alpha * (1 + (0., -.05, .05, -.1, .1, -.2, .2, -.3)[index])
+            if not 0 < actualalpha <= maximum:
+                continue
+            candidate = tensor(baseline + actualalpha * direction)
+            applied = candidate.double() - baseline.double()
+            appliednorm = norm(applied) / length
+            applieddefect = abs(float((baseline.double() * applied).sum())) / (length * length)
+            if appliednorm == 0 or applieddefect > tolerance * appliednorm:
+                report["rounding"] += 1
+                continue
+            measured = tensor(native.endpoint(candidate))
+            if measured.shape != baseline.shape or measured.device != baseline.device:
+                raise ValueError("Tangent candidates must preserve baseline geometry.")
+            pixels = session.decode(measured).clamp(0, 1)
+            observed = score(pixels)
+            changes = (selected(observed, names) - current) / gain
+            controlled = feedback(observed)
+            if controlled.keys() != floors.keys():
+                raise ValueError("Tangent score heads changed during verification.")
+            observedresidual = residual(pixels)
+            observedcost = float(observedresidual @ observedresidual)
+            level = norm(measured.double() - field.neutral.double())
+            ratio = level / responselevel if responselevel > 0 else None
+            feasible = observedcost <= damage + 1e-10 * max(damage, np.finfo(float).tiny) and all(controlled[key] >= floors[key] - slacks.get(key, slack) for key in floors)
+            matched = not match or ratio is not None and abs(ratio - 1) <= .01
+            quality = float(changes.min())
+            accepted = bool(feasible and matched and quality > max(best, tolerance))
+            report["history"].append({"alpha": actualalpha, "gain": quality, "changes": changes.tolist(), "damage": observedcost, "endpointnorm": level, "endpointnormratio": ratio, "tangenterror": applieddefect, "feasible": bool(feasible), "matched": bool(matched), "accepted": accepted})
+            if accepted:
+                field.value, field.endpoint, field.prediction = candidate.detach().clone(), measured.detach().clone(), None
+                best = quality
+                report.update(status="accepted", accepted=True, alpha=actualalpha, gain=quality, damage=observedcost, endpointnormratio=ratio)
+        report["inputnormratio"] = norm(field.value.double()) / length
+    except Exhausted as error:
+        report["reason"] = str(error)
+    finally:
+        report.update(calls=session.calls - before[0], samples=session.samples - before[1], decodes=session.decodes - before[2], checks=len(report["history"]))
+        if limit is not None:
+            limit.phase = previous
 
 # Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

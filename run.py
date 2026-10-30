@@ -56,6 +56,12 @@ def common(parser):
     parser.add_argument("--fieldgeometry", type=str.casefold, choices=("coupled", "scalar"), default="coupled")
     parser.add_argument("--fieldrepair", type=int, choices=(0, 1, 2), default=0)
     parser.add_argument("--semantic", type=str.casefold, choices=("patches", "region"), default="patches")
+    parser.add_argument("--tangent", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--tangentgain", type=float, default=.02)
+    parser.add_argument("--tangentpenalty", type=float, default=1.)
+    parser.add_argument("--tangentchecks", type=int, default=3)
+    parser.add_argument("--tangentbasis", type=str.casefold, choices=("residual", "temporal"), default="residual")
+    parser.add_argument("--tangentnorm", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--end", type=float, default=.30)
     parser.add_argument("--scale", type=float, default=1.)
     parser.add_argument("--cleanup", action=argparse.BooleanOptionalAction, default=True)
@@ -288,6 +294,13 @@ def validate(args):
         raise ValueError("Field repair requires a coupled pullback with native cleanup and no adapter.")
     if args.semantic not in {"patches", "region"} or args.semantic == "region" and args.method not in {"path", "raw", "fixed"}:
         raise ValueError("Region semantics require path, raw, or fixed editing.")
+    if type(args.tangent) is not bool or type(args.tangentnorm) is not bool or type(args.tangentchecks) is not int or not 1 <= args.tangentchecks <= 8 or args.tangentbasis not in {"residual", "temporal"}:
+        raise ValueError("Tangent query settings are invalid.")
+    if number(args.tangentgain, "Tangent gain", 0) <= 0:
+        raise ValueError("Tangent gain must be positive.")
+    number(args.tangentpenalty, "Tangent protection weight", 0)
+    if args.tangent and (args.field != "pullback" or args.fieldgeometry != "coupled" or args.fieldrepair or not args.cleanup or args.adapter or args.method not in {"raw", "path"} or not args.clip):
+        raise ValueError("Tangent refinement requires coupled pullback, a local scorer, native cleanup, no field repair, and raw or path output.")
     if args.field == "ect" and (args.backbone != "vp" or args.delta != 0):
         raise ValueError("ECT transport requires --backbone vp and --delta 0.")
     if args.localizationtime is not None:
@@ -358,7 +371,7 @@ def load(args):
             from engine.flow import Editor
             editor = Editor.load(root, args.device, args.precision, args.size, args.backbone, args.flowguidance, args.flowconsistency)
         judge = None
-        if args.clip and args.method not in {"raw", "fixed"}:
+        if args.clip and (args.method not in {"raw", "fixed"} or args.tangent):
             from engine.judge import ClipJudge
             judge = ClipJudge.load(str(locate(Path("."), clean(args.clip, "clip"))), editor.device)
     except torch.cuda.OutOfMemoryError as error:
@@ -397,7 +410,7 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
     metadata = {"settings": dict(vars(args)), "source": source, "target": target, "imagesha256": hashlib.sha256(pixels.tobytes()).hexdigest(), "imageshape": list(pixels.shape), "imagehashformat": "fitted RGB float32 NCHW", "masksha256": hashlib.sha256(mask.convert("L").tobytes()).hexdigest() if mask is not None else None, "modelcheckpoint": getattr(editor, "metadata", None), "controlcheckpoint": getattr(judge, "metadata", None), "checkpointverification": "Weight hashes are recorded when local checkpoints are loaded."}
     metadata["reproducibility"] = snapshot()
     metadata["controlsignature"] = signature(args)
-    metadata["controlactive"] = judge is not None and args.method not in {"raw", "fixed", "base"}
+    metadata["controlactive"] = judge is not None and (args.method not in {"raw", "fixed", "base"} or args.tangent)
     metadata["configuration"] = {key: jsonfile(getattr(args, key, None)) for key in ("constraints", "probabilities", "radiusprofile")}
     adapterfile = getattr(args, "adapter", None)
     metadata["adaptersha256"] = digest(locate(Path("."), clean(adapterfile, "adapter"))) if adapterfile is not None else None
@@ -440,12 +453,23 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
         metadata["fieldnorm"] = float(base.double().norm())
         metadata["protectionsha256"] = hashlib.sha256(scoringmask.detach().float().cpu().contiguous().numpy().tobytes()).hexdigest()
         score = None
-        if args.method == "path" and judge is not None:
+        if (args.method == "path" or args.tangent) and judge is not None:
             options = {"layout": args.semantic} if args.semantic != "patches" else {}
             if args.attributes or args.retain:
                 options.update(attributes=args.attributes, retain=args.retain)
             score = judge.prepare(session.origin, source, target, scoringmask, args.localtext, **options)
             metadata["semanticviews"] = {"layout": args.semantic, "boxes": list(getattr(score, "boxes", ())), "scope": "Frozen inferred or supplied support; independent official masks are used only after selection."}
+        if args.tangent:
+            import numpy as np
+            from engine.field import redirect, temporal
+            redirect(constructed, native, score, scoringmask, args.tangentgain, args.tangentpenalty, args.tangentchecks, args.tangentnorm, args.tangentbasis, args.fieldprobe, args.fieldradius, args.fieldridge, args.fieldtolerance, args.scoretol, config.slacks)
+            base = constructed.value
+            metadata["fieldsha256"] = hashlib.sha256(base.detach().float().cpu().contiguous().numpy().tobytes()).hexdigest()
+            metadata["fieldnorm"] = float(base.double().norm())
+            if "temporal" in constructed.report:
+                constructed.report["initialtemporal"] = constructed.report["temporal"]
+                contrasts = [session.difference(session.editor.index(time)).detach().double().reshape(-1).cpu().numpy() for time in constructed.report["times"]]
+                constructed.report["temporal"] = temporal(np.stack(contrasts, axis=1), base.detach().double().reshape(-1).cpu().numpy(), args.fieldtolerance)
         path = ReferencePath(native, base, args.representation, args.seed, neutral, constructed.endpoint, constructed.baseline if args.method == "path" else None)
         if args.method == "raw":
             from engine.poll import protection
@@ -510,7 +534,7 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
         amplitudes = report.get("point") or (1., 1., 0.)
         report["adoptedfieldnorm"] = float((amplitudes[0] * path.low + amplitudes[1] * path.high).double().norm())
         if report["selected"] == "raw" and constructed.baseline is not None:
-            report["adoptedfieldnorm"] = constructed.report["repair"]["initialnorm"]
+            report["adoptedfieldnorm"] = constructed.report["baselinefieldnorm"]
         return result.image, report, session
     reference = ("pixel" if args.method == "projection" else "raw") if args.reference == "auto" else args.reference
     render = session.render if reference == "raw" else lambda field: session.render(field, reference=reference)

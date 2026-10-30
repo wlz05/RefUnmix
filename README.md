@@ -252,7 +252,7 @@ Download the backbone and control scorer before running. All checkpoints are loa
 
 For `--backbone vp`, place a compatible [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) checkpoint in `models/`, including `unet/`, `vae/`, `scheduler/`, `tokenizer/`, and `text_encoder/`. The text encoder can also be stored in `text/`.
 
-Place a [Transformers CLIP model and processor](https://huggingface.co/docs/transformers/model_doc/clip) in `clip/` for controlled editing. The `raw` and `fixed` modes run without CLIP. Evaluation with `--evalclip` requires a separate checkpoint from the control scorer.
+Place a [Transformers CLIP model and processor](https://huggingface.co/docs/transformers/model_doc/clip) in `clip/` for controlled editing. Standard `raw` and `fixed` modes run without CLIP; `raw --tangent` requires the frozen control scorer. Evaluation with `--evalclip` requires a separate checkpoint from the control scorer.
 
 For `--backbone flux` or `--backbone sd3`, provide the corresponding pipeline with its transformer, VAE, scheduler, tokenizers, and text encoders. The checkpoint determines the supported continuation schedule.
 
@@ -335,6 +335,12 @@ These commands use `--prior off`. Optional consistency priors consume additional
 | `--field` | `pullback` | Field: pullback, chord, instant, average, blend, ect, or zero |
 | `--fieldrepair` | `0` | Verified endpoint residual repair: zero, one, or two rounds |
 | `--semantic` | `patches` | Local control views: separate patches or one complete-region goal |
+| `--tangent` | off | Allocate a lateral residual field under the coupled baseline protection budget |
+| `--tangentgain` | `0.02` | Desired increase of each frozen target control head |
+| `--tangentpenalty` | `1` | Relative protection-response penalty |
+| `--tangentchecks` | `3` | Maximum real-output checks within the shared model budget |
+| `--tangentbasis` | `residual` | Include the remaining endpoint request; `temporal` restricts the dictionary |
+| `--tangentnorm` | off | Accept only actual endpoint-response norm ratios within 1% of baseline |
 | `--fieldweight` | `0.5` | Second-time weight for blend, in [0, 1] |
 | `--fieldshrink` | `0.7` | ECT shrinkage, in [0, 1]; requires epsilon VP and delta zero |
 | `--localizationtime` | start time | Shared protection probe time for native modes with baseline localization |
@@ -551,6 +557,7 @@ The printed `design.main` is `pullbackfull`, whose `changes` is empty. Each arm 
 | `alignment` | Coupled and scalar norm-matched field construction | 64 |
 | `semantic` | Region-level goals and current-state endpoint repair | 64 |
 | `residual` | Incremental versus residual compensation with the same responses and query caps | 64 |
+| `tangent` | Coupled raw anchor, tangent allocation, norm matching, and temporal-only dictionary | 64 |
 | `temporal` | Fixed temporal mixtures and ECT direct/continued/controlled arms | 64 |
 | `core` | Guarded field and reference coordinate controls | 64 |
 | `release` | Main reference-field compensation versus joint QCQP | 64 |
@@ -807,6 +814,66 @@ These diagnostics use the native field endpoint before reference control. Pullba
 Controller history records `verification` for every queried non-geometry proposal, including rejected proposals: `predictedgain`, `actualgain`, `predicteddamagechange`, and `actualdamagechange`. Each change is measured from the current anchor. Gains use the frozen control heads and scales; independent task annotations evaluate the final image. `audit.py` first averages release-query changes within each request, then applies the same request-within-seed and seed-level averaging used by the main tables. Paired confidence intervals resample source groups and recompute that seed-first statistic.
 
 Native probes use raw mode with priors and controller diagnostics disabled. Discrete reference paths require `--etas 0 1`. Raw inference rejects ignored prior or controller switches, and held-out consistency requires an enabled prior.
+
+### Tangent Endpoint Response Allocation
+
+`--tangent` refines the raw field around a **coupled pullback protection anchor**. It adds a lateral residual direction selected by measured native-output responses. It can run with `--method raw`, without subsequent reference search. `--method path --tangent` uses the refined field in the existing controller. Both modes charge all calibration and verification to the same request's model budget.
+
+Let $`F_b=B_b c_b`$ be the frozen anchor field. The dictionary contains the baseline, its temporal contrasts, and the normalized unfulfilled latent endpoint request. A local solve allocates the measured target response while penalizing protected drift:
+
+```math
+\min_{c_b^\top Mv=0,\;\lVert v\rVert_M\le\Delta_b}
+\left(\lVert R_{\mathrm{edit}}v-s_{\mathrm{target}}\rVert_2^2
++\gamma\lVert \widetilde R_{\mathrm{protect}}v\rVert_2^2
++\lambda_b\lVert v\rVert_M^2\right).
+```
+
+The metric tangent is defined at the final coupled coefficients, not at the initial temporal mean. `s_target` is a frozen desired control-score increase: target-caption similarity and, for nonempty edit support, the aggregated local target gain. Edit responses are normalized by `--tangentgain`; the direction penalty uses protection responses normalized by the baseline residual norm when it is nonzero. Adoption and actual verification use the original protection units. These are development settings, not values derived from the official test metric. The solve uses metric whitening and the exact tangent nullspace, then a bounded regularized inverse response.
+
+The actual field is $`F_b+\alpha B_bv`$. Positive adoption must satisfy
+
+```math
+\lVert r_b+\alpha R_{\mathrm{protect}}v\rVert_2^2\le D_b,
+\qquad 0\le\alpha\le1.
+```
+
+If a nonzero protected response is orthogonal to the existing residual, no positive amplitude preserves the identical budget in this model. Every visited amplitude is generated, decoded, and scored. Acceptance requires actual target gains, all frozen semantic floors, and actual protected damage no greater than the anchor's. A failed or interrupted request retains the paid coupled baseline. Protection weights define measurement support; they do not multiply the raw field. The standard run uses inferred support, and annotation masks remain reserved for postselection assessment unless oracle mode is explicitly requested.
+
+Tangency removes first-order radial scaling but does not conserve finite-step field energy. `--tangentnorm` therefore provides a separate control: it derives a nonzero norm-matching amplitude from the measured latent endpoint response and accepts only actual response norms within 1% of the baseline. It retains baseline when no such verified improvement exists. `--tangentbasis temporal` excludes the extra residual direction, testing whether an improvement is explainable by temporal reweighting alone.
+
+The branch requires `--field pullback --fieldgeometry coupled --cleanup --clip clip` and `--fieldrepair 0`. Standard `raw` editing remains available without CLIP; tangent `raw` explicitly loads the frozen control scorer. Its native continuation still uses `--poststeps 1`, while the complete editor performs the charged endpoint queries.
+
+Standalone raw-field refinement on all PIE requests:
+
+```bash
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method raw --tangent --tangentbasis residual --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --fieldrepair 0 --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/tangentraw
+```
+
+Run the complete comparison at the same sample/call caps and four seeds:
+
+```bash
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite tangent --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --method path --axes all --eta 0 --representation latent --algorithm trust --selection attain --gainloss 0 --poststeps 1 --guidance 1 --no-cfg --referencepath auto --candidates 12 --prior off --priorprobes 2 --release --releasepolicy residual --geometry output --no-compensation --monitor --certificate --localization baseline --no-control --no-heldout --no-frontier --no-archive --maxsamples 64 --maxcalls 64 --output outputs/tangenttest
+```
+
+| Arm | Output and intervention |
+|-----|--------------------------|
+| `full` | Supplied original main configuration |
+| `anchorraw` | Coupled raw baseline |
+| `tangentraw` | Verified tangent residual allocation, raw output |
+| `matchedraw` | Tangent raw output with actual endpoint norm matching |
+| `temporalraw` | Tangent raw output restricted to temporal directions |
+| `controlled` | Tangent field followed by reference control |
+
+Score the raw outputs with the same official calculator:
+
+```bash
+python -B RefUnmix/assess.py --input outputs/tangenttest/anchorraw/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/anchorrawmetrics.json
+python -B RefUnmix/assess.py --input outputs/tangenttest/tangentraw/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/tangentrawmetrics.json
+python -B RefUnmix/assess.py --input outputs/tangenttest/matchedraw/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/matchedrawmetrics.json
+python -B RefUnmix/assess.py --input outputs/tangenttest/temporalraw/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/temporalrawmetrics.json
+```
+
+Every arm retains all 700 requests and seeds 42, 52, 3047, and 3407; failed refinements return baseline rather than dropping rows. `field.tangent` saves actual gains, damage, adoption, tangent error, input norm ratio, endpoint norm ratio, charged calls/samples, and each verification. `audit.py` exports these under `field:tangent...`, including adoption coverage. Preserve the request-within-seed then four-seed mean. The caps bound total work; report actual NFE, scorer work, decodes, and runtime as well.
 
 ### Local Semantic Attainment
 

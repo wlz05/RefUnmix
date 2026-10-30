@@ -54,7 +54,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(plan["variants"]["pullbackfull"]["settings"][key], getattr(args, key))
 
     def testallsuites(self):
-        suites = ("residual", "semantic", "alignment", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals")
+        suites = ("tangent", "residual", "semantic", "alignment", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals")
         for suite in suites:
             args = self.args()
             args.suite = suite
@@ -81,6 +81,30 @@ class ProtocolTests(unittest.TestCase):
         args.goals = ["target"]
         with self.assertRaises(ValueError):
             design(args, variants(args.suite, base=args))
+
+    def testtangentmatrix(self):
+        args = self.args()
+        args.suite = "tangent"
+        plan = design(args, variants(args.suite, base=args))
+        self.assertFalse(plan["variants"]["full"]["changes"])
+        self.assertEqual(set(plan["variants"]), {"full", "anchorraw", "tangentraw", "matchedraw", "temporalraw", "controlled"})
+        for name, value in plan["variants"].items():
+            self.assertEqual(value["settings"]["maxsamples"], args.maxsamples)
+            self.assertEqual(value["settings"]["poststeps"], 1)
+
+    def testtangentruntime(self):
+        image = Image.new("RGB", (16, 16), (90, 128, 160))
+        for method in ("raw", "path"):
+            args = self.args("--tangent", "--method", method)
+            output, report, state = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args)
+            self.assertTrue(report["controlactive"])
+            self.assertIn("tangent", report["field"])
+            self.assertLessEqual(state.samples, args.maxsamples)
+            self.assertEqual(state.samples, state.limit.used)
+            self.assertEqual(output.shape, state.origin.shape)
+            if method == "path":
+                self.assertEqual(report["path"]["rawreference"], "initial field before repair")
+            json.dumps(report, allow_nan=False)
 
     def testsemanticruntime(self):
         args = self.args("--semantic", "region", "--fieldrepair", "1")
@@ -195,8 +219,8 @@ class ProtocolTests(unittest.TestCase):
         reference = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64)
         validate(reference)
         benchmark = [args for entry, args in executions if entry is main and args.split == "all" and not args.dry]
-        self.assertEqual(len(benchmark), 23)
-        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 200)
+        self.assertEqual(len(benchmark), 24)
+        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 206)
         for args in benchmark:
             plan = design(args, variants(args.suite, base=args))
             expected = deepcopy(reference)

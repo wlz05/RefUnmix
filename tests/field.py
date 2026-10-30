@@ -742,6 +742,160 @@ class TransportTests(unittest.TestCase):
         self.assertIn("field:temporalweight", values({"report": {"field": report}}))
         json.dumps(report, allow_nan=False)
 
+class TangentTests(unittest.TestCase):
+    def testmetricallocation(self):
+        from engine.geometry import tangent
+        anchor = np.array([1., 0., 0.])
+        metric = np.diag([2., 3., 4.])
+        value, report = tangent(np.eye(3), np.array([[0., 0., 1.]]), np.ones(3), anchor, metric, 1., .01, .3)
+        self.assertAlmostEqual(float(anchor @ metric @ value), 0., places=12)
+        self.assertLessEqual(float(value @ metric @ value), .09 + 1e-10)
+        self.assertGreater(value[1], value[2])
+        self.assertEqual(report["rank"], 2)
+        json.dumps(report, allow_nan=False)
+
+    def testtangentcovariance(self):
+        from engine.geometry import tangent
+        edit = np.array([[1., .3, 0.], [0., 1., 2.]])
+        protect = np.array([[.2, 1., .3]])
+        anchor, metric = np.array([1., .2, -.1]), np.diag([1., 2., 3.])
+        transform = np.array([[1., .3, 0.], [0., 2., .2], [.1, 0., 1.]])
+        left, _ = tangent(edit, protect, np.ones(2), anchor, metric)
+        right, _ = tangent(edit @ transform, protect @ transform, np.ones(2), np.linalg.solve(transform, anchor), transform.T @ metric @ transform)
+        np.testing.assert_allclose(left, transform @ right, atol=1e-9)
+
+    def testprotectioninterval(self):
+        from engine.geometry import adoption
+        self.assertAlmostEqual(adoption([-.1], [1.])[0], .2)
+        self.assertEqual(adoption([.1], [1.])[0], 0.)
+        self.assertEqual(adoption([0.], [1.])[0], 0.)
+        self.assertEqual(adoption([0.], [0.])[0], 1.)
+        self.assertEqual(adoption([], [])[0], 1.)
+        with self.assertRaises(ValueError):
+            adoption([0.], [np.nan])
+
+    def testtangentdegenerate(self):
+        from engine.geometry import tangent
+        for anchor in ([0.], [1.]):
+            value, report = tangent(np.ones((1, 1)), np.zeros((0, 1)), [1.], anchor, np.eye(1))
+            np.testing.assert_array_equal(value, [0.])
+        for metric in (np.zeros((2, 2)), np.array([[1., 1.], [0., 1.]])):
+            with self.assertRaises(ValueError):
+                tangent(np.eye(2), np.eye(2), [1., 1.], [1., 0.], metric)
+
+    def fixture(self, maximum=64, harmful=False):
+        from engine.field import Field
+        session = Session(maximum=maximum)
+        session.origin = torch.full((1, 3, 2, 2), .5)
+        session.decodes = 0
+        session.difference = lambda time: torch.tensor([1., 0., 0., 0.]).reshape_as(session.anchor)
+        native = Native(session, torch.eye(4))
+        native.offset = torch.zeros(4)
+        def decode(latent):
+            session.decodes += 1
+            result = session.origin.clone()
+            amount = float(latent.flatten()[1])
+            result[..., 0, 0] += .1 * (1 + amount if harmful and len(native.inputs) >= 4 else 1 - amount)
+            result[..., 0, 1] += .1 * amount
+            return result
+        session.decode = decode
+        value = torch.tensor([1., 0., 0., 0.]).reshape_as(session.anchor)
+        request = torch.tensor([1., 1., 0., 0.]).reshape_as(session.anchor)
+        field = Field(value.clone(), {"times": [.9, .75]}, torch.zeros_like(value), request)
+        mask = torch.zeros(1, 1, 2, 2)
+        mask[..., 0, 1] = 1
+        def score(image):
+            value = float(image[..., 0, 1].mean())
+            return {"target": value, "local": value, "localviews": 1}
+        return session, native, field, mask, score
+
+    def testactualredirect(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        baseline = field.value.clone()
+        redirect(field, native, score, mask)
+        report = field.report["tangent"]
+        self.assertTrue(report["accepted"])
+        self.assertGreater(float(field.value.flatten()[1]), 0.)
+        self.assertLessEqual(report["damage"], report["baselinedamage"] + 1e-12)
+        self.assertLess(abs(float((baseline * (field.value - baseline)).sum())), 1e-6)
+        self.assertFalse(report["fieldmasking"])
+        self.assertEqual(session.samples, session.limit.used)
+        self.assertEqual(session.limit.phase, "front")
+        self.assertTrue(torch.equal(field.baseline, baseline))
+        json.dumps(report, allow_nan=False)
+
+    def testtemporalcapacity(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        redirect(field, native, score, mask, family="temporal")
+        self.assertFalse(field.report["tangent"]["accepted"])
+        self.assertEqual(field.report["tangent"]["rank"], 1)
+        self.assertEqual(session.samples, 1)
+
+    def testactualfallback(self):
+        from engine.field import redirect
+        for maximum, harmful, match in ((3, False, False), (64, True, False), (64, False, True)):
+            with self.subTest(maximum=maximum, harmful=harmful, match=match):
+                session, native, field, mask, score = self.fixture(maximum, harmful)
+                baseline = field.value.clone()
+                redirect(field, native, score, mask, match=match)
+                self.assertFalse(field.report["tangent"]["accepted"])
+                self.assertTrue(torch.equal(field.value, baseline))
+                self.assertTrue(torch.equal(field.endpoint, baseline))
+                self.assertLessEqual(session.samples, maximum)
+                self.assertEqual(session.limit.phase, "front")
+
+    def testtangentflags(self):
+        from run import validate
+        for flags in (["--fieldrepair", "1"], ["--field", "chord"], ["--fieldgeometry", "scalar"], ["--no-cleanup"], ["--method", "fixed"], ["--tangentchecks", "0"]):
+            args = common(argparse.ArgumentParser()).parse_args(["--clip", "clip", "--tangent", *flags])
+            with self.subTest(flags=flags), self.assertRaises(ValueError):
+                validate(args)
+        args = common(argparse.ArgumentParser()).parse_args(["--method", "raw", "--tangent"])
+        with self.assertRaises(ValueError):
+            validate(args)
+
+    def testtangentemptyprotection(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        redirect(field, native, score, torch.ones_like(mask))
+        report = field.report["tangent"]
+        self.assertTrue(report["accepted"])
+        self.assertFalse(report["protectedvalid"])
+        self.assertEqual(report["damage"], 0.)
+
+    def testtangentzeroanchor(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        field.value.zero_()
+        redirect(field, native, score, mask)
+        report = field.report["tangent"]
+        self.assertFalse(report["accepted"])
+        self.assertEqual(report["gain"], 0.)
+        self.assertEqual(session.samples, 0)
+
+    def testtangentconflictingheads(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        def conflicting(image):
+            value = float(image[..., 0, 1].mean())
+            return {"target": value, "local": -value, "localviews": 1}
+        redirect(field, native, conflicting, mask)
+        self.assertFalse(field.report["tangent"]["accepted"])
+        self.assertEqual(field.report["tangent"]["gain"], 0.)
+
+    def testtangentretention(self):
+        from engine.field import redirect
+        session, native, field, mask, score = self.fixture()
+        def retaining(image):
+            value = score(image)
+            value["retain0"] = 1 - value["target"]
+            return value
+        redirect(field, native, retaining, mask, slacks={"retain0": 0.})
+        self.assertFalse(field.report["tangent"]["accepted"])
+        self.assertEqual(field.report["tangent"]["gain"], 0.)
+
 if __name__ == "__main__":
     unittest.main()
 
