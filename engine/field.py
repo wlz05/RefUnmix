@@ -474,10 +474,10 @@ def rescale(field, factor):
 @torch.no_grad()
 def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=False, family="residual", probe=.25, radius=1., ridge=.05, tolerance=1e-6, slack=.02, slacks=None, feedback=False, policy="joint"):
     # Redistribute residuals using measured semantic and protected responses.
-    from engine.geometry import tangent, adoption, matching, equivalent
+    from engine.geometry import tangent, adoption, matching, equivalent, frontier
     from engine.poll import feedback as feedbackscores
     import torch.nn.functional as functional
-    if not callable(score) or type(checks) is not int or not 1 <= checks <= 8 or type(match) is not bool or type(feedback) is not bool or family not in {"residual", "temporal", "shared"} or policy not in {"joint", "conditional"}:
+    if not callable(score) or type(checks) is not int or not 1 <= checks <= 8 or type(match) is not bool or type(feedback) is not bool or family not in {"residual", "temporal", "shared"} or policy not in {"joint", "conditional", "frontier"}:
         raise ValueError("Tangent refinement requires a scorer and valid query controls.")
     for value, label in ((gain, "Tangent gain"), (probe, "Tangent probe"), (ridge, "Tangent ridge")):
         if number(value, label, 0) <= 0:
@@ -612,7 +612,22 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
         seedamplitude = None
         def plan(repair=True):
             value, allocation = tangent(edit / gain, protect / protectscale, np.ones(len(names)), anchor, np.eye(count), penalty, ridge, radius, tolerance, r / protectscale)
-            if policy == "conditional" and repair:
+            if policy == "frontier" and repair:
+                initialvalue = value.copy()
+                try:
+                    with np.errstate(over="raise", invalid="raise", divide="raise"):
+                        value, envelope = frontier(edit / gain, protect / protectscale, r / protectscale, np.ones(len(names)), anchor, np.eye(count), radius, tolerance)
+                    envelope.update(normalization=protectscale, damagephysical=envelope["damage"] * protectscale ** 2, floorphysical=envelope.get("floor", envelope["budget"]) * protectscale ** 2, budgetphysical=damage)
+                    allocation["envelope"] = envelope
+                    report["envelope"] = envelope
+                    allocation["norm"] = float(np.linalg.norm(value))
+                except (ValueError, np.linalg.LinAlgError, FloatingPointError, OverflowError) as error:
+                    value = initialvalue
+                    allocation["envelope"] = {"status": "joint proposal retained", "reason": str(error), "queries": 0}
+                    report["envelopefailure"] = str(error)
+                    report["allocation"] = allocation
+                    return []
+            elif policy == "conditional" and repair:
                 initialvalue = value.copy()
                 try:
                     with np.errstate(over="raise", invalid="raise", divide="raise"):
@@ -630,7 +645,7 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
                     value = initialvalue
                     allocation["conditional"] = {"status": "original proposal retained", "reason": str(error), "queries": 0}
                     report["conditionalfailure"] = str(error)
-            elif policy == "conditional":
+            elif policy in {"conditional", "frontier"}:
                 allocation["conditional"] = {"status": "joint seed", "queries": 0}
             report["allocation"] = allocation
             direction = torch.from_numpy((length * basis @ value).reshape(baseline.shape)).to(baseline.device, torch.float32)
@@ -647,7 +662,7 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
             predicted = (edit @ value) / gain
             divisor = float(predicted @ predicted + penalty * (effect @ effect) / (protectscale * protectscale) + allocation["model"]["damping"] * (value @ value))
             numerator = float(predicted.sum() - penalty * (r @ effect) / (protectscale * protectscale))
-            alpha = min(maximum, max(0., numerator / divisor)) if divisor > 0 else 0.
+            alpha = maximum if policy == "frontier" and repair else min(maximum, max(0., numerator / divisor)) if divisor > 0 else 0.
             report["amplitudemodel"] = {"linear": numerator, "quadratic": divisor, "unmatched": alpha}
             allocation["amplitudemodel"] = dict(report["amplitudemodel"])
             intervals = [(0., maximum)]
@@ -663,14 +678,14 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
             amplitudes = [min(high, max(low, alpha)) for low, high in intervals]
             amplitudes += [value * .5 ** index for value in amplitudes[:] for index in range(1, checks + 1)]
             amplitudes += [value for row in intervals for value in (row[1], (row[0] + row[1]) / 2, row[0])]
-            amplitudes = sorted(set(value for value in amplitudes if value > 0 and any(low <= value <= high for low, high in intervals)), key=lambda value: (divisor * value * value - 2 * numerator * value, -value))
+            amplitudes = sorted(set(value for value in amplitudes if value > 0 and any(low <= value <= high for low, high in intervals)), key=lambda value: (-value,) if policy == "frontier" and repair else (divisor * value * value - 2 * numerator * value, -value))
             if policy == "conditional" and repair and seedamplitude is not None and any(low <= seedamplitude <= high for low, high in intervals):
                 amplitudes = [seedamplitude] + [alpha for alpha in amplitudes if alpha != seedamplitude]
-            kind = "conditional" if policy == "conditional" and repair else "seed" if policy == "conditional" else "joint"
+            kind = policy if policy in {"conditional", "frontier"} and repair else "seed" if policy in {"conditional", "frontier"} else "joint"
             return [(alpha, value, direction, predicted, allocation, kind) for alpha in amplitudes]
 
         best, bestdamage, locked, seen = 0., damage, None, []
-        if policy == "conditional":
+        if policy in {"conditional", "frontier"}:
             seeds = plan(False)
             seedamplitude = seeds[0][0] if seeds else None
             proposals = seeds[:1] + plan() + seeds[1:]
@@ -707,7 +722,7 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
             quality = float(changes.min())
             retained = locked is None or bool(np.all(changes >= locked - tolerance))
             better = quality > max(best, tolerance)
-            if policy == "conditional" and locked is not None:
+            if policy in {"conditional", "frontier"} and locked is not None:
                 better = quality > best + tolerance or quality >= best - tolerance and observedcost < bestdamage - 1e-10 * max(bestdamage, np.finfo(float).tiny)
             accepted = bool(feasible and matched and retained and better)
             violations = [key for key in floors if controlled[key] < floors[key] - slacks.get(key, slack)]
@@ -719,12 +734,12 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
                 violations.append("target gain")
             if not retained:
                 violations.append("realized target")
-            report["history"].append({"alpha": actualalpha, "kind": kind, "gain": quality, "changes": changes.tolist(), "predicted": (actualalpha * predicted).tolist(), "model": len(report["updates"]), "damage": observedcost, "endpointnorm": level, "endpointnormratio": ratio, "tangenterror": applieddefect, "violations": violations, "feasible": bool(feasible), "matched": bool(matched), "retained": retained, "accepted": accepted})
+            report["history"].append({"alpha": actualalpha, "kind": kind, "gain": quality, "changes": changes.tolist(), "predicted": (actualalpha * predicted).tolist(), "model": len(report["updates"]), "semanticerror": float(np.linalg.norm(changes * gain - actualalpha * edit @ value)), "protectionerror": float(np.linalg.norm(observedresidual - r - actualalpha * protect @ value)), "predicteddamage": float(np.linalg.norm(r + actualalpha * protect @ value) ** 2), "damage": observedcost, "endpointnorm": level, "endpointnormratio": ratio, "tangenterror": applieddefect, "violations": violations, "feasible": bool(feasible), "matched": bool(matched), "retained": retained, "accepted": accepted})
             if accepted:
                 field.value, field.endpoint, field.prediction = candidate.detach().clone(), measured.detach().clone(), None
                 field.pixels, field.scores = pixels.detach().clone(), dict(observed)
                 best, bestdamage = quality, observedcost
-                if policy == "conditional":
+                if policy in {"conditional", "frontier"}:
                     locked = changes.copy() if locked is None else np.maximum(locked, changes)
                     report["semanticlock"] = locked.tolist()
                 report.update(status="accepted", accepted=True, selectedkind=kind, alpha=actualalpha, gain=quality, damage=observedcost, endpointnormratio=ratio)

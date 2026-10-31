@@ -62,7 +62,7 @@ def common(parser):
     parser.add_argument("--tangentpenalty", type=float, default=1.)
     parser.add_argument("--tangentchecks", type=int, default=3)
     parser.add_argument("--tangentbasis", type=str.casefold, choices=("residual", "temporal", "shared"), default="residual")
-    parser.add_argument("--tangentpolicy", type=str.casefold, choices=("joint", "conditional"), default="joint")
+    parser.add_argument("--tangentpolicy", type=str.casefold, choices=("joint", "conditional", "frontier"), default="joint")
     parser.add_argument("--tangentnorm", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--tangentfeedback", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--end", type=float, default=.30)
@@ -297,7 +297,7 @@ def validate(args):
         raise ValueError("Field repair requires a coupled pullback with native cleanup and no adapter.")
     if args.semantic not in {"patches", "region"} or args.semantic == "region" and args.method not in {"field", "path", "raw", "fixed"}:
         raise ValueError("Region semantics require path, raw, or fixed editing.")
-    if type(args.tangent) is not bool or type(args.tangentnorm) is not bool or type(args.tangentchecks) is not int or not 1 <= args.tangentchecks <= 8 or args.tangentbasis not in {"residual", "temporal", "shared"} or args.tangentpolicy not in {"joint", "conditional"}:
+    if type(args.tangent) is not bool or type(args.tangentnorm) is not bool or type(args.tangentchecks) is not int or not 1 <= args.tangentchecks <= 8 or args.tangentbasis not in {"residual", "temporal", "shared"} or args.tangentpolicy not in {"joint", "conditional", "frontier"}:
         raise ValueError("Tangent query settings are invalid.")
     if number(args.tangentgain, "Tangent gain", 0) <= 0:
         raise ValueError("Tangent gain must be positive.")

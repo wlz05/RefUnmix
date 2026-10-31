@@ -10,6 +10,7 @@ from evaluate import aggregate, declared, state
 
 RADIAL = {"zero": 0., "half": .5, "weak": .75, "anchor": 1., "strong": 1.25, "large": 1.5, "double": 2.}
 CONDITIONAL = {"full", "anchor", "expanded", "plain", "residual", "feedback", "matched"}
+ENVELOPE = (CONDITIONAL - {"plain"}) | {"conditional"}
 
 def index(rows):
     declared({"rows": rows})
@@ -141,17 +142,22 @@ def compare(arms, radial=RADIAL, reference="full", baseline="anchor", matched="m
 
 def conditional(arms, inference=None, repeats=2000, seed=42):
     # Compare protection rules within the same measured field dictionary.
-    if set(arms) != CONDITIONAL:
+    envelope = set(arms) == ENVELOPE
+    if set(arms) != CONDITIONAL and not envelope:
         raise ValueError("Conditional comparisons require the complete seven-arm matrix.")
     verified = compare(arms, radial={"anchor": 1.}, inference=inference, repeats=repeats, seed=seed)
     pairs = {"dictionary": ("plain", "expanded"), "rule": ("expanded", "full"), "capacity": ("residual", "full"), "feedback": ("full", "feedback"), "anchor": ("anchor", "full")}
+    if envelope:
+        pairs = {"rule": ("expanded", "full"), "ceiling": ("conditional", "full"), "capacity": ("residual", "full"), "feedback": ("full", "feedback"), "anchor": ("anchor", "full")}
     result = {"schema": 1, "arms": {name: aggregate(rows) for name, rows in arms.items()}, "comparisons": {name: {"reference": first, "comparison": second, **paired(arms[first], arms[second], repeats, seed)} for name, (first, second) in pairs.items()}, "normmatched": verified["normmatched"], "scope": "Fixed configurations with model-space projection and realized control-head retention; final official image metrics are independently scored."}
     if inference is not None:
         traces = [row["report"]["field"].get("tangent", {}) for row in inference["full"]]
-        locks = [trace.get("conditionalcapacity", {}) for trace in traces]
+        locks = [trace.get("envelope", {}) if envelope else trace.get("conditionalcapacity", {}) for trace in traces]
         history = [row for trace in traces for row in trace.get("history", [])]
-        result["activity"] = {"requests": len(traces), "queried": sum(trace.get("checks", 0) > 0 for trace in traces), "accepted": sum(trace.get("accepted") is True for trace in traces), "repairable": sum(lock.get("nullity", 0) > 0 for lock in locks), "repaired": sum(lock.get("status") == "repaired" and lock.get("after", 0) < lock.get("before", 0) for lock in locks), "repairchecks": sum(row.get("kind") == "conditional" for row in history), "seedchecks": sum(row.get("kind") == "seed" for row in history), "targetrejections": sum("realized target" in row.get("violations", []) for row in history), "noqueryrepairs": sum(lock.get("queries") == 0 for lock in locks), "sourceendpoints": sum(trace.get("sources", 0) for trace in traces), "sourcecalls": sum(trace.get("shared", {}).get("queries", 0) for trace in traces)}
-        result["activity"].update(selectedrepair=sum(trace.get("selectedkind") == "conditional" for trace in traces), retainedseed=sum(trace.get("selectedkind") == "seed" for trace in traces))
+        result["activity"] = {"requests": len(traces), "queried": sum(trace.get("checks", 0) > 0 for trace in traces), "accepted": sum(trace.get("accepted") is True for trace in traces), "repairable": sum(lock.get("nullity", 0) > 0 for lock in locks), "repaired": sum(lock.get("status") == "repaired" and lock.get("after", 0) < lock.get("before", 0) for lock in locks), "repairchecks": sum(row.get("kind") == ("frontier" if envelope else "conditional") for row in history), "seedchecks": sum(row.get("kind") == "seed" for row in history), "targetrejections": sum("realized target" in row.get("violations", []) for row in history), "noqueryrepairs": sum(lock.get("queries") == 0 for lock in locks), "sourceendpoints": sum(trace.get("sources", 0) for trace in traces), "sourcecalls": sum(trace.get("shared", {}).get("queries", 0) for trace in traces)}
+        if envelope:
+            result["activity"].update(resolved=sum(lock.get("rank", 0) > 0 for lock in locks), modelprogress=sum(lock.get("progress", 0) > 0 for lock in locks), responsefailures=sum(bool(trace.get("envelopefailure")) for trace in traces))
+        result["activity"].update(selectedrepair=sum(trace.get("selectedkind") == ("frontier" if envelope else "conditional") for trace in traces), retainedseed=sum(trace.get("selectedkind") == "seed" for trace in traces))
     return result
 
 def load(summary, metrics, repeats=2000, seed=42):
@@ -160,9 +166,9 @@ def load(summary, metrics, repeats=2000, seed=42):
     suitehash = digest(suitepath)
     suite = read(suitepath)
     kind = suite.get("settings", {}).get("suite")
-    if suite.get("schema") != 1 or kind not in {"amplitude", "conditional"} or not isinstance(suite.get("variants"), dict):
-        raise ValueError("Response analysis requires an amplitude or conditional suite summary.")
-    expected = CONDITIONAL if kind == "conditional" else set(RADIAL) | {"full", "matched", "feedback"}
+    if suite.get("schema") != 1 or kind not in {"amplitude", "conditional", "envelope"} or not isinstance(suite.get("variants"), dict):
+        raise ValueError("Response analysis requires an amplitude, conditional, or envelope suite summary.")
+    expected = ENVELOPE if kind == "envelope" else CONDITIONAL if kind == "conditional" else set(RADIAL) | {"full", "matched", "feedback"}
     if set(suite["variants"]) != expected:
         raise ValueError("The complete response matrix is required for analysis.")
     directory = locate(Path("."), clean(metrics, "metrics"))
@@ -214,7 +220,7 @@ def load(summary, metrics, repeats=2000, seed=42):
                 first, second = reference.get("fieldnorm"), report.get("fieldnorm")
                 if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 for value in (first, second)) or not math.isclose(second, RADIAL[name] * first, rel_tol=1e-5, abs_tol=1e-12):
                     raise ValueError("A radial output changed the constructed field direction or amplitude.")
-    result = (conditional if kind == "conditional" else compare)(arms, inference=inference, repeats=repeats, seed=seed)
+    result = (conditional if kind in {"conditional", "envelope"} else compare)(arms, inference=inference, repeats=repeats, seed=seed)
     if any(digest(path) != value for path, value in hashes.items()):
         raise ValueError("A curve input changed during analysis.")
     result.update(protocolsha256=protocol, mappingsha256=mapping, suitehash=suitehash)

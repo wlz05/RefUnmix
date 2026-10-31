@@ -297,8 +297,11 @@ class BatchTests(unittest.TestCase):
                 for key in ("calls", "samples", "decodes", "textcalls"):
                     self.assertEqual(result[1]["stats"][key], expected[seed][1]["stats"][key])
 
-    def testconditionalbatch(self):
-        args = self.args("--method", "field", "--semantic", "region", "--tangentfeedback", "--tangentbasis", "shared", "--tangentpolicy", "conditional", "--maxsamples", "32", "--maxcalls", "32")
+    def testfrontierbatch(self):
+        self.testconditionalbatch("frontier")
+
+    def testconditionalbatch(self, policy="conditional"):
+        args = self.args("--method", "field", "--semantic", "region", "--tangentfeedback", "--tangentbasis", "shared", "--tangentpolicy", policy, "--maxsamples", "32", "--maxcalls", "32")
         image = Image.new("RGB", (16, 16), (70, 90, 120))
         seeds = (42, 52, 3047, 3407)
         expected = {}

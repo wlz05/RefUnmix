@@ -17,6 +17,8 @@ from engine.reproduce import digest
 def variants(suite, consistency="ddpm", base=None):
     # Freeze one main configuration across all ablation suites.
     shared = defaults(base)
+    if suite == "envelope":
+        return {"full": shared, "anchor": {**shared, "method": "raw", "tangent": False, "tangentbasis": "residual", "tangentpolicy": "joint"}, "expanded": {**shared, "tangentpolicy": "joint"}, "conditional": {**shared, "tangentpolicy": "conditional"}, "residual": {**shared, "tangentbasis": "residual"}, "feedback": {**shared, "tangentfeedback": True}, "matched": {**shared, "tangentnorm": True}}
     if suite == "conditional":
         return {"full": shared, "anchor": {**shared, "method": "raw", "tangent": False, "tangentbasis": "residual", "tangentpolicy": "joint"}, "expanded": {**shared, "tangentpolicy": "joint"}, "plain": {**shared, "tangentbasis": "residual", "tangentpolicy": "joint"}, "residual": {**shared, "tangentbasis": "residual"}, "feedback": {**shared, "tangentfeedback": True}, "matched": {**shared, "tangentnorm": True}}
     if suite == "amplitude":
@@ -92,8 +94,10 @@ def variants(suite, consistency="ddpm", base=None):
 
 def design(args, controls):
     # Verify the full arm before loading checkpoints.
-    if args.method == "field" and args.suite not in {"integrated", "amplitude", "conditional"}:
-        raise ValueError("Integrated field experiments require --suite integrated, amplitude, or conditional; historical suites use --method path.")
+    if args.method == "field" and args.suite not in {"integrated", "amplitude", "conditional", "envelope"}:
+        raise ValueError("Integrated field experiments require --suite integrated, amplitude, conditional, or envelope; historical suites use --method path.")
+    if args.suite == "envelope" and (args.method != "field" or args.tangent or args.tangentbasis != "shared" or args.tangentpolicy != "frontier" or args.tangentnorm or args.tangentfeedback or args.fieldfactor != 1 or args.fieldrepair or args.field != "pullback" or args.fieldgeometry != "coupled" or args.semantic != "region"):
+        raise ValueError("Envelope trials require shared coupled fields and frontier allocation.")
     if args.suite == "conditional" and (args.method != "field" or args.tangent or args.tangentbasis != "shared" or args.tangentpolicy != "conditional" or args.tangentnorm or args.tangentfeedback or args.fieldfactor != 1 or args.fieldrepair or args.field != "pullback" or args.fieldgeometry != "coupled" or args.semantic != "region"):
         raise ValueError("Conditional trials require shared coupled fields, conditional policy, and region semantics.")
     if args.suite in {"integrated", "amplitude"} and (args.method != "field" or args.tangent or args.tangentbasis != "residual" or args.tangentpolicy != "joint" or args.tangentnorm or args.tangentfeedback or args.fieldfactor != 1 or args.fieldrepair or args.field != "pullback" or args.fieldgeometry != "coupled" or args.semantic != "region"):
@@ -181,7 +185,7 @@ def frozen(args, chosen):
 def main():
     parser = datasetargs(common(argparse.ArgumentParser(description="Run declared benchmark or validation/test ablations.")))
     parser.set_defaults(split="val", output="./trials")
-    parser.add_argument("--suite", type=str.casefold, choices=("conditional", "amplitude", "integrated", "tangent", "residual", "semantic", "alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
+    parser.add_argument("--suite", type=str.casefold, choices=("envelope", "conditional", "amplitude", "integrated", "tangent", "residual", "semantic", "alignment", "temporal", "fields", "null", "core", "reference", "diagnosis", "leverage", "frontier", "attainment", "release", "geometry", "prior", "mechanism", "search", "guidance", "budget", "candidates", "cost", "solver", "goals"), default="core")
     parser.add_argument("--recipe", default=None)
     parser.add_argument("--dry", action="store_true", help="Print effective variants without loading data or checkpoints.")
     args = parser.parse_args()

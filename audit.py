@@ -41,6 +41,8 @@ def values(row):
             result["field:tangent" + name + "error"] = sum(row["error"][name] for row in updates)
     lock = field.get("tangent", {}).get("selectedallocation", field.get("tangent", {}).get("allocation", {})).get("conditional", {})
     result.update({"field:conditional" + name: lock.get(name) for name in ("rank", "nullity", "before", "after", "semanticerror", "movement")})
+    envelope = field.get("tangent", {}).get("envelope", {})
+    result.update({"field:envelope" + name: envelope.get(name) for name in ("progress", "maximum", "floor", "damage", "budget", "unresolved", "rank", "nullity", "semanticerror", "damagephysical", "floorphysical", "budgetphysical", "damagelower", "spectraltail")})
     for key in ("gain", "damagechange", "evaluations"):
         result["selection:" + key] = report.get(key)
     for key in ("interactionenergy", "interactionratio", "damageinteraction", "damageoverlap", "damagenonlinear"):

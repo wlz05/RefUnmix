@@ -1,6 +1,6 @@
 # RefUnmix: Protected-Response Compensation for Image Editing
 
-**RefUnmix** constructs an editing field by protecting within a fixed target-response class. A coupled pullback field supplies the anchor; measured endpoint responses identify alternative input directions that retain the proposed target change while reducing protected distortion.
+**RefUnmix** constructs an editing field from the minimum protected damage needed to realize a target response. Measured native endpoints define this response frontier; the original protection budget determines how much of the requested change the field can deliver.
 
 The primary `--method field` profile incorporates response allocation and verification into field construction, then exports its cached native endpoint. It runs no separate reference controller. Frozen one-step or few-step continuation is queried a finite number of times; all model samples, forwards, VAE decodes, control scores, latency, and peak memory remain charged.
 
@@ -12,7 +12,7 @@ The primary `--method field` profile incorporates response allocation and verifi
 
 ### Core Insight
 
-**A protected update can be useful when it repairs an existing error.** The decisive quantity is the total output residual, including its cross term with the proposed change. RefUnmix uses this residual when choosing a tangent field direction and when deciding how much of it to adopt. Tangency removes first-order radial scaling; the generated endpoint determines semantic benefit and protection feasibility.
+**The cost of one editing direction is not the cost of the requested edit.** Different input combinations can produce the same target response with different protected damage. RefUnmix minimizes this damage at each target completion level, then selects the largest feasible level under the original budget. Existing error remains in the residual, so a new response can repair damage already present.
 
 [ChordEdit](https://arxiv.org/abs/2602.19083) stabilizes coarse-step transport, [PreciseEdit](https://arxiv.org/abs/2610.23535) allocates strong transport by directional and spatial reliability, and [LOCO Edit](https://arxiv.org/html/2409.02374v3) uses regional Jacobian projections. RefUnmix allocates an unresolved request in the coupled field's tangent dictionary using complete generated-output responses. The optional reference-control extension is tested separately against the integrated field.
 
@@ -93,7 +93,7 @@ v_0=\arg\min_{c_b^\top Mv=0,\ \lVert v\rVert_M\le\Delta_b}
 +\lambda_b\lVert v\rVert_M^2\right).
 ```
 
-The conditional profile sets $`v^\star=\mathcal C_{Sv_0}(v_0)`$ by minimizing the regularized protected residual at fixed target response; the joint comparison sets $`v^\star=v_0`$. Details and the shared-response dictionary appear in [Protection at a Fixed Target Response](#protection-at-a-fixed-target-response). The protected term includes the current residual. Its cross term lets a direction repair existing damage; penalizing only $`\lVert Pv\rVert^2`$ misses this opportunity. With $`p=Pv^\star`$, adoption obeys
+The earlier conditional profile sets $`v^\star=\mathcal C_{Sv_0}(v_0)`$ by minimizing the regularized protected residual at fixed target response; the joint comparison sets $`v^\star=v_0`$. Details and the shared-response dictionary appear in [Protection at a Fixed Target Response](#protection-at-a-fixed-target-response). The protected term includes the current residual. Its cross term lets a direction repair existing damage; penalizing only $`\lVert Pv\rVert^2`$ misses this opportunity. With $`p=Pv^\star`$, adoption obeys
 
 ```math
 F_\star=F_b+\alpha B_bv^\star,\qquad
@@ -334,7 +334,7 @@ python -B RefUnmix/doctor.py --batch 3 --model models --clip clip --device cuda:
 ### 3. Edit One Image
 
 ```bash
-python -B RefUnmix/main.py --image input.png --source "A person wearing a blue shirt." --target "A person wearing a striped shirt." --model models --clip clip --device cuda:0 --precision fp32 --field pullback --method field --semantic region --tangentbasis shared --tangentpolicy conditional --prior off --maxsamples 15 --maxcalls 15 --tangentchecks 3 --seed 42 --no-control --no-heldout --output outputs/result.png --report outputs/result.json
+python -B RefUnmix/main.py --image input.png --source "A person wearing a blue shirt." --target "A person wearing a striped shirt." --model models --clip clip --device cuda:0 --precision fp32 --field pullback --method field --semantic region --tangentbasis shared --tangentpolicy frontier --prior off --maxsamples 15 --maxcalls 15 --tangentchecks 3 --seed 42 --no-control --no-heldout --output outputs/result.png --report outputs/result.json
 ```
 
 Provide source and target image captions through `--source` and `--target`. Each run saves the edited image and a JSON report containing controls, inference costs, and checkpoint hashes.
@@ -362,7 +362,7 @@ These commands use `--prior off`. Optional consistency priors consume additional
 | `--tangentpenalty` | `1` | Relative total protected-residual penalty |
 | `--tangentchecks` | `3` | Maximum real-output checks within the shared model budget |
 | `--tangentbasis` | `residual` | Temporal/request directions; `shared` adds a matched common-mode candidate |
-| `--tangentpolicy` | `joint` | `conditional` repairs protection within the proposed target-response class |
+| `--tangentpolicy` | `joint` | `joint`: weighted allocation; `conditional`: fixed-response repair; `frontier`: budgeted target progress |
 | `--tangentnorm` | off | Accept only actual endpoint-response norm ratios within 1% of baseline |
 | `--fieldweight` | `0.5` | Second-time weight for blend, in [0, 1] |
 | `--fieldshrink` | `0.7` | ECT shrinkage, in [0, 1]; requires epsilon VP and delta zero |
@@ -531,18 +531,18 @@ For the four-request alternative, replace `--batch 3` with `--batch 4` throughou
 
 Run the following commands from `workspace/` in one process on one RTX 4090. The command profile uses FP32, `cuda:0`, and seeds **42 52 3047 3407**. Keep the same backbone, control checkpoint, precision, and input files across compared runs. Current paper experiments use `evaluate.py` and `trial.py`.
 
-The primary conditional field uses `--method field --semantic region --tangentbasis shared --tangentpolicy conditional`. Response allocation is enabled by this method; no additional `--tangent` flag is required. Its baseline, desired gain, protection support, and semantic floors stay fixed through verification. The parser retains the earlier `path` default for existing scripts, so select `field` explicitly.
+The primary envelope field uses `--method field --semantic region --tangentbasis shared --tangentpolicy frontier`. Response allocation is enabled by this method; no additional `--tangent` flag is required. Its baseline, desired gain, protection support, and semantic floors stay fixed through verification. The parser retains the earlier `path` default for existing scripts, so select `field` explicitly.
 
 **Conditional field, 64-sample cap:**
 
 ```bash
-python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis shared --tangentpolicy conditional --no-tangentnorm --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 64 --maxcalls 64 --output outputs/main
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis shared --tangentpolicy frontier --no-tangentnorm --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 64 --maxcalls 64 --output outputs/main
 ```
 
 **Conditional field, 15-sample cap:**
 
 ```bash
-python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis shared --tangentpolicy conditional --no-tangentnorm --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 15 --maxcalls 15 --output outputs/matched
+python -B RefUnmix/evaluate.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis shared --tangentpolicy frontier --no-tangentnorm --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 15 --maxcalls 15 --output outputs/matched
 ```
 
 The main shared dictionary adds one matched source zero-field endpoint and at most one lateral direction. With two temporal directions, one residual, one shared candidate, and three checks, the single-condition one-step profile uses at most 15 sample evaluations. All costs remain per request.
@@ -864,6 +864,68 @@ Controller history records `verification` for every queried non-geometry proposa
 
 Native probes use raw mode with priors and controller diagnostics disabled. Discrete reference paths require `--etas 0 1`. Raw inference rejects ignored prior or controller switches, and held-out consistency requires an enabled prior.
 
+### Protected Response Frontier
+
+The current formulation addresses three bottlenecks: a scale sweep explores only one input ray; fixing a conservative proposal's target response leaves its completion level unchanged; local input geometry does not predict finite decoded-output effects exactly.
+
+| Module | Input | Output | Purpose |
+|---|---|---|---|
+| Response Identification (RI) | Source, conditions, matched noise, native generator | Coupled anchor, direction dictionary, target response $`S`$, protected response $`P`$, current residual $`r_b`$ | Measure how candidate interventions affect complete generated outputs |
+| Protected Response Envelope (PRE) | Measured responses, requested gain, metric ball, original budget | Minimum-damage curve, feasible completion level, candidate field | Convert repair capacity into additional target progress |
+| Native Verification (NV) | Candidate field and retained actual output | Verified native endpoint and edited image | Enforce actual protection and retain achieved target gains within the same query allowance |
+
+RI includes initial endpoint calibration and candidate measurement. PRE is the central operator; NV checks its finite-amplitude prediction. Their shared object is the requested output response.
+
+In metric-orthonormal tangent coordinates $`T`$, let $`A_s=ST`$, $`g=A_sA_s^\dagger\mathbf1`$, and $`D_b=\lVert r_b\rVert^2`$. The projected request and its unresolved component are logged separately. PRE solves
+
+```math
+\mathcal D(\eta)=\min_{v\in\mathcal T_b,\ Sv=\eta g,\ \lVert v\rVert_M\le\Delta_b}
+\lVert r_b+Pv\rVert^2,\qquad
+\eta_\star=\max\{\eta\in[0,1]:\mathcal D(\eta)\le D_b\}.
+```
+
+Writing $`v=T(\eta A_s^\dagger g+Nw)`$ with $`N`$ spanning $`\ker A_s`$ separates fixed target progress from same-response compensation. The remaining radius is $`\sqrt{\Delta_b^2-\eta^2\lVert A_s^\dagger g\rVert^2}`$. A small trust-region least-squares solve supplies each envelope point; its scalar budget feasibility is searched by bisection. No generator query is spent on these algebraic operations.
+
+The earlier fixed-response projection remains an ablation. If a joint proposal already minimizes the same semantic/protection objective without input regularization, fixing its target response cannot lower that objective further. With regularization, any damage reduction must pay additional input norm. PRE instead treats completion as the decision variable. It can therefore spend repair capacity on increasing target response, rather than only polishing the original conservative proposal.
+
+Use `--method field --semantic region --tangentbasis shared --tangentpolicy frontier`. These options leave old recipes explicit and reproducible. `--frontier` is the separate historical controller diagnostic; the field policy is selected by `--tangentpolicy frontier`, with `--no-frontier` below. At most three actual checks are shared by the joint seed and envelope candidates. Actual damage, frozen semantic floors, realized target gains, and optional endpoint norm matching determine adoption. Logs include unresolved request, progress, irreducible resolved damage, finite-radius damage, and predicted/actual response errors. The shared one-step profile remains at most 15 sample evaluations.
+
+The `envelope` suite uses seven fixed arms: `anchor`, `expanded` (joint), `conditional` (fixed response), `full` (PRE), `residual` (PRE without the shared candidate), `feedback`, and `matched`. `expanded`/`conditional`/`full` share the same measured dictionary and probe protocol. Official scores use the same calculator after outputs are frozen.
+
+**64-sample upper bound, one RTX 4090, three concurrent requests:**
+
+```bash
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite envelope --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --fieldfactor 1 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis shared --tangentpolicy frontier --no-tangentnorm --no-tangentfeedback --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 64 --maxcalls 64 --output outputs/envelope
+```
+
+```bash
+python -B RefUnmix/assess.py --input outputs/envelope/full/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopemetrics/full.json
+python -B RefUnmix/assess.py --input outputs/envelope/anchor/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopemetrics/anchor.json
+python -B RefUnmix/assess.py --input outputs/envelope/expanded/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopemetrics/expanded.json
+python -B RefUnmix/assess.py --input outputs/envelope/conditional/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopemetrics/conditional.json
+python -B RefUnmix/assess.py --input outputs/envelope/residual/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopemetrics/residual.json
+python -B RefUnmix/assess.py --input outputs/envelope/feedback/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopemetrics/feedback.json
+python -B RefUnmix/assess.py --input outputs/envelope/matched/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopemetrics/matched.json
+python -B RefUnmix/audit.py --summary outputs/envelope/summary.json --sweep outputs/envelopemetrics --repeats 2000 --seed 42 --output outputs/envelopecomparison.json
+```
+
+**15-sample upper bound, one RTX 4090, three concurrent requests:**
+
+```bash
+python -B RefUnmix/trial.py --batch 3 --dataset data --mapping mapping_file.json --images annotation_images --split all --suite envelope --model models --clip clip --backbone vp --device cuda:0 --precision fp32 --size 512 --seed 42 --seeds 42 52 3047 3407 --noise 1 --start 0.90 --delta 0.15 --end 0.30 --scale 1 --cleanup --field pullback --fieldgeometry coupled --fieldridge 0.05 --fieldprobe 0.25 --fieldradius 1 --fieldtolerance 0.000001 --fieldrepair 0 --fieldfactor 1 --method field --semantic region --tangentgain 0.02 --tangentpenalty 1 --tangentchecks 3 --tangentbasis shared --tangentpolicy frontier --no-tangentnorm --no-tangentfeedback --poststeps 1 --guidance 1 --no-cfg --referencepath auto --prior off --localization baseline --no-control --no-heldout --no-compensation --no-frontier --maxsamples 15 --maxcalls 15 --output outputs/envelopefifteen
+```
+
+```bash
+python -B RefUnmix/assess.py --input outputs/envelopefifteen/full/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopefifteenmetrics/full.json
+python -B RefUnmix/assess.py --input outputs/envelopefifteen/anchor/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopefifteenmetrics/anchor.json
+python -B RefUnmix/assess.py --input outputs/envelopefifteen/expanded/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopefifteenmetrics/expanded.json
+python -B RefUnmix/assess.py --input outputs/envelopefifteen/conditional/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopefifteenmetrics/conditional.json
+python -B RefUnmix/assess.py --input outputs/envelopefifteen/residual/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopefifteenmetrics/residual.json
+python -B RefUnmix/assess.py --input outputs/envelopefifteen/feedback/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopefifteenmetrics/feedback.json
+python -B RefUnmix/assess.py --input outputs/envelopefifteen/matched/summary.json --dataset data --mapping mapping_file.json --images annotation_images --scope benchmark --seeds 42 52 3047 3407 --protocol protocol/metrics.py --device cuda:0 --network --cache cache/metrics --output outputs/envelopefifteenmetrics/matched.json
+python -B RefUnmix/audit.py --summary outputs/envelopefifteen/summary.json --sweep outputs/envelopefifteenmetrics --repeats 2000 --seed 42 --output outputs/envelopefifteencomparison.json
+```
+
 ### Protection at a Fixed Target Response
 
 Similarity is ambiguous: source-like responses may represent preserved content or an edit that has not happened. The conditional branch instead asks whether protected damage can be reduced while retaining the target response of a proposed field direction.
@@ -1145,7 +1207,7 @@ The repair radius is fixed to $`\Delta_{\mathrm{rep}}=\rho_F\lVert F_0\rVert_2`$
 
 [FlowEdit](https://openaccess.thecvf.com/content/ICCV2025/html/Kulikov_FlowEdit_Inversion-Free_Text-Based_Editing_Using_Pre-Trained_Flow_Models_ICCV_2025_paper.html) updates the target velocity at the evolving target state. [DecFlowEdit](https://arxiv.org/abs/2609.34237) separates localization from editing guidance, and [PreciseEdit](https://arxiv.org/abs/2610.23535) separates strong transport from spatial and directional reliability. These mechanisms motivate testing state-dependent response and regional attainment separately. SD3/SD3.5-versus-SD-Turbo comparisons also include backbone differences. SD-Turbo retains its [documented configuration without extra CFG](https://huggingface.co/stabilityai/sd-turbo); FlowEdit's source/target guidance scales are not transplanted into it.
 
-The `semantic` suite runs the following controlled comparison. Defaults remain `--fieldrepair 0 --semantic patches` for the established main profile. Select a revised profile on the development partition and freeze it before final testing. Endpoint residual reduction is a calibration measurement; official CLIP-Edited and independent task completion measure transfer to image editing.
+The `semantic` suite runs the following controlled comparison. Defaults remain `--fieldrepair 0 --semantic patches` for the historical patches profile. Select a revised profile on the development partition and freeze it before final testing. Endpoint residual reduction is a calibration measurement; official CLIP-Edited and independent task completion measure transfer to image editing.
 
 | Arm | Field repair | Semantic views |
 |-----|--------------|----------------|

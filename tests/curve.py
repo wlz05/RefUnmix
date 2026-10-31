@@ -109,6 +109,15 @@ class CurveTests(unittest.TestCase):
         self.assertEqual(result["arms"]["full"]["seeds"], [42, 52, 3047, 3407])
         json.dumps(result, allow_nan=False)
 
+    def testenvelopecomparisons(self):
+        arms, inference = self.fixture()
+        mapping = {"full": "full", "anchor": "anchor", "expanded": "full", "conditional": "full", "residual": "full", "feedback": "feedback", "matched": "matched"}
+        result = conditional({key: arms[value] for key, value in mapping.items()}, {key: inference[value] for key, value in mapping.items()}, repeats=10)
+        self.assertEqual(result["comparisons"]["ceiling"]["reference"], "conditional")
+        self.assertEqual(result["comparisons"]["rule"]["reference"], "expanded")
+        self.assertEqual(result["activity"]["modelprogress"], 0)
+        json.dumps(result, allow_nan=False)
+
     def testloading(self):
         arms, inference = self.fixture()
         original = Path.cwd()
@@ -147,6 +156,14 @@ class CurveTests(unittest.TestCase):
                 Path("conditional.json").write_text(json.dumps(secondary), encoding="utf-8")
                 result = load("conditional.json", "metrics", repeats=10)
                 self.assertEqual(set(result["arms"]), names)
+                envelope = json.loads(json.dumps(secondary))
+                envelope["settings"]["suite"] = "envelope"
+                envelope["variants"]["conditional"] = envelope["variants"].pop("plain")
+                envelope["design"]["variants"]["conditional"] = envelope["design"]["variants"]["plain"]
+                Path("metrics/conditional.json").write_bytes(Path("metrics/plain.json").read_bytes())
+                Path("envelope.json").write_text(json.dumps(envelope), encoding="utf-8")
+                result = load("envelope.json", "metrics", repeats=10)
+                self.assertEqual(result["comparisons"]["ceiling"]["reference"], "conditional")
                 source = Path("runs/full.json")
                 source.write_text(source.read_text(encoding="utf-8") + "\n", encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "exact inference"):

@@ -1150,6 +1150,20 @@ class TangentTests(unittest.TestCase):
         self.assertFalse(report["accepted"])
         self.assertEqual(session.limit.phase, "front")
 
+    def testfrontiersolverfailure(self):
+        from engine.field import redirect
+        from unittest.mock import patch
+        session, native, field, mask, score = self.fixture()
+        with patch("engine.geometry.frontier", side_effect=ValueError("Unresolved response envelope.")):
+            redirect(field, native, score, mask, policy="frontier")
+        report = field.report["tangent"]
+        self.assertTrue(report["accepted"])
+        self.assertEqual(report["selectedkind"], "seed")
+        self.assertIn("envelopefailure", report)
+        self.assertTrue(all(row["kind"] == "seed" for row in report["history"]))
+        self.assertEqual(score(field.pixels), field.scores)
+        self.assertEqual(session.limit.phase, "front")
+
     def testconditionalsolverfailure(self):
         from engine.field import redirect
         from unittest.mock import patch
@@ -1197,6 +1211,69 @@ class TangentTests(unittest.TestCase):
         self.assertTrue(all(not row["accepted"] and "realized target" in row["violations"] for row in misleading))
         self.assertEqual(report["selectedkind"], "seed")
         self.assertEqual(report["damage"], seed["damage"])
+
+class EnvelopeTests(unittest.TestCase):
+    def solve(self, edit, protect, residual, radius=1., target=None):
+        from engine.geometry import frontier
+        target = np.ones(len(edit)) if target is None else target
+        count = len(edit[0])
+        return frontier(edit, protect, residual, target, np.eye(count)[0], np.eye(count), radius)
+
+    def testbudgetboundary(self):
+        value, report = self.solve([[0., 1.]], [[0., 1.]], [-.25])
+        np.testing.assert_allclose(value, [0., .5], atol=1e-9)
+        self.assertAlmostEqual(report["damage"], .0625)
+        self.assertAlmostEqual(report["progress"], .5)
+
+    def testrepairenablesprogress(self):
+        value, report = self.solve([[0., 1., 0.]], [[0., 1., 1.]], [0.], 2.)
+        np.testing.assert_allclose(value, [0., 1., -1.], atol=1e-9)
+        self.assertEqual(report["progress"], 1.)
+        self.assertLessEqual(report["damage"], report["budget"])
+        self.assertEqual(report["queries"], 0)
+
+    def testnorepaircapacity(self):
+        value, report = self.solve([[0., 1.]], [[0., 1.]], [.25])
+        np.testing.assert_array_equal(value, [0., 0.])
+        self.assertEqual(report["progress"], 0.)
+
+    def testincompatibletargets(self):
+        value, report = self.solve([[0., 1.], [0., -1.]], [[0., 0.]], [0.])
+        np.testing.assert_array_equal(value, [0., 0.])
+        self.assertAlmostEqual(report["unresolved"], 2 ** .5)
+
+    def testtrustboundary(self):
+        value, report = self.solve([[0., 1.]], [[0., 0.]], [0.], .3)
+        np.testing.assert_allclose(value, [0., .3])
+        self.assertAlmostEqual(report["norm"], .3)
+
+    def testirreduciblefloor(self):
+        value, report = self.solve([[0., 1., 0.]], [[0., 1., 0.], [0., 0., 1.]], [-.25, .1], 2.)
+        self.assertAlmostEqual(report["floor"], (report["progress"] - .25) ** 2)
+        self.assertAlmostEqual(report["progress"], .25 + (.25 ** 2 + .1 ** 2) ** .5, places=8)
+
+    def testtruncatedlowerbound(self):
+        value, report = self.solve([[0., 1., 0., 0.]], [[0., 1., 1., 0.], [0., 0., 0., 1e-8]], [-1., 1e-8], 2.)
+        self.assertGreater(report["floor"], 0.)
+        self.assertEqual(report["spectraltail"], 1e-8)
+        self.assertEqual(report["damagelower"], 0.)
+        self.assertEqual(report["progress"], 1.)
+
+    def testmetriccovariance(self):
+        from engine.geometry import frontier
+        edit, protect, residual = np.array([[0., 1., .2]]), np.array([[.1, 1., 1.]]), np.array([-.1])
+        transform = np.array([[1., .1, .3], [0., 2., -.2], [0., 0., .7]])
+        anchor = np.array([1., 0., 0.])
+        first, a = frontier(edit, protect, residual, [1.], anchor, np.eye(3), 2.)
+        second, b = frontier(edit @ transform, protect @ transform, residual, [1.], np.linalg.solve(transform, anchor), transform.T @ transform, 2.)
+        np.testing.assert_allclose(first, transform @ second, atol=1e-7)
+        self.assertAlmostEqual(a["progress"], b["progress"])
+
+    def testinvalid(self):
+        from engine.geometry import frontier
+        for target, metric in ((0., np.eye(2)), ([1.], [[1., 2.], [2., 1.]]), ([float("nan")], np.eye(2))):
+            with self.assertRaises(ValueError):
+                frontier([[0., 1.]], [[0., 1.]], [0.], target, [1., 0.], metric)
 
 if __name__ == "__main__":
     unittest.main()

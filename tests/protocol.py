@@ -174,6 +174,27 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(settings["fieldfactor"], factor)
             self.assertEqual(settings["method"], "raw")
 
+    def testenvelopematrix(self):
+        args = self.args("--method", "field", "--semantic", "region", "--tangentbasis", "shared", "--tangentpolicy", "frontier")
+        args.suite = "envelope"
+        plan = design(args, variants(args.suite, base=args))
+        self.assertEqual(len(plan["variants"]), 7)
+        self.assertFalse(plan["variants"]["full"]["changes"])
+        self.assertEqual(set(plan["variants"]["conditional"]["changes"]), {"tangentpolicy"})
+        self.assertEqual(set(plan["variants"]["residual"]["changes"]), {"tangentbasis"})
+
+    def testenveloperuntime(self):
+        args = self.args("--method", "field", "--semantic", "region", "--tangentbasis", "shared", "--tangentpolicy", "frontier")
+        image = Image.new("RGB", (16, 16), (90, 128, 160))
+        _, report, state = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args)
+        trace = report["field"]["tangent"]
+        self.assertEqual(trace["policy"], "frontier")
+        self.assertLessEqual(trace["checks"], 3)
+        self.assertEqual(state.samples, state.limit.used)
+        self.assertEqual(state.calls, state.limit.forwards)
+        self.assertLessEqual(report["damage"], report["rawdamage"])
+        json.dumps(report, allow_nan=False)
+
     def testconditionalmatrix(self):
         args = self.args("--method", "field", "--semantic", "region", "--tangentbasis", "shared", "--tangentpolicy", "conditional")
         args.suite = "conditional"
@@ -344,7 +365,7 @@ class ProtocolTests(unittest.TestCase):
     def testdocumentedexecution(self):
         lines = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(encoding="utf-8").splitlines()
         commands = [shlex.split(line) for line in lines if line.startswith("python -B RefUnmix/trial.py") and "--split all" in line and "--dry" not in line]
-        self.assertEqual(len(commands), 29)
+        self.assertEqual(len(commands), 31)
         for command in commands:
             arguments = command[2:]
             if "--output" in arguments:
@@ -392,17 +413,17 @@ class ProtocolTests(unittest.TestCase):
         integrated = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64 and args.method == "field" and args.tangentbasis == "residual")
         validate(reference)
         benchmark = [args for entry, args in executions if entry is main and args.split == "all" and not args.dry]
-        self.assertEqual(len(benchmark), 29)
-        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 246)
+        self.assertEqual(len(benchmark), 31)
+        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 260)
         for args in benchmark:
             plan = design(args, variants(args.suite, base=args))
-            expected = deepcopy(integrated if args.suite in {"integrated", "amplitude", "conditional"} else reference)
+            expected = deepcopy(integrated if args.suite in {"integrated", "amplitude", "conditional", "envelope"} else reference)
             if args.suite == "mechanism":
                 expected.maxsamples = expected.maxcalls = 256
-            elif args.suite in {"amplitude", "conditional"}:
+            elif args.suite in {"amplitude", "conditional", "envelope"}:
                 expected.maxsamples, expected.maxcalls = args.maxsamples, args.maxcalls
-                if args.suite == "conditional":
-                    expected.tangentbasis, expected.tangentpolicy = "shared", "conditional"
+                if args.suite in {"conditional", "envelope"}:
+                    expected.tangentbasis, expected.tangentpolicy = "shared", "frontier" if args.suite == "envelope" else "conditional"
             self.assertEqual(plan["controlsignature"], signature(expected))
             self.assertEqual((args.batch, args.device, args.precision, args.seeds), (3, "cuda:0", "fp32", [42, 52, 3047, 3407]))
             self.assertIsNone(args.manifest)
@@ -415,10 +436,10 @@ class ProtocolTests(unittest.TestCase):
     def testdocumentedcurves(self):
         from assess import parser as assessment
         from audit import main as auditmain
-        from engine.curve import CONDITIONAL, RADIAL
+        from engine.curve import CONDITIONAL, ENVELOPE, RADIAL
         lines = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(encoding="utf-8").splitlines()
-        commands = [shlex.split(line) for line in lines if any(line.startswith("python -B RefUnmix/assess.py --input outputs/" + name + "/") for name in ("amplitude", "amplitudefifteen", "conditional", "conditionalfifteen"))]
-        self.assertEqual(len(commands), 34)
+        commands = [shlex.split(line) for line in lines if any(line.startswith("python -B RefUnmix/assess.py --input outputs/" + name + "/") for name in ("amplitude", "amplitudefifteen", "conditional", "conditionalfifteen", "envelope", "envelopefifteen"))]
+        self.assertEqual(len(commands), 48)
         groups = {}
         for command in commands:
             args = assessment().parse_args(command[3:])
@@ -433,7 +454,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertTrue(args.network)
             self.assertFalse(Path(args.input).is_absolute())
         expected = set(RADIAL) | {"full", "matched", "feedback"}
-        self.assertEqual(groups, {"amplitude": expected, "amplitudefifteen": expected, "conditional": CONDITIONAL, "conditionalfifteen": CONDITIONAL})
+        self.assertEqual(groups, {"amplitude": expected, "amplitudefifteen": expected, "conditional": CONDITIONAL, "conditionalfifteen": CONDITIONAL, "envelope": ENVELOPE, "envelopefifteen": ENVELOPE})
         original = argparse.ArgumentParser.parse_args
         parsed = []
         class Parsed(BaseException):
@@ -442,11 +463,11 @@ class ProtocolTests(unittest.TestCase):
             parsed.append(original(parser, *values, **options))
             raise Parsed()
         commands = [shlex.split(line) for line in lines if line.startswith("python -B RefUnmix/audit.py") and "--sweep" in line]
-        self.assertEqual(len(commands), 4)
+        self.assertEqual(len(commands), 6)
         for command in commands:
             with patch("sys.argv", command[2:]), patch.object(argparse.ArgumentParser, "parse_args", capture), self.assertRaises(Parsed):
                 auditmain()
-        self.assertEqual({args.sweep for args in parsed}, {"outputs/amplitudemetrics", "outputs/amplitudemetricsfifteen", "outputs/conditionalmetrics", "outputs/conditionalmetricsfifteen"})
+        self.assertEqual({args.sweep for args in parsed}, {"outputs/amplitudemetrics", "outputs/amplitudemetricsfifteen", "outputs/conditionalmetrics", "outputs/conditionalmetricsfifteen", "outputs/envelopemetrics", "outputs/envelopefifteenmetrics"})
 
     def testrenderidentity(self):
         first = self.args()

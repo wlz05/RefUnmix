@@ -148,6 +148,96 @@ def equivalent(edit, protect, residual, value, anchor, metric, ridge=.05, radius
         return value.copy(), report
     return result, report
 
+def frontier(edit, protect, residual, target, anchor, metric, radius=1., tolerance=1e-6):
+    # Maximize resolved target progress under the original damage budget.
+    edit, protect, residual, target, anchor, metric = (np.asarray(item, dtype=float) for item in (edit, protect, residual, target, anchor, metric))
+    count = len(anchor) if anchor.ndim == 1 else 0
+    if not count or target.ndim != 1 or not len(target) or edit.shape != (len(target), count) or protect.ndim != 2 or protect.shape[1] != count or residual.shape != (protect.shape[0],) or metric.shape != (count, count) or any(not np.isfinite(item).all() for item in (edit, protect, residual, target, anchor, metric)) or not np.allclose(metric, metric.T, rtol=1e-12, atol=1e-14):
+        raise ValueError("Response frontiers require finite aligned geometry.")
+    if any(isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item) for item in (radius, tolerance)) or radius < 0 or not 0 < tolerance < 1:
+        raise ValueError("Response frontier bounds are invalid.")
+    try:
+        root = np.linalg.cholesky(metric).T
+    except np.linalg.LinAlgError as error:
+        raise ValueError("Response frontier metrics must be positive definite.") from error
+    normal = root @ anchor
+    length = float(np.linalg.norm(normal))
+    if not length or not math.isfinite(length):
+        raise ValueError("Response frontiers require a nonzero anchor.")
+    _, _, right = np.linalg.svd((normal / length)[None], full_matrices=True)
+    tangent = np.linalg.solve(root, right[1:].T)
+    response = edit @ tangent
+    left, singular, right = np.linalg.svd(response, full_matrices=True)
+    rank = int(np.sum(singular > max(tolerance * singular[0], np.finfo(float).tiny))) if len(singular) else 0
+    ray = left[:, :rank] @ (left[:, :rank].T @ target)
+    fixed = right[:rank].T @ ((left[:, :rank].T @ target) / singular[:rank])
+    null = right[rank:].T
+    budget = float(residual @ residual)
+    report = {"status": "no common resolved target", "progress": 0., "rank": rank, "nullity": null.shape[1], "unresolved": float(np.linalg.norm(target - ray)), "ray": ray.tolist(), "budget": budget, "damage": budget, "norm": 0., "queries": 0, "scope": "Maximum progress on the resolved target ray within the measured linear response model."}
+    if not math.isfinite(budget):
+        raise ValueError("Response frontier damage exceeds numerical range.")
+    if radius == 0 or not rank or np.min(ray) <= tolerance:
+        return np.zeros(count), report
+    fixednorm = float(np.linalg.norm(fixed))
+    if not fixednorm or not math.isfinite(fixednorm):
+        raise ValueError("Response frontier coordinates exceed numerical range.")
+    matrix = protect @ tangent @ null
+    source = protect @ tangent @ fixed
+    u, sigma, rotation = np.linalg.svd(matrix, full_matrices=False)
+    active = sigma > max(tolerance * sigma[0], np.finfo(float).tiny) if len(sigma) else np.zeros(0, dtype=bool)
+    tail = float(np.max(sigma[~active])) if np.any(~active) else 0.
+    u, sigma, rotation = u[:, active], sigma[active], rotation[active]
+    first, second = u.T @ residual, u.T @ source
+    outside, slope = residual - u @ first, source - u @ second
+    constant, cross, quadratic = float(outside @ outside), float(outside @ slope), float(slope @ slope)
+    allowance = 1e-12 * max(budget, np.finfo(float).tiny)
+    def envelope(progress):
+        bound = math.sqrt(max(0., radius * radius - (progress * fixednorm) ** 2))
+        requested = first + progress * second
+        coordinates = -requested / sigma
+        multiplier = 0.
+        if bound == 0:
+            coordinates = np.zeros_like(requested)
+        elif np.linalg.norm(coordinates) > bound:
+            low, high = 0., max(float(np.linalg.norm(sigma * requested)) / bound, float(np.max(sigma ** 2)))
+            if not math.isfinite(high):
+                raise ValueError("Response frontier multipliers exceed numerical range.")
+            for _ in range(80):
+                middle = low + (high - low) / 2
+                if np.linalg.norm(sigma * requested / (sigma ** 2 + middle)) > bound:
+                    low = middle
+                else:
+                    high = middle
+            multiplier = high
+            coordinates = -sigma * requested / (sigma ** 2 + multiplier)
+        remaining = requested + sigma * coordinates
+        floor = max(0., constant + 2 * progress * cross + progress * progress * quadratic)
+        return floor + float(remaining @ remaining), rotation.T @ coordinates, floor, multiplier
+    maximum = min(1., radius / fixednorm)
+    low, high = 0., maximum
+    if envelope(high)[0] <= budget + allowance:
+        low = high
+    else:
+        for _ in range(48):
+            middle = low + (high - low) / 2
+            if envelope(middle)[0] <= budget + allowance:
+                low = middle
+            else:
+                high = middle
+    damage, coordinates, floor, multiplier = envelope(low)
+    value = tangent @ (low * fixed + null @ coordinates)
+    actual = residual + protect @ value
+    measured = float(actual @ actual)
+    norm = float(np.linalg.norm(root @ value))
+    defect = float(np.linalg.norm(edit @ value - low * ray))
+    if not np.isfinite(value).all() or not all(math.isfinite(item) for item in (measured, norm, defect, floor, multiplier)):
+        raise ValueError("Response frontiers exceed numerical range.")
+    report.update(status="solved", progress=low, maximum=maximum, damage=measured, floor=floor, multiplier=multiplier, norm=norm, semanticerror=defect, modeleddamage=damage, protectionrank=len(sigma), spectraltail=tail, damagelower=max(0., math.sqrt(max(damage, 0.)) - tail * math.sqrt(max(0., radius * radius - (low * fixednorm) ** 2))) ** 2)
+    if measured > budget + 1e-10 * max(budget, np.finfo(float).tiny) or norm > radius * (1 + 1e-9) or defect > tolerance * max(np.linalg.norm(response) * norm, np.finfo(float).tiny) or low <= tolerance:
+        report.update(status="no verified model progress", attemptedprogress=low, progress=0., damage=budget, norm=0.)
+        return np.zeros(count), report
+    return value, report
+
 def matching(displacement, effect, maximum=1., tolerance=.01):
     # Intersect the full norm tolerance band with positive adoption.
     displacement, effect = np.asarray(displacement, dtype=float), np.asarray(effect, dtype=float)
