@@ -30,7 +30,7 @@ def datasetargs(parser):
     parser.add_argument("--evalclip", default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--categories", nargs="+", type=str.casefold, default=None)
-    parser.add_argument("--seeds", nargs="+", type=int, default=None)
+    parser.add_argument("--seeds", nargs="+", type=int, default=[42, 52, 3047, 3407])
     parser.add_argument("--batch", type=int, choices=(1, 2, 3, 4), default=3)
     parser.add_argument("--output", default="./evaluation")
     return parser

@@ -1281,6 +1281,8 @@ Final means are computed directly from the saved seed-level means. The result lo
 | Official unscaled assessment | `byseed[seed].raw[metric].mean` | `raw[metric].mean` |
 | Official table assessment | `byseed[seed].table[metric].mean` | `table[metric].mean` |
 
+The benchmark, ablation, and operator-study dataset entry points default to **42, 52, 3047, 3407**. Use `--seeds 42 52 3047 3407` explicitly for the same four-seed experiment, or `--seeds 42` for a single-seed smoke run. The single-image `run.py --seed` interface controls one image-generation request.
+
 For example, the final MSE is `(MSE42 + MSE52 + MSE3047 + MSE3407) / 4`, where each term is that seed's dataset mean. Inference reports also retain cost means in `cost.byseed`; `cost.metrics[metric].mean` follows the same seed-first order. Cost medians and p95 describe the distribution of per-request seed averages. Postselection assessment supplies the official table metrics.
 
 ### Auxiliary Summaries and Undefined Metrics

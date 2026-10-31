@@ -2,6 +2,7 @@
 # RefUnmix: Endpoint-Aligned Fields for Protected Image Editing
 
 import contextlib
+import argparse
 from copy import deepcopy
 import hashlib
 import io
@@ -20,7 +21,7 @@ import torch
 from engine.metrics import Protocol, connection, pixels, relocate, storage
 from assess import grouped, main, parser, population, prediction, verified
 from data import Record
-from evaluate import aggregate, declared, intervals, summary
+from evaluate import aggregate, declared, intervals, summary, datasetargs
 
 class Calculator:
     def __init__(self):
@@ -50,6 +51,11 @@ class Calculator:
         return 25. if mask is None else 22.
 
 class MetricTests(unittest.TestCase):
+    def testdefaultseeds(self):
+        parser = datasetargs(argparse.ArgumentParser())
+        self.assertEqual(parser.parse_args([]).seeds, [42, 52, 3047, 3407])
+        self.assertEqual(parser.parse_args(["--seeds", "42"]).seeds, [42])
+
     def setUp(self):
         self.origin = Image.new("RGB", (4, 4), 0)
         self.edited = Image.new("RGB", (4, 4), (255, 255, 255))

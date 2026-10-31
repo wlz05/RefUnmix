@@ -415,8 +415,8 @@ class CorpusTests(unittest.TestCase):
         def execute(current, resources):
             chosen = items(current)
             observed.append([item.key for item in chosen])
-            rows = [{"key": key, "inputsha256": value} for key, value in identities(chosen).items()]
-            return {"controlsignature": signature(current), "inputs": {"mapping": {"sha256": digest("data/map.json")}}, "summary": {}, "byseed": {str(current.seed): {}}, "seeds": [current.seed], "aggregation": AGGREGATION, "cost": {}, "controller": {}, "rows": rows}
+            rows = [{"key": key, "seed": seed, "inputsha256": value} for key, value in identities(chosen).items() for seed in current.seeds]
+            return {"controlsignature": signature(current), "inputs": {"mapping": {"sha256": digest("data/map.json")}}, "summary": {}, "byseed": {str(seed): {} for seed in current.seeds}, "seeds": current.seeds, "aggregation": AGGREGATION, "cost": {}, "controller": {}, "rows": rows}
 
         with patch("sys.argv", arguments), patch("trial.load", return_value=(types.SimpleNamespace(metadata={"weights": "fixture"}), None)), patch("trial.execute", side_effect=execute):
             trialmain()
@@ -424,9 +424,9 @@ class CorpusTests(unittest.TestCase):
         self.assertEqual(payload["split"], "all")
         self.assertEqual(len(observed), 6)
         self.assertTrue(all(keys == ["0", "1", "2"] for keys in observed))
-        self.assertTrue(all(arm["rows"] == 3 for arm in payload["variants"].values()))
-        self.assertEqual(payload["seeds"], [42])
-        self.assertTrue(all(arm["byseed"] == {"42": {}} for arm in payload["variants"].values()))
+        self.assertTrue(all(arm["rows"] == 12 for arm in payload["variants"].values()))
+        self.assertEqual(payload["seeds"], [42, 52, 3047, 3407])
+        self.assertTrue(all(arm["byseed"] == {str(seed): {} for seed in (42, 52, 3047, 3407)} for arm in payload["variants"].values()))
         self.assertFalse(Path("trial/recipe.json").exists())
 
     def testofficialtag(self):
