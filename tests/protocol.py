@@ -189,6 +189,11 @@ class ProtocolTests(unittest.TestCase):
         _, report, state = run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args)
         trace = report["field"]["tangent"]
         self.assertEqual(trace["policy"], "frontier")
+        self.assertEqual(trace["dictionarydim"], trace["rank"])
+        self.assertEqual(trace["tangentdim"], trace["dictionarydim"] - 1)
+        self.assertEqual(trace["semanticheads"], len(trace["heads"]))
+        self.assertEqual(trace["probes"], trace["tangentdim"])
+        self.assertTrue(trace["dimensionsmeasured"])
         self.assertLessEqual(trace["checks"], 3)
         self.assertEqual(state.samples, state.limit.used)
         self.assertEqual(state.calls, state.limit.forwards)

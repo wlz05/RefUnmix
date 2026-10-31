@@ -118,6 +118,23 @@ class CurveTests(unittest.TestCase):
         self.assertEqual(result["activity"]["modelprogress"], 0)
         json.dumps(result, allow_nan=False)
 
+    def testcapacitycoverage(self):
+        arms, inference = self.fixture()
+        mapping = {"full": "full", "anchor": "anchor", "expanded": "full", "conditional": "full", "residual": "full", "feedback": "feedback", "matched": "matched"}
+        variants = {key: inference[value] for key, value in mapping.items()}
+        for index, row in enumerate(variants["full"]):
+            geometry = {"dictionarydim": 4, "tangentdim": 3, "semanticheads": 2, "rank": 2, "nullity": 1, "protectionrank": 1}
+            if index % 4 == 0:
+                geometry.update(dictionarydim=3, tangentdim=2, nullity=0, protectionrank=0)
+            elif index % 4 == 1:
+                geometry["protectionrank"] = 0
+            row["report"]["field"]["tangent"] = {"envelope": geometry} if index % 4 != 3 else {}
+        result = conditional({key: arms[value] for key, value in mapping.items()}, variants, repeats=10)
+        self.assertEqual({key: result["capacity"][key] for key in ("requests", "reported", "unreported", "unique", "ineffective", "effective")}, {"requests": 8, "reported": 6, "unreported": 2, "unique": 2, "ineffective": 2, "effective": 2})
+        variants["full"][0]["report"]["field"]["tangent"]["envelope"]["nullity"] = 1
+        with self.assertRaisesRegex(ValueError, "dimensions"):
+            conditional({key: arms[value] for key, value in mapping.items()}, variants, repeats=10)
+
     def testloading(self):
         arms, inference = self.fixture()
         original = Path.cwd()

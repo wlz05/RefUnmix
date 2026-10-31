@@ -1,6 +1,6 @@
-# RefUnmix: Protected-Response Compensation for Image Editing
+# RefUnmix: Protected Response Envelopes for Image Editing
 
-**RefUnmix** constructs an editing field from the minimum protected damage needed to realize a target response. Measured native endpoints define this response frontier; the original protection budget determines how much of the requested change the field can deliver.
+**RefUnmix** is the framework; Protected Response Envelope (PRE) is its field-construction operator. Matched source/target references supply a measured dictionary candidate. The framework constructs an editing field from the minimum protected damage needed to realize a target response. Measured native endpoints define this response frontier; the original protection budget determines how much of the requested change the field can deliver.
 
 The primary `--method field` profile incorporates response allocation and verification into field construction, then exports its cached native endpoint. It runs no separate reference controller. Frozen one-step or few-step continuation is queried a finite number of times; all model samples, forwards, VAE decodes, control scores, latency, and peak memory remain charged.
 
@@ -875,6 +875,13 @@ The current formulation addresses three bottlenecks: a scale sweep explores only
 | Native Verification (NV) | Candidate field and retained actual output | Verified native endpoint and edited image | Enforce actual protection and retain achieved target gains within the same query allowance |
 
 RI includes initial endpoint calibration and candidate measurement. PRE is the central operator; NV checks its finite-amplitude prediction. Their shared object is the requested output response.
+
+With two time contrasts, the coupled anchor lies in their span. The unresolved request and shared reference each add at most one direction. The actual dictionary rank is $`d_{\mathrm{dict}}\le4`$, the tangent dimension is $`d_T=d_{\mathrm{dict}}-1\le3`$, and RI measures exactly $`d_T`$ lateral probes. The target head and valid aggregate local head remain separate: $`m_s=2`$, or 1 without a valid local view. Thus $`A_s=ST\in\mathbb R^{m_s\times d_T}`$ and $`\nu=d_T-\mathrm{rank}(A_s)`$. A full four-direction dictionary guarantees $`\nu\ge1`$ with these heads; degenerate dictionaries are measured per request.
+
+Semantic-neutral directions can improve protection only through $`A_p=PTN`$. Logs therefore record both nullity $`\nu`$ and effective protection rank $`r_p=\mathrm{rank}(A_p)`$. At completion $`\eta`$, the removable component is $`\kappa(\eta)=\lVert A_pA_p^\dagger b_\eta\rVert^2`$. With positive compensation radius, strict improvement over the minimum-input realization exists exactly when $`A_p^\top b_\eta\ne0`$. A zero nullspace has one input realization per target response; a nonzero nullspace with zero protection rank leaves protected output unchanged. PRE computes the corresponding envelope in both cases.
+
+The sweep report includes actual dimension tuples, unique-realization cases, ineffective neutral directions, effective protection directions, modeled savings, and unreported capacity when measurements could not complete. Coverage retains every request. The paper's result tables bind each method row to its configuration signature and seed aggregation.
+
 
 In metric-orthonormal tangent coordinates $`T`$, let $`A_s=ST`$, $`g=A_sA_s^\dagger\mathbf1`$, and $`D_b=\lVert r_b\rVert^2`$. The projected request and its unresolved component are logged separately. PRE solves
 

@@ -1236,6 +1236,33 @@ class EnvelopeTests(unittest.TestCase):
         value, report = self.solve([[0., 1.]], [[0., 1.]], [.25])
         np.testing.assert_array_equal(value, [0., 0.])
         self.assertEqual(report["progress"], 0.)
+        self.assertNotIn("saved", report)
+        self.assertIn("attempt", report)
+        self.assertEqual(report["damage"], report["budget"])
+
+    def testuniquerealization(self):
+        value, report = self.solve([[0., 1., 0.], [0., 0., 1.]], [[0., 1., 1.]], [-.2], 2.)
+        self.assertEqual((report["dictionarydim"], report["tangentdim"], report["semanticheads"], report["rank"], report["nullity"], report["protectionrank"]), (3, 2, 2, 2, 0, 0))
+        np.testing.assert_allclose(value, [0., .2, .2], atol=1e-8)
+        self.assertAlmostEqual(report["saved"], 0.)
+
+    def testineffectivenullspace(self):
+        value, report = self.solve([[0., 1., 0.]], [[0., 1., 0.]], [-.25])
+        self.assertEqual((report["nullity"], report["protectionrank"]), (1, 0))
+        self.assertEqual(report["removable"], 0.)
+        self.assertAlmostEqual(report["progress"], .5)
+
+    def testunaligneddamage(self):
+        value, report = self.solve([[0., 1., 0.]], [[0., 0., 1.], [0., 1., 0.]], [0., -.25])
+        self.assertEqual((report["nullity"], report["protectionrank"]), (1, 1))
+        self.assertAlmostEqual(report["removable"], 0.)
+        self.assertAlmostEqual(report["saved"], 0.)
+
+    def testaligneddamage(self):
+        value, report = self.solve([[0., 1., 0.]], [[0., 1., 1.]], [0.], 2.)
+        self.assertEqual(report["alignment"], 1.)
+        self.assertEqual(report["saved"], 1.)
+        self.assertLessEqual(report["saved"], report["removable"])
 
     def testincompatibletargets(self):
         value, report = self.solve([[0., 1.], [0., -1.]], [[0., 0.]], [0.])

@@ -31,7 +31,7 @@ def values(row):
     result.update({"field:response" + key: field.get("capacity", {}).get(key) for key in ("rank", "lineerror", "spanerror", "directionroom", "linecosine")})
     result.update({"field:temporal" + key: field.get("temporal", {}).get(key) for key in ("rank", "spanerror", "coneerror", "strength", "weight")})
     result.update({"field:repair" + key: field.get("repair", {}).get(key) for key in ("accepted", "endpoints", "initialerror", "finalerror", "movement", "calls", "samples")})
-    result.update({"field:tangent" + key: field.get("tangent", {}).get(key) for key in ("rank", "alpha", "gain", "damage", "baselinedamage", "tangenterror", "directionnorm", "inputnormratio", "endpointnormratio", "calls", "samples", "decodes", "checks", "probes", "evaluations", "endpoints")})
+    result.update({"field:tangent" + key: field.get("tangent", {}).get(key) for key in ("dictionarydim", "tangentdim", "semanticheads", "rank", "alpha", "gain", "damage", "baselinedamage", "tangenterror", "directionnorm", "inputnormratio", "endpointnormratio", "calls", "samples", "decodes", "checks", "probes", "evaluations", "endpoints")})
     if isinstance(field.get("tangent", {}).get("accepted"), bool):
         result["field:tangentaccepted"] = int(field["tangent"]["accepted"])
     updates = field.get("tangent", {}).get("updates", [])
@@ -42,7 +42,7 @@ def values(row):
     lock = field.get("tangent", {}).get("selectedallocation", field.get("tangent", {}).get("allocation", {})).get("conditional", {})
     result.update({"field:conditional" + name: lock.get(name) for name in ("rank", "nullity", "before", "after", "semanticerror", "movement")})
     envelope = field.get("tangent", {}).get("envelope", {})
-    result.update({"field:envelope" + name: envelope.get(name) for name in ("progress", "maximum", "floor", "damage", "budget", "unresolved", "rank", "nullity", "semanticerror", "damagephysical", "floorphysical", "budgetphysical", "damagelower", "spectraltail")})
+    result.update({"field:envelope" + name: envelope.get(name) for name in ("progress", "maximum", "floor", "damage", "budget", "unresolved", "rank", "nullity", "semanticerror", "damagephysical", "floorphysical", "budgetphysical", "damagelower", "spectraltail", "dictionarydim", "tangentdim", "semanticheads", "protectionrank", "uncompensated", "saved", "removable", "alignment", "savedphysical", "removablephysical", "uncompensatedphysical")})
     for key in ("gain", "damagechange", "evaluations"):
         result["selection:" + key] = report.get(key)
     for key in ("interactionenergy", "interactionratio", "damageinteraction", "damageoverlap", "damagenonlinear"):

@@ -157,6 +157,16 @@ def conditional(arms, inference=None, repeats=2000, seed=42):
         result["activity"] = {"requests": len(traces), "queried": sum(trace.get("checks", 0) > 0 for trace in traces), "accepted": sum(trace.get("accepted") is True for trace in traces), "repairable": sum(lock.get("nullity", 0) > 0 for lock in locks), "repaired": sum(lock.get("status") == "repaired" and lock.get("after", 0) < lock.get("before", 0) for lock in locks), "repairchecks": sum(row.get("kind") == ("frontier" if envelope else "conditional") for row in history), "seedchecks": sum(row.get("kind") == "seed" for row in history), "targetrejections": sum("realized target" in row.get("violations", []) for row in history), "noqueryrepairs": sum(lock.get("queries") == 0 for lock in locks), "sourceendpoints": sum(trace.get("sources", 0) for trace in traces), "sourcecalls": sum(trace.get("shared", {}).get("queries", 0) for trace in traces)}
         if envelope:
             result["activity"].update(resolved=sum(lock.get("rank", 0) > 0 for lock in locks), modelprogress=sum(lock.get("progress", 0) > 0 for lock in locks), responsefailures=sum(bool(trace.get("envelopefailure")) for trace in traces))
+        if envelope:
+            dimensions = ("dictionarydim", "tangentdim", "semanticheads", "rank", "nullity", "protectionrank")
+            reported = [lock for lock in locks if all(type(lock.get(key)) is int for key in dimensions)]
+            if any(lock["dictionarydim"] != lock["tangentdim"] + 1 or lock["rank"] + lock["nullity"] != lock["tangentdim"] or not 0 <= lock["rank"] <= min(lock["semanticheads"], lock["tangentdim"]) or not 0 <= lock["protectionrank"] <= lock["nullity"] for lock in reported):
+                raise ValueError("Measured response dimensions are inconsistent.")
+            distribution = {}
+            for lock in reported:
+                key = ":".join(str(lock[name]) for name in dimensions)
+                distribution[key] = distribution.get(key, 0) + 1
+            result["capacity"] = {"requests": len(traces), "reported": len(reported), "unreported": len(traces) - len(reported), "columns": list(dimensions), "distribution": distribution, "unique": sum(lock["nullity"] == 0 for lock in reported), "ineffective": sum(lock["nullity"] > 0 and lock["protectionrank"] == 0 for lock in reported), "effective": sum(lock["protectionrank"] > 0 for lock in reported), "saved": sum(lock.get("saved", 0) > 1e-10 * max(lock.get("uncompensated", 0), 1e-300) for lock in reported), "scope": "Measured model capacity over all requests; missing budget-limited responses remain unreported."}
         result["activity"].update(selectedrepair=sum(trace.get("selectedkind") == ("frontier" if envelope else "conditional") for trace in traces), retainedseed=sum(trace.get("selectedkind") == "seed" for trace in traces))
     return result
 

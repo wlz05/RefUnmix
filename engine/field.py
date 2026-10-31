@@ -493,7 +493,7 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
     session, limit = native.session, native.session.limit
     baseline = tensor(field.value).detach().clone()
     length = norm(baseline.double())
-    report = {"status": "baseline", "accepted": False, "alpha": 0., "gain": 0., "calls": 0, "samples": 0, "decodes": 0, "checks": 0, "probes": 0, "endpoints": 0, "evaluations": 0, "rounding": 0, "budgetstopped": False, "family": family, "matched": match, "normtolerance": .01, "history": [], "usesclip": True, "fieldmasking": False, "scope": "Frozen control-score gains and actual native-output protection; independent official scoring follows selection."}
+    report = {"status": "baseline", "accepted": False, "alpha": 0., "gain": 0., "calls": 0, "samples": 0, "decodes": 0, "checks": 0, "probes": 0, "endpoints": 0, "evaluations": 0, "rounding": 0, "budgetstopped": False, "family": family, "matched": match, "normtolerance": .01, "history": [], "usesclip": True, "fieldmasking": False, "dimensionsmeasured": False, "scope": "Frozen control-score gains and actual native-output protection; independent official scoring follows selection."}
     field.report["tangent"] = report
     report.update(feedback=feedback, updates=[], policy=policy, sources=0)
     if length == 0 or radius == 0 or session.scale == 0 or field.request is None or field.neutral is None:
@@ -582,7 +582,7 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
         if np.linalg.norm(basis @ anchor - baseline.double().reshape(-1).cpu().numpy() / length) > tolerance:
             report["reason"] = "The resolved dictionary does not preserve the protection anchor."
             return
-        report.update(rank=count, baselinefieldnorm=length, baselineendpointnorm=responselevel, baselinedamage=damage, damage=damage, gain=0., inputnormratio=1., endpointnormratio=1. if responselevel > 0 else None, protectedvalid=mass > 0, heads=names, desired=[gain] * len(names))
+        report.update(dictionarydim=count, tangentdim=count - 1, semanticheads=len(names), rank=count, baselinefieldnorm=length, baselineendpointnorm=responselevel, baselinedamage=damage, damage=damage, gain=0., inputnormratio=1., endpointnormratio=1. if responselevel > 0 else None, protectedvalid=mass > 0, heads=names, desired=[gain] * len(names))
         if count < 2:
             report["reason"] = "The measured dictionary has no lateral direction."
             return
@@ -608,6 +608,7 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
             protect.append((observedresidual - r) / step)
             latent.append(((measured.double() - endpoint.double()) / step).reshape(-1).cpu().numpy())
         edit, protect, latent = (np.stack(values, axis=1) @ lateral.T for values in (edit, protect, latent))
+        report["dimensionsmeasured"] = True
         protectscale = math.sqrt(damage) if damage > 0 else 1.
         seedamplitude = None
         def plan(repair=True):
@@ -617,7 +618,8 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
                 try:
                     with np.errstate(over="raise", invalid="raise", divide="raise"):
                         value, envelope = frontier(edit / gain, protect / protectscale, r / protectscale, np.ones(len(names)), anchor, np.eye(count), radius, tolerance)
-                    envelope.update(normalization=protectscale, damagephysical=envelope["damage"] * protectscale ** 2, floorphysical=envelope.get("floor", envelope["budget"]) * protectscale ** 2, budgetphysical=damage)
+                    envelope.update(normalization=protectscale, damagephysical=envelope["damage"] * protectscale ** 2, budgetphysical=damage)
+                    envelope.update({key + "physical": envelope[key] * protectscale ** 2 for key in ("floor", "uncompensated", "saved", "removable") if key in envelope})
                     allocation["envelope"] = envelope
                     report["envelope"] = envelope
                     allocation["norm"] = float(np.linalg.norm(value))

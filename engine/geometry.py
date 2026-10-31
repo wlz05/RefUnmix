@@ -174,19 +174,21 @@ def frontier(edit, protect, residual, target, anchor, metric, radius=1., toleran
     null = right[rank:].T
     budget = float(residual @ residual)
     report = {"status": "no common resolved target", "progress": 0., "rank": rank, "nullity": null.shape[1], "unresolved": float(np.linalg.norm(target - ray)), "ray": ray.tolist(), "budget": budget, "damage": budget, "norm": 0., "queries": 0, "scope": "Maximum progress on the resolved target ray within the measured linear response model."}
-    if not math.isfinite(budget):
-        raise ValueError("Response frontier damage exceeds numerical range.")
+    report.update(dictionarydim=count, tangentdim=tangent.shape[1], semanticheads=edit.shape[0], protectionrank=0 if not null.shape[1] else None)
+    if not math.isfinite(budget) or not math.isfinite(report["unresolved"]):
+        raise ValueError("Response frontier observations exceed numerical range.")
+    matrix = protect @ tangent @ null
+    u, sigma, rotation = np.linalg.svd(matrix, full_matrices=False)
+    active = sigma > max(tolerance * sigma[0], np.finfo(float).tiny) if len(sigma) else np.zeros(0, dtype=bool)
+    tail = float(np.max(sigma[~active])) if np.any(~active) else 0.
+    u, sigma, rotation = u[:, active], sigma[active], rotation[active]
+    report["protectionrank"] = len(sigma)
     if radius == 0 or not rank or np.min(ray) <= tolerance:
         return np.zeros(count), report
     fixednorm = float(np.linalg.norm(fixed))
     if not fixednorm or not math.isfinite(fixednorm):
         raise ValueError("Response frontier coordinates exceed numerical range.")
-    matrix = protect @ tangent @ null
     source = protect @ tangent @ fixed
-    u, sigma, rotation = np.linalg.svd(matrix, full_matrices=False)
-    active = sigma > max(tolerance * sigma[0], np.finfo(float).tiny) if len(sigma) else np.zeros(0, dtype=bool)
-    tail = float(np.max(sigma[~active])) if np.any(~active) else 0.
-    u, sigma, rotation = u[:, active], sigma[active], rotation[active]
     first, second = u.T @ residual, u.T @ source
     outside, slope = residual - u @ first, source - u @ second
     constant, cross, quadratic = float(outside @ outside), float(outside @ slope), float(slope @ slope)
@@ -232,9 +234,14 @@ def frontier(edit, protect, residual, target, anchor, metric, radius=1., toleran
     defect = float(np.linalg.norm(edit @ value - low * ray))
     if not np.isfinite(value).all() or not all(math.isfinite(item) for item in (measured, norm, defect, floor, multiplier)):
         raise ValueError("Response frontiers exceed numerical range.")
+    initialreport = dict(report)
+    uncorrected = residual + low * source
+    uncompensated = float(uncorrected @ uncorrected)
+    removable = float(np.linalg.norm(first + low * second) ** 2)
+    report.update(uncompensated=uncompensated, saved=uncompensated - measured, removable=removable, alignment=removable / uncompensated if uncompensated > 0 else 0.)
     report.update(status="solved", progress=low, maximum=maximum, damage=measured, floor=floor, multiplier=multiplier, norm=norm, semanticerror=defect, modeleddamage=damage, protectionrank=len(sigma), spectraltail=tail, damagelower=max(0., math.sqrt(max(damage, 0.)) - tail * math.sqrt(max(0., radius * radius - (low * fixednorm) ** 2))) ** 2)
     if measured > budget + 1e-10 * max(budget, np.finfo(float).tiny) or norm > radius * (1 + 1e-9) or defect > tolerance * max(np.linalg.norm(response) * norm, np.finfo(float).tiny) or low <= tolerance:
-        report.update(status="no verified model progress", attemptedprogress=low, progress=0., damage=budget, norm=0.)
+        report = {**initialreport, "status": "no verified model progress", "attemptedprogress": low, "attempt": report}
         return np.zeros(count), report
     return value, report
 
