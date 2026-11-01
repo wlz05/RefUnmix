@@ -1347,11 +1347,16 @@ python -B RefUnmix/blind.py --left outputs/releasetest/joint/summary.json --righ
 
 ### Tests
 
-Run the regression suite from `workspace/`:
+From `workspace/`, enter the source checkout once:
 
 ```bash
 cd RefUnmix
-python -B -m unittest discover -s tests -p '*.py' -q
+```
+
+Run both test commands below from this checkout root. If the terminal is already in `RefUnmix/`, skip the directory change.
+
+```bash
+python -B -m unittest discover -s tests -p "*.py" -q
 ```
 
 The suite covers field construction, control constraints, query accounting, image formats, dataset conversion, README experiment plans, complete-benchmark ablations, cache relocation, offline scoring, and official validation-to-test replay at batch widths three and four. Transfer checks copy the checkout and validation files into a new root and run test replay in a fresh Python process with synthetic backends. Serial/parallel checks compare all four seeds, output tensors, and per-request counters. Temporal diagnostics distinguish numerical underflow from an exact fit.
@@ -1363,6 +1368,8 @@ python -B -m unittest discover -s tests -p batch.py -q
 ```
 
 CUDA availability enables allocator-retention and CUDA random-state tests with lightweight backends. Without CUDA, those two cases are reported as skipped.
+
+Return to `workspace/` with `cd ..` before using examples whose script paths start with `RefUnmix/`.
 
 ---
 
