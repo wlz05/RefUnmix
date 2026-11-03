@@ -32,16 +32,22 @@ The main profile fixes `conditiongain=1.25`, `singlegain=1.5`, and `innovationga
 
 ## Installation
 
-Run commands from the repository root. Experiments use one NVIDIA RTX 4090, FP32 inference, and three concurrent images sharing one set of weights. `cuda:0` denotes the first visible GPU.
+Experiments use one NVIDIA RTX 4090, FP32 inference, and three concurrent images sharing one set of weights. `cuda:0` denotes the first visible GPU.
 
 The server uses Python 3.12, PyTorch 2.12.1 with CUDA 13.0, torchvision 0.27.1, diffusers 0.35.1, transformers 4.57.1, NumPy 1.26.4, and torchmetrics 1.8.2.
 
+Use a Linux shell for installation. If the checkout already exists, enter its root and skip the first two commands:
+
 ```bash
+git clone https://github.com/wlz05/RefUnmix.git
+cd RefUnmix
 python -m venv env
 source env/bin/activate
-pip install torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cu130
-pip install diffusers==0.35.1 transformers==4.57.1 numpy==1.26.4 torchmetrics==1.8.2 accelerate safetensors pillow scipy scikit-image huggingface-hub
+python -m pip install torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cu130
+python -m pip install diffusers==0.35.1 transformers==4.57.1 numpy==1.26.4 torchmetrics==1.8.2 accelerate safetensors pillow scipy scikit-image huggingface-hub
 ```
+
+Run subsequent commands from the repository root with this environment active.
 
 Download [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) into `models/`:
 
