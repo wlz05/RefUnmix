@@ -6,6 +6,7 @@ import contextlib
 from copy import deepcopy
 import io
 import json
+import re
 from pathlib import Path
 import shlex
 import unittest
@@ -367,23 +368,23 @@ class ProtocolTests(unittest.TestCase):
             items.assert_not_called()
             load.assert_not_called()
 
+    def documented(self, extra=(), profile="main"):
+        from conduct import parser as reproduction, generation
+        root = Path(__file__).resolve().parent.parent
+        text = (root / "README.md").read_text(encoding="utf-8")
+        args = reproduction().parse_args(["--profile", profile])
+        command = generation(args, 42, Path("outputs") / profile / "42")
+        options = datasetargs(common(argparse.ArgumentParser())).parse_args(command[3:] + list(extra))
+        validate(options)
+        return text, options
+
     def testdocumentedexecution(self):
-        lines = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(encoding="utf-8").splitlines()
-        commands = [shlex.split(line) for line in lines if line.startswith("python -B RefUnmix/trial.py") and "--split all" in line and "--dry" not in line]
-        self.assertEqual(len(commands), 31)
-        for command in commands:
-            arguments = command[2:]
-            if "--output" in arguments:
-                index = arguments.index("--output")
-                arguments = arguments[:index] + arguments[index + 2:]
-            arguments += ["--dry"]
-            stream = io.StringIO()
-            with self.subTest(suite=arguments[arguments.index("--suite") + 1]), patch("sys.argv", arguments), patch("trial.items") as items, patch("trial.load") as load, contextlib.redirect_stdout(stream):
-                main()
-            payload = json.loads(stream.getvalue())
-            self.assertFalse(payload["design"]["variants"][payload["design"]["main"]]["changes"])
-            items.assert_not_called()
-            load.assert_not_called()
+        from conduct import parser as reproduction
+        text, _ = self.documented()
+        commands = [shlex.split(line) for line in text.splitlines() if line.startswith("python -B conduct.py --seeds")]
+        seeds = [reproduction().parse_args(command[3:]).seeds for command in commands]
+        self.assertEqual(seeds, [[42], [52], [3047], [3407]])
+        self.assertNotIn("experiments/single.py", text)
 
     def testbenchmarkpartitions(self):
         for options in (("--manifest", "split.json"), ("--recipe", "recipe.json")):
@@ -394,85 +395,26 @@ class ProtocolTests(unittest.TestCase):
             load.assert_not_called()
 
     def testdocumentedplans(self):
-        from evaluate import main as evaluatemain
-        from trial import settings
-        original = argparse.ArgumentParser.parse_args
-        parsed = []
-
-        class Parsed(BaseException):
-            pass
-
-        def capture(parser, *values, **options):
-            parsed.append(original(parser, *values, **options))
-            raise Parsed()
-
-        lines = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(encoding="utf-8").splitlines()
-        commands = [shlex.split(line) for line in lines if line.startswith(("python -B RefUnmix/evaluate.py", "python -B RefUnmix/trial.py"))]
-        executions = []
-        for command in commands:
-            entry = evaluatemain if Path(command[2]).stem == "evaluate" else main
-            with patch("sys.argv", command[2:]), patch.object(argparse.ArgumentParser, "parse_args", capture), self.assertRaises(Parsed):
-                entry()
-            executions.append((entry, parsed[-1]))
-        reference = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64 and args.method == "path")
-        integrated = next(args for entry, args in executions if entry is evaluatemain and args.maxsamples == 64 and args.method == "field" and args.tangentbasis == "residual")
-        validate(reference)
-        benchmark = [args for entry, args in executions if entry is main and args.split == "all" and not args.dry]
-        self.assertEqual(len(benchmark), 31)
-        self.assertEqual(sum(len(variants(args.suite, base=args)) for args in benchmark), 260)
-        for args in benchmark:
-            plan = design(args, variants(args.suite, base=args))
-            expected = deepcopy(integrated if args.suite in {"integrated", "amplitude", "conditional", "envelope"} else reference)
-            if args.suite == "mechanism":
-                expected.maxsamples = expected.maxcalls = 256
-            elif args.suite in {"amplitude", "conditional", "envelope"}:
-                expected.maxsamples, expected.maxcalls = args.maxsamples, args.maxcalls
-                if args.suite in {"conditional", "envelope"}:
-                    expected.tangentbasis, expected.tangentpolicy = "shared", "frontier" if args.suite == "envelope" else "conditional"
-            self.assertEqual(plan["controlsignature"], signature(expected))
-            self.assertEqual((args.batch, args.device, args.precision, args.seeds), (3, "cuda:0", "fp32", [42, 52, 3047, 3407]))
-            self.assertIsNone(args.manifest)
-            self.assertIsNone(args.recipe)
-        validation = next(args for entry, args in executions if entry is main and args.split == "val")
-        testing = next(args for entry, args in executions if entry is main and args.split == "test")
-        self.assertEqual(settings(validation), settings(testing))
-        self.assertEqual(Path(testing.recipe), Path(validation.output) / "recipe.json")
+        _, options = self.documented()
+        self.assertTrue(options.single)
+        self.assertEqual((options.method, options.singlemode, options.singleend), ("raw", "recenter", "responsibility"))
+        self.assertEqual((options.start, options.delta, options.end), (.75, 0., .30))
+        self.assertEqual((options.recenter, options.conditiongain, options.innovationgain), (.5, 1.25, 2.))
+        self.assertEqual((options.batch, options.precision, options.device), (3, "fp32", "cuda:0"))
+        self.assertFalse(options.control or options.heldout or options.compensation or options.frontier or options.cfg)
+        self.assertEqual((options.poststeps, options.prior), (1, "off"))
+        self.assertEqual((options.mapping, options.images, options.split), ("mapping_file.json", "annotation_images", "all"))
 
     def testdocumentedcurves(self):
-        from assess import parser as assessment
-        from audit import main as auditmain
-        from engine.curve import CONDITIONAL, ENVELOPE, RADIAL
-        lines = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(encoding="utf-8").splitlines()
-        commands = [shlex.split(line) for line in lines if any(line.startswith("python -B RefUnmix/assess.py --input outputs/" + name + "/") for name in ("amplitude", "amplitudefifteen", "conditional", "conditionalfifteen", "envelope", "envelopefifteen"))]
-        self.assertEqual(len(commands), 48)
-        groups = {}
-        for command in commands:
-            args = assessment().parse_args(command[3:])
-            label = Path(args.input).parent.name
-            group = Path(args.input).parts[1]
-            groups.setdefault(group, set()).add(label)
-            self.assertEqual(Path(args.output).stem, label)
-            self.assertEqual(args.seeds, [42, 52, 3047, 3407])
-            self.assertEqual(args.scope, "benchmark")
-            self.assertEqual(args.protocol, "protocol/metrics.py")
-            self.assertEqual(args.cache, "cache/metrics")
-            self.assertTrue(args.network)
-            self.assertFalse(Path(args.input).is_absolute())
-        expected = set(RADIAL) | {"full", "matched", "feedback"}
-        self.assertEqual(groups, {"amplitude": expected, "amplitudefifteen": expected, "conditional": CONDITIONAL, "conditionalfifteen": CONDITIONAL, "envelope": ENVELOPE, "envelopefifteen": ENVELOPE})
-        original = argparse.ArgumentParser.parse_args
-        parsed = []
-        class Parsed(BaseException):
-            pass
-        def capture(parser, *values, **options):
-            parsed.append(original(parser, *values, **options))
-            raise Parsed()
-        commands = [shlex.split(line) for line in lines if line.startswith("python -B RefUnmix/audit.py") and "--sweep" in line]
-        self.assertEqual(len(commands), 6)
-        for command in commands:
-            with patch("sys.argv", command[2:]), patch.object(argparse.ArgumentParser, "parse_args", capture), self.assertRaises(Parsed):
-                auditmain()
-        self.assertEqual({args.sweep for args in parsed}, {"outputs/amplitudemetrics", "outputs/amplitudemetricsfifteen", "outputs/conditionalmetrics", "outputs/conditionalmetricsfifteen", "outputs/envelopemetrics", "outputs/envelopefifteenmetrics"})
+        text, _ = self.documented()
+        commands = [shlex.split(line) for line in text.splitlines() if line.startswith("python -B conduct.py --profile")]
+        self.assertEqual(len(commands), 5)
+        profiles = [self.documented(profile=command[command.index("--profile") + 1])[1] for command in commands]
+        self.assertTrue(any(value.innovationgain == 1 for value in profiles))
+        self.assertTrue(any(value.recenter == 0 for value in profiles))
+        self.assertTrue(any(value.conditiongain == 1 and value.singlegain == 1.5 for value in profiles))
+        self.assertTrue(any(not value.singlebias for value in profiles))
+        self.assertTrue(any(value.biasgeometry == "global" for value in profiles))
 
     def testrenderidentity(self):
         first = self.args()
@@ -487,22 +429,24 @@ class ProtocolTests(unittest.TestCase):
 
     def testdocumentedassessment(self):
         from assess import parser as assessment
-        lines = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(encoding="utf-8").splitlines()
-        commands = [shlex.split(line) for line in lines if line.startswith("python -B RefUnmix/assess.py")]
-        self.assertGreaterEqual(len(commands), 5)
-        for command in commands:
-            args = assessment().parse_args(command[3:])
-            with self.subTest(input=args.input):
-                if args.scope == "benchmark":
-                    self.assertEqual(args.seeds, [42, 52, 3047, 3407])
-                    self.assertEqual(args.protocol, "protocol/metrics.py")
-                    self.assertEqual(args.device, "cuda:0")
-                    self.assertNotEqual(args.network, args.offline)
-                    self.assertFalse(args.pixels)
-                else:
-                    self.assertTrue(args.pixels)
-                    self.assertEqual(args.seeds, [42])
-                    self.assertFalse(args.network or args.offline)
+        from conduct import parser as reproduction, scoring
+        text, _ = self.documented()
+        command = scoring(reproduction().parse_args([]), 42, Path("outputs/main/42"))
+        options = assessment().parse_args(command[3:])
+        self.assertEqual((options.scope, options.seeds), ("benchmark", [42]))
+        self.assertEqual(options.protocol, "protocol/metrics.py")
+        self.assertTrue(options.offline)
+        self.assertFalse(options.network or options.pixels)
+        self.assertEqual((options.cache, options.device), ("cache/metrics", "cuda:0"))
+        fence = chr(96) * 3
+        blocks = re.findall(fence + r"bash\n(.*?)" + fence, text, re.S)
+        aggregation = next(block for block in blocks if "aggregate.py" in block and "--input" in block)
+        command = shlex.split(aggregation.replace("\\\n", " "))
+        index = command.index("--seeds")
+        self.assertEqual(list(map(int, command[index + 1:])), [42, 52, 3047, 3407])
+        inputs = command[command.index("--input") + 1:index]
+        self.assertEqual(len(set(inputs)), 4)
+        self.assertTrue(all(not Path(path).is_absolute() for path in inputs))
 
     def testuniquewinner(self):
         raw = self.candidate("raw")

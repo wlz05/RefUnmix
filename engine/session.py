@@ -156,10 +156,19 @@ class Editor:
             raise RuntimeError("Model prediction contains nonfinite values.")
         return clean
 
-    def predict(self, anchor, noise, tick, embed):
+    def predict(self, anchor, noise, tick, embed, keys=0., values=0., layout=2):
         alpha = self.alphas[tick].sqrt()
         sigma = (1 - self.alphas[tick]).sqrt()
         sample = alpha * anchor.float() + sigma * noise.float()
+        if keys or values:
+            if layout not in (2, 3) or anchor.shape[0] % layout:
+                raise ValueError("Reference fields require complete endpoint groups.")
+            from engine.memory import route
+            with route(keys, values, layout) as counts:
+                result = self.state(sample, tick, embed)
+                if keys and counts[0] == 0 or values and counts[1] == 0:
+                    raise RuntimeError("The reference field hooks were bypassed by the attention backend.")
+                return result
         return self.state(sample, tick, embed)
 
     def state(self, sample, tick, embed):
@@ -226,6 +235,7 @@ class Session:
         self.encodes = 1
         self.textbase = max(0, editor.textcalls - 2)
         self.artifacts = {}
+        self.queries = []
 
     def localization(self, source, target, words=None, maximum=1024):
         from engine.attention import Collector, tokens
@@ -238,11 +248,14 @@ class Session:
         values = [value for value in self.attentions.values() if value is not None]
         return torch.stack(values).mean(0).to(self.anchor.device) if values else None
 
-    def predict(self, anchor, noises, tick, embeddings):
+    def predict(self, anchor, noises, tick, embeddings, keys=0., values=0., layout=2):
         if self.limit is not None:
             self.limit.consume(anchor.shape[0])
         self.calls += 1
         self.samples += anchor.shape[0]
+        self.queries.append({"tick": float(tick), "samples": int(anchor.shape[0]), "kind": "clean"})
+        if keys or values:
+            return self.editor.predict(anchor, noises, tick, embeddings, keys, values, layout)
         return self.editor.predict(anchor, noises, tick, embeddings)
 
     def state(self, sample, tick, embeddings):
@@ -250,6 +263,7 @@ class Session:
             self.limit.consume(sample.shape[0])
         self.calls += 1
         self.samples += sample.shape[0]
+        self.queries.append({"tick": float(tick), "samples": int(sample.shape[0]), "kind": "state"})
         return self.editor.state(sample, tick, embeddings)
 
     def velocity(self, sample, tick, embeddings):
@@ -259,6 +273,7 @@ class Session:
             self.limit.consume(sample.shape[0])
         self.calls += 1
         self.samples += sample.shape[0]
+        self.queries.append({"tick": float(tick), "samples": int(sample.shape[0]), "kind": "velocity"})
         return self.editor.velocity(sample, tick, embeddings)
 
     @torch.no_grad()
@@ -361,7 +376,7 @@ class Session:
         return report
 
     def stats(self):
-        return {"calls": self.calls, "samples": self.samples, "decodes": self.decodes, "encodes": self.encodes, "textcalls": self.editor.textcalls - self.textbase, "ticks": sorted(self.cache), "elapsed": perf_counter() - self.started, "attention": self.attentionlog, "renders": dict(self.renders), "references": [{"cleanup": key is not None, "tick": key, "decoded": entry["pixels"] is not None} for key, entry in self.references.items()], "budget": self.limit.report() if self.limit is not None else None}
+        return {"calls": self.calls, "samples": self.samples, "decodes": self.decodes, "encodes": self.encodes, "textcalls": self.editor.textcalls - self.textbase, "ticks": sorted(self.cache), "queryticks": sorted({item["tick"] for item in self.queries}), "queries": list(self.queries), "elapsed": perf_counter() - self.started, "attention": self.attentionlog, "renders": dict(self.renders), "references": [{"cleanup": key is not None, "tick": key, "decoded": entry["pixels"] is not None} for key, entry in self.references.items()], "budget": self.limit.report() if self.limit is not None else None}
 
 # Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

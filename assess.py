@@ -97,8 +97,11 @@ def verified(row, source, item):
         raise ValueError("Generated prompts no longer match the evaluation dataset.")
     if settings.get("imagesha256") is not None:
         import numpy as np
-        sourcepixels = (np.asarray(image, dtype=np.float32).transpose(2, 0, 1)[None] / 255).copy(order="C")
-        if hashlib.sha256(sourcepixels.tobytes()).hexdigest() != settings["imagesha256"]:
+        sourcepixels = np.asarray(image, dtype=np.float32).transpose(2, 0, 1)[None].copy(order="C")
+        # Accept exact CPU division and CUDA reciprocal normalization.
+        normalized = (sourcepixels / 255, sourcepixels * np.float32(1 / 255))
+        hashes = {hashlib.sha256(value.tobytes()).hexdigest() for value in normalized}
+        if settings["imagesha256"] not in hashes:
             raise ValueError("Generated source pixels no longer match the evaluation dataset.")
     mask = annotation(item, border=True)
     if mask is None:

@@ -186,7 +186,7 @@ class Metric:
         self.box = (int(columns.min()), int(rows.min()), int(columns.max()) + 1, int(rows.max()) + 1)
         self.local = local
         with torch.no_grad():
-            self.text = judge.texts([target])[0]
+            self.text = judge.texts([target])[0].float()
 
     @torch.no_grad()
     def __call__(self, image):
@@ -195,7 +195,8 @@ class Metric:
             raise ValueError("Candidate and source sizes must agree.")
         pixels = np.asarray(image.convert("RGB"))
         focused = Image.fromarray(np.where(self.mask[..., None], pixels, 127).astype(np.uint8)).crop(self.box)
-        scores = (self.judge.images([image, focused]) @ self.text).float().cpu().tolist()
+        features = self.judge.images([image, focused]).to(device=self.text.device, dtype=torch.float32)
+        scores = (features @ self.text).cpu().tolist()
         globalvalue, localvalue = (100.0 * value for value in scores)
         protected = ~self.mask
         mse = float(np.square(pixels.astype(np.float64) / 255.0 - self.pixels)[protected].mean()) if protected.any() else None

@@ -142,6 +142,7 @@ class ClipJudge:
             change = features[0] - reference[0]
             globalgain = torch.dot(change, direction)
             localgain = ((features[1:] - reference[1:]) @ text[2] * regionweights).sum() if boxes else globalgain
+            localdirection = ((features[1:] - reference[1:]) @ functional.normalize(direction, dim=0) * regionweights).sum() if boxes else globalgain
             score = (globalgain + localgain) * 0.5
             directional = torch.dot(change, direction) / (change.norm() * direction.norm()).clamp_min(1e-6)
             directional = directional * (change.norm() / 0.05).clamp(max=1)
@@ -153,7 +154,7 @@ class ClipJudge:
                 if boxes:
                     individual["local0"] = float(localgain)
             components = {key: float(features[0] @ vector) for key, vector in zip(componentnames, text[3:])}
-            return {"score": float(score), "global": float(globalgain), "local": float(localgain), "target": float(features[0] @ text[1]), "direction": float(directional), "localviews": len(boxes), **individual, **components}
+            return {"score": float(score), "global": float(globalgain), "local": float(localgain), "target": float(features[0] @ text[1]), "direction": float(directional), "localviews": len(boxes), "localdirection": float(localdirection), **individual, **components}
 
         evaluate.evaluations = 0
         evaluate.boxes = tuple(boxes)

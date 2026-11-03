@@ -33,6 +33,40 @@ def times(values):
 
 def common(parser):
     parser.add_argument("--model", default="./models")
+    parser.add_argument("--single", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--keystrength", type=float, default=0.)
+    parser.add_argument("--valuestrength", type=float, default=0.)
+    parser.add_argument("--referencephase", choices=("field", "endpoint", "both"), default="field")
+    parser.add_argument("--singlemode", choices=("calibrated", "contrast", "innovation", "pullback", "coherent", "recenter"), default="calibrated")
+    parser.add_argument("--singlegain", type=float, default=1.5)
+    parser.add_argument("--responsepower", type=float, default=.5)
+    parser.add_argument("--responsesharp", type=float, default=1.)
+    parser.add_argument("--responsepenalty", type=float, default=1.)
+    parser.add_argument("--innovationgain", type=float, default=1.)
+    parser.add_argument("--responsecontrols", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--singlecondition", choices=("raw", "aligned", "projected", "extrapolated"), default="raw")
+    parser.add_argument("--conditiongain", type=float, default=1.5)
+    parser.add_argument("--recenter", type=float, default=1.)
+    parser.add_argument("--carry", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--singlebias", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--biasridge", type=float, default=.1)
+    parser.add_argument("--biasgeometry", choices=("global", "local"), default="global")
+    parser.add_argument("--biaswindow", type=int, default=5)
+    parser.add_argument("--biasnorm", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--singleridge", type=float, default=.5)
+    parser.add_argument("--singlewindow", type=int, default=5)
+    parser.add_argument("--singleprior", type=float, default=.8)
+    parser.add_argument("--singleend", choices=("paired", "target", "none", "quotient", "response", "decoded", "anchored", "responsibility"), default="paired")
+    parser.add_argument("--singlelift", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--singlecone", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--singlequotient", choices=("global", "local", "orthogonal", "conditional"), default="global")
+    parser.add_argument("--singlepatch", type=int, default=16)
+    parser.add_argument("--singleprice", type=float, default=.1)
+    parser.add_argument("--singlemetric", choices=("advection", "conditional"), default="advection")
+    parser.add_argument("--singleroute", choices=("ridge", "cone"), default="ridge")
+    parser.add_argument("--singlenorm", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--singlebasis", choices=("output", "input"), default="output")
+    parser.add_argument("--singlegeometry", choices=("local", "global"), default="local")
     parser.add_argument("--backbone", type=str.casefold, choices=("vp", "flux", "sd3"), default="vp")
     parser.add_argument("--flowguidance", type=float, default=3.5)
     parser.add_argument("--flowconsistency", action=argparse.BooleanOptionalAction, default=False)
@@ -55,6 +89,12 @@ def common(parser):
     parser.add_argument("--fieldtolerance", type=float, default=1e-6)
     parser.add_argument("--fieldgeometry", type=str.casefold, choices=("coupled", "scalar"), default="coupled")
     parser.add_argument("--fieldrepair", type=int, choices=(0, 1, 2), default=0)
+    parser.add_argument("--unmix", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--unmixgain", nargs="+", type=float, default=[1., 1.5, 2.])
+    parser.add_argument("--unmixmode", choices=("joint", "vae", "source"), default="joint")
+    parser.add_argument("--unmixbound", choices=("unit", "gain"), default="unit")
+    parser.add_argument("--unmixselect", choices=("alignment", "direction"), default="alignment")
+    parser.add_argument("--unmixaxis", choices=("radial", "residual", "conditional"), default="radial")
     parser.add_argument("--fieldfactor", type=float, default=1.)
     parser.add_argument("--semantic", type=str.casefold, choices=("patches", "region"), default="patches")
     parser.add_argument("--tangent", action=argparse.BooleanOptionalAction, default=False)
@@ -286,6 +326,46 @@ def saveartifacts(session, root):
     return result
 
 def validate(args):
+    if args.responsecontrols and (not args.single or args.singleend != "responsibility"):
+        raise ValueError("Response controls require the single-field responsibility endpoint.")
+    if args.innovationgain != 1 and (not args.single or args.singleend != "responsibility"):
+        raise ValueError("Innovation amplification requires the single-field responsibility endpoint.")
+    if any(not math.isfinite(value) or not 0 <= value <= 1 for value in (args.keystrength, args.valuestrength)):
+        raise ValueError("Reference strengths must be finite and in [0, 1].")
+    if (args.keystrength or args.valuestrength) and (not args.single or args.backbone != "vp" or args.noise != 1):
+        raise ValueError("Reference fields require single VP mode with one noise sample.")
+    if (args.keystrength or args.valuestrength) and args.referencephase != "field" and args.singleend not in {"paired", "quotient", "response", "anchored", "responsibility"}:
+        raise ValueError("Reference endpoints require a paired continuation.")
+    if getattr(args, "single", False):
+        if getattr(args, "oracle", False) or getattr(args, "region", None) is not None:
+            raise ValueError("Single-field mode estimates its response prior without an external region.")
+        if args.poststeps != 1 or args.cfg or args.guidance != 1:
+            raise ValueError("Single-field mode requires poststeps=1 and unguided native predictions.")
+        if args.control or args.heldout or args.compensation or args.frontier or args.prior != "off":
+            raise ValueError("Single-field mode requires controller, held-out search, compensation, frontier, and prior to be disabled.")
+        if args.backbone != "vp" or args.method != "raw" or args.tangent or getattr(args, "unmix", False):
+            raise ValueError("Single-field construction requires VP raw mode without search.")
+        if not math.isfinite(args.innovationgain) or not 1 <= args.innovationgain <= 4:
+            raise ValueError("Innovation gain must be finite and in [1, 4].")
+        if not math.isfinite(args.responsesharp) or not 1 <= args.responsesharp <= 8:
+            raise ValueError("Response sharpness must be finite and in [1, 8].")
+        if not math.isfinite(args.responsepower) or not 0 < args.responsepower <= 4 or not math.isfinite(args.responsepenalty) or args.responsepenalty <= 0:
+            raise ValueError("Endpoint response parameters must be positive and finite.")
+        if not 1 <= args.biaswindow <= 31 or args.biaswindow % 2 != 1:
+            raise ValueError("Source bias windows must be odd and in [1, 31].")
+        if not math.isfinite(args.biasridge) or args.biasridge < 0:
+            raise ValueError("Source bias ridge must be finite and nonnegative.")
+        if args.carry and (args.singlemode != "recenter" or args.delta != 0 or args.noise != 1):
+            raise ValueError("Calibrated noise transport requires one recentered temporal support.")
+        if not math.isfinite(args.recenter) or not 0 <= args.recenter <= 2:
+            raise ValueError("Recenter gain must be finite and in [0, 2].")
+        if not math.isfinite(args.conditiongain) or not 0 < args.conditiongain <= 4:
+            raise ValueError("Condition gain must be finite and in (0, 4].")
+        if not math.isfinite(args.singlegain) or not 0 < args.singlegain <= 4 or not math.isfinite(args.singleridge) or args.singleridge <= 0 or not math.isfinite(args.singleprior) or not 0 <= args.singleprior <= 1 or args.singlewindow < 3 or args.singlewindow % 2 == 0:
+            raise ValueError("Single-field calibration parameters are invalid.")
+    if getattr(args, "unmix", False):
+        if args.method != "field" or not args.unmixgain or any(not math.isfinite(x) or not 1 <= x <= 4 for x in args.unmixgain):
+            raise ValueError("Counterfactual coupling requires field mode and gains in [1, 4].")
     from engine.batch import options as batching
     from engine.field import options
     from engine.limit import Budget
@@ -382,6 +462,13 @@ def load(args):
         else:
             from engine.flow import Editor
             editor = Editor.load(root, args.device, args.precision, args.size, args.backbone, args.flowguidance, args.flowconsistency)
+        if getattr(args, "single", False):
+            # Initialize the CUDA solver before parallel requests.
+            identity = torch.eye(8, dtype=torch.float64, device=editor.device)[None].expand(2, -1, -1).contiguous()
+            torch.linalg.solve(identity, identity)
+        if args.keystrength or args.valuestrength:
+            from engine.memory import install
+            editor.metadata["referencecontext"] = {"hooks": install(editor.unet), "keys": args.keystrength, "values": args.valuestrength, "phase": args.referencephase}
         judge = None
         if args.clip and (args.method not in {"raw", "fixed"} or args.tangent):
             from engine.judge import ClipJudge
@@ -423,6 +510,11 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
     metadata["reproducibility"] = snapshot()
     metadata["controlsignature"] = signature(args)
     metadata["controlactive"] = judge is not None and (args.method not in {"raw", "fixed", "base"} or args.tangent)
+    if source.strip().casefold() == target.strip().casefold():
+        return session.origin, {**metadata, "method": args.method, "noop": True, "reason": "case-insensitive identical prompts", "stats": session.stats(), "seed": args.seed}, session
+    if getattr(args, "single", False):
+        from engine.single import edit
+        return edit(session, args, metadata)
     metadata["configuration"] = {key: jsonfile(getattr(args, key, None)) for key in ("constraints", "probabilities", "radiusprofile")}
     adapterfile = getattr(args, "adapter", None)
     metadata["adaptersha256"] = digest(locate(Path("."), clean(adapterfile, "adapter"))) if adapterfile is not None else None
@@ -499,6 +591,17 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
                 return stopped(session, metadata, args.method, error, constructed.endpoint, judge, initialstats)
             if constructed.neutral is None and not base.ne(0).any().item():
                 constructed.neutral = latent.detach().clone()
+            if getattr(args, "unmix", False):
+                from engine.coupling import transport
+                constructed.pixels = output
+                constructed.endpoint = latent
+                if constructed.scores is None:
+                    constructed.scores = score(output)
+                output = transport(constructed, native, score, scoringmask, args.unmixgain, args.unmixmode, args.unmixbound, args.unmixselect, args.unmixaxis)
+                latent = constructed.endpoint
+                metadata["outputtransport"] = "Counterfactual RGB reference compensation."
+                metadata["fieldsha256"] = hashlib.sha256(constructed.value.detach().float().cpu().contiguous().numpy().tobytes()).hexdigest()
+                metadata["fieldnorm"] = float(constructed.value.double().norm())
             constructed.observe(latent)
             damage, mass = protection(session.origin, 1 - scoringmask)
             scores = constructed.scores if constructed.scores is not None else score(output)
@@ -507,6 +610,9 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
                 trace["baselinedamage"] = damage(output)
             report = {**metadata, "method": "field", "renderer": "native", "scores": scores, "damage": damage(output), "rawdamage": trace.get("baselinedamage"), "protectedvalid": mass > 0, "selected": "field" if trace["accepted"] else "baseline", "fallback": not trace["accepted"], "constraintmet": True, "budgetstopped": trace["budgetstopped"], "evaluations": trace["evaluations"] + int(constructed.scores is None), "candidates": [], "controller": {"enabled": False, "scope": "Response allocation is part of field construction."}, "backend": native.metadata(), "stats": session.stats(), "judgestats": {key: value - initialstats.get(key, 0) for key, value in judge.stats().items()}, "explicitregion": mask is not None, "localization": localizationreport, "adoptedfieldnorm": metadata["fieldnorm"], "scope": "Verified native endpoint of the integrated field; no reference search."}
             report["access"] = describe(native, Prior(session, mode="off"))
+            if getattr(args, "unmix", False):
+                report["renderer"] = "counterfactual"
+                report["selected"] = "unmixed" if constructed.report["coupling"]["accepted"] else report["selected"]
             return output.detach().clone(), report, session
         path = ReferencePath(native, base, args.representation, args.seed, neutral, constructed.endpoint, constructed.baseline if args.method == "path" else None)
         if constructed.source is not None:

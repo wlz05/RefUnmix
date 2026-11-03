@@ -181,6 +181,7 @@ class Protocol:
                 measured = call("calculate_mse", origin, edited, protected, protected)
                 if (measured == 0) != (raw["mse"] == 0) or not math.isclose(measured, raw["mse"], rel_tol=1e-4, abs_tol=1e-12):
                     raise RuntimeError("External metric masking differs from the expected pixel protocol.")
+                raw["mse"] = measured
                 for name in ("lpips", "ssim"):
                     raw[name] = call("calculate_" + name, origin, edited, protected, protected)
                 if measured > 0:
