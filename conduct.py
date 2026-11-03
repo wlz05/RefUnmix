@@ -36,6 +36,10 @@ def parser():
     result.add_argument("--network", action="store_true")
     return result
 
+def entry(name):
+    # Resolve script locations without changing the data working directory.
+    return Path(__file__).resolve().with_name(name).relative_to(Path.cwd().resolve()).as_posix()
+
 def generation(args, seed, target):
     command = [sys.executable, "-B", "evaluate.py", "--dataset", (args.dataset).as_posix(), "--mapping", (args.mapping).as_posix(), "--images", (args.images).as_posix(), "--split", "all", "--model", (args.model).as_posix(), "--backbone", "vp", "--device", args.device, "--precision", "fp32", "--size", "512", "--seed", str(seed), "--seeds", str(seed), "--batch", str(args.batch), "--output", (target).as_posix(), "--single", "--singlemode", "recenter", "--singlecondition", "extrapolated", "--conditiongain", "1.25", "--singlegain", "1.5", "--innovationgain", "2", "--singleend", "responsibility", "--start", ".75", "--delta", "0", "--end", ".30", "--noise", "1", "--scale", "1", "--cleanup", "--recenter", ".5", "--singlebias", "--biasgeometry", "local", "--biaswindow", "5", "--biasridge", ".1", "--responsepower", ".5", "--responsepenalty", "1", "--method", "raw", "--field", "chord", "--poststeps", "1", "--guidance", "1", "--no-cfg", "--prior", "off", "--no-control", "--no-compensation", "--no-frontier", "--no-heldout", "--maxsamples", "64", "--maxcalls", "64"]
     changes = {"calibration": ("--recenter", "0"), "locality": ("--biasgeometry", "global"), "amplification": ("--innovationgain", "1"), "condition": ("--conditiongain", "1")}
@@ -44,10 +48,11 @@ def generation(args, seed, target):
         command[command.index(flag) + 1] = value
     if args.profile == "bias":
         command[command.index("--singlebias")] = "--no-singlebias"
+    command[2] = entry("evaluate.py")
     return command
 
 def scoring(args, seed, target):
-    return [sys.executable, "-B", "assess.py", "--input", (target / "summary.json").as_posix(), "--dataset", (args.dataset).as_posix(), "--mapping", (args.mapping).as_posix(), "--images", (args.images).as_posix(), "--scope", "benchmark", "--seeds", str(seed), "--protocol", (args.protocol).as_posix(), "--device", args.device, "--network" if args.network else "--offline", "--cache", (args.cache).as_posix(), "--output", (target / "metrics.json").as_posix()]
+    return [sys.executable, "-B", entry("assess.py"), "--input", (target / "summary.json").as_posix(), "--dataset", (args.dataset).as_posix(), "--mapping", (args.mapping).as_posix(), "--images", (args.images).as_posix(), "--scope", "benchmark", "--seeds", str(seed), "--protocol", (args.protocol).as_posix(), "--device", args.device, "--network" if args.network else "--offline", "--cache", (args.cache).as_posix(), "--output", (target / "metrics.json").as_posix()]
 
 def complete(path, seed):
     document = json.loads(path.read_text(encoding="utf-8"))
@@ -60,8 +65,9 @@ def complete(path, seed):
 
 def source():
     # Keep the same runtime source throughout the seed sweep.
-    files = list(Path('.').glob('*.py')) + list(Path('engine').glob('*.py'))
-    return {path.as_posix(): hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest() for path in sorted(files)}
+    root = Path(__file__).resolve().parent
+    files = list(root.glob('*.py')) + list((root / 'engine').glob('*.py'))
+    return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest() for path in sorted(files)}
 
 def matching(path, command, revision):
     saved = json.loads(path.read_text(encoding="utf-8"))

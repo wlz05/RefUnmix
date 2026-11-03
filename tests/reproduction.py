@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import conduct
 
 class ReproductionTests(unittest.TestCase):
@@ -13,6 +14,16 @@ class ReproductionTests(unittest.TestCase):
         self.assertEqual(args.seeds, [42, 52, 3047, 3407])
         self.assertEqual(args.batch, 3)
         self.assertEqual(args.profile, 'main')
+
+    def test_containing_workspace(self):
+        root = Path(conduct.__file__).resolve().parent
+        args = conduct.parser().parse_args([])
+        before = conduct.source()
+        with patch('conduct.Path.cwd', return_value=root.parent):
+            command = conduct.generation(args, 42, Path('outputs/main/42'))
+            self.assertEqual(command[2], root.name + '/evaluate.py')
+            self.assertEqual(conduct.scoring(args, 42, Path('outputs/main/42'))[2], root.name + '/assess.py')
+            self.assertEqual(conduct.source(), before)
 
     def test_registered_profiles(self):
         import argparse

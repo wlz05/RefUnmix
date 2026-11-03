@@ -97,6 +97,12 @@ python -B conduct.py --batch 4 --output outputs/four
 
 Each seed writes its own images, inference summary, and metric report under `outputs/main/SEED/`. The final four-seed result is `outputs/main/mean.json`. Completed seeds are retained. An unfinished output directory requires a fresh destination. Saved recipes bind every seed to the same code and generation settings.
 
+For the server layout with source in `RefUnmix/` and data, models, and caches in the surrounding workspace, run from that workspace:
+
+```bash
+env/bin/python -B RefUnmix/conduct.py --protocol protocol/official/metrics.py
+```
+
 Run the stages separately:
 
 ```bash
