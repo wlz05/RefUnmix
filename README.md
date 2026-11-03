@@ -151,7 +151,7 @@ Each profile writes separate seed reports and its own `mean.json`. Evaluation fo
 
 ## Metrics and aggregation
 
-First average all valid requests within each seed, then average the four seed results with equal weight:
+For each quality metric, first average all valid requests within each seed, then average the four seed results with equal weight:
 
 ```math
 \bar m_s=\frac{1}{|\mathcal I_s|}\sum_{i\in\mathcal I_s}m_{i,s},\qquad
@@ -166,6 +166,7 @@ First average all valid requests within each seed, then average the four seed re
 | LPIPS | Perceptual difference outside the edit support; smaller is better | x1000 |
 | CLIP-Whole | Whole-image similarity to the target caption; larger is better | Original score |
 | CLIP-Edited | Target-caption similarity with non-edit pixels zeroed; larger is better | Original score |
+| Time | Complete editing latency on one RTX 4090; smaller is better | Seconds/image |
 
 Background metrics include requests with nonempty unedited support; CLIP metrics cover the complete request set. Fully edited masks have undefined background scores. Exact matches can have infinite PSNR; these retain an explicit status. Average per-request PSNR directly, rather than deriving it from mean MSE.
 
@@ -178,7 +179,9 @@ python -B aggregate.py \
   --seeds 42 52 3047 3407
 ```
 
-Avg. Rank averages ranks across these six metric means, respecting each metric's direction; lower is better. T-Free denotes training-free editing and I-Free denotes inversion-free editing. Comparisons separate multi-step, few-step, and single-update methods, and record condition evaluations separately from image-update counts.
+Time is measured separately with batch 1 on an otherwise idle GPU. After five warm-up requests, measure the same 50 fixed requests, five per edit category, for each seed. Synchronize CUDA before and after each request. Timing includes input loading, the complete editing algorithm, internal selection when used, and conversion to the final RGB image. It excludes checkpoint loading, output writes, and report-only evaluation. Average the 50 request times within each seed, then average the four seed means with equal weight.
+
+Avg. Rank averages ranks across PSNR, MSE, SSIM, LPIPS, CLIP-Whole, CLIP-Edited, and Time. Rank each metric in its stated direction after rounding to the reported precision; ties receive average ranks. Lower Avg. Rank is better. T-Free denotes training-free editing and I-Free denotes inversion-free editing. Comparisons separate multi-step, few-step, and single-update methods, and record condition evaluations separately from image-update counts.
 
 The final comparison uses the four-seed means produced by the commands above. Baselines retain their official algorithm parameters. The three RefUnmix gains apply to its own field and response allocation.
 
