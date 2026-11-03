@@ -161,7 +161,7 @@ First average all valid requests within each seed, then average the four seed re
 | CLIP-Whole | Whole-image similarity to the target caption; larger is better | Original score |
 | CLIP-Edited | Target-caption similarity with non-edit pixels zeroed; larger is better | Original score |
 
-There are 556 requests with defined background metrics and 700 CLIP requests per seed. Fully edited masks have undefined background scores. Exact matches can have infinite PSNR; these retain an explicit status. Average per-request PSNR directly, rather than deriving it from mean MSE.
+Background metrics include requests with nonempty unedited support; CLIP metrics cover the complete request set. Fully edited masks have undefined background scores. Exact matches can have infinite PSNR; these retain an explicit status. Average per-request PSNR directly, rather than deriving it from mean MSE.
 
 `aggregate.py` recomputes the per-seed tables from the individual rows. It requires all requested seeds, 700 distinct request identities per seed, matching generation settings, and the pinned calculator. Missing values are never substituted with zero.
 
@@ -173,14 +173,6 @@ python -B aggregate.py \
 ```
 
 Avg. Rank averages ranks across these six metric means, respecting each metric's direction; lower is better. T-Free denotes training-free editing and I-Free denotes inversion-free editing. Comparisons separate multi-step, few-step, and single-update methods, and record condition evaluations separately from image-update counts.
-
-## Current measurements
-
-The `1.25 / 1.5 / 2` profile has completed 700 requests at seed 42:
-
-| Seed | PSNR | MSE x1000 | SSIM x100 | LPIPS x1000 | CLIP-Whole | CLIP-Edited |
-|---|---:|---:|---:|---:|---:|---:|
-| 42 | 25.14746 | 4.91230 | 91.65292 | 64.11736 | 26.41730 | 22.63021 |
 
 The final comparison uses the four-seed means produced by the commands above. Baselines retain their official algorithm parameters. The three RefUnmix gains apply to its own field and response allocation.
 
