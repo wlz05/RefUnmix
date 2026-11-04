@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# RefUnmix: Endpoint-Aligned Fields for Protected Image Editing
+# RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
 
 import torch
 

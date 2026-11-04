@@ -1,34 +1,41 @@
-# RefUnmix: Endpoint-Aligned Fields for Protected Image Editing
+# RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
 
-RefUnmix separates a generator's conditional innovation from its shared source-conditioned transport. A joint response rule retains useful shared changes and reallocates their energy toward the requested edit. The backbone stays frozen.
+RefUnmix edits a source image with a frozen generator. Three matched predictions distinguish what changes when the prompt changes from what would change under the source prompt alone. RefUnmix assigns the two responses separately and writes a single edited image.
 
 ## Method
 
-```text
-Source image + source/target prompts
-                  |
-        Paired conditional field
-                  |
-     Three matched native endpoints
-                  |
- Conditional innovation / shared transport
-                  |
-       Joint response allocation
-                  |
-           Edited RGB image
-```
+**Build the field.** Encode the source image $X$ as $z_0$. Evaluate the source prompt and the extrapolated target prompt at the same anchor, noise and field time. Scale the paired prediction difference by the field gain to obtain $F$ and the transported anchor $z_1=z_0+F$. The main profile uses the sampled noise directly, with source-state calibration disabled.
 
-Let $h_{(0,0)}$, $h_{(1,0)}$, and $h_{(1,1)}$ denote the source-zero, source-field, and target-field native latent endpoints. The first index indicates whether the field is applied (0 or 1); the second selects the source (0) or target (1) condition. Their decoded differences give conditional innovation $d$ and shared transport $a$:
+**Measure three endpoints.** Write $c_0=c_s$ and $c_1=c_t$. The native clean-latent prediction $P$ uses the original prompts at endpoint time $t_e$. Decode each endpoint with $V$ before differencing.
 
 ```math
-d=V(h_{(1,1)})-V(h_{(1,0)}),\qquad
-a=V(h_{(1,0)})-V(h_{(0,0)}),\qquad
-Y=X+\eta d+qa.
+h_{(i,j)}=P_{t_e}(z_i,c_j;\epsilon),\qquad
+R_{(i,j)}=V(h_{(i,j)}),\qquad
+(i,j)\in\{(0,0),(1,0),(1,1)\}.
 ```
 
-The interaction between d and a determines how much shared transport to retain while increasing conditional innovation. A per-pixel source-error envelope constrains allocation through clipping and 8-bit export. Responsibility is measured from model responses. Generation uses no annotation mask or CLIP-based output selection.
+```math
+R_{(1,1)}-R_{(0,0)}
+=\underbrace{R_{(1,1)}-R_{(1,0)}}_{d\ \text{(prompt response)}}
++\underbrace{R_{(1,0)}-R_{(0,0)}}_{a\ \text{(shared transport)}}.
+```
 
-The main profile uses the paired source/target contrast under shared sampled noise (`--singlemode contrast --recenter 0 --no-singlebias`). Source-State Calibration is disabled in full: both noise recentering and source-bias projection are omitted. The three matched endpoints and joint response allocation remain active. The profile fixes `conditiongain=1.25`, `singlegain=1.5`, and `innovationgain=2`; the field time is 0.75 and native continuation time is 0.30. One final image update uses five denoiser condition samples in two logical forward calls, one VAE encode, and three VAE decodes. The controller and candidate-search branches are inactive.
+The middle endpoint holds the transported anchor fixed when measuring $d$ and the source prompt fixed when measuring $a$. The latent prompt difference gives a spatial weight $w$. All three endpoints share one noise realization.
+
+**Assign the responses.** For each RGB pixel, the interaction $C=\langle d,a\rangle$ determines how retaining $a$ affects the source error. Set $A=\|a\|^2$ and minimize the following objective over $0\le s\le1$ with $\eta=1$.
+
+```math
+J_\eta(s)=(1-w)\|\eta d+s a\|^2+\lambda A(s-w)^2.
+```
+
+Keep the minimizing coefficient if its quantized output stays within the source error of the fixed-weight proposal $X+d+wa$. Otherwise keep $w$. Call the accepted coefficient $q$. Innovation enhancement chooses the largest feasible gain up to its cap and minimizes $J_\eta(s)$ over the remaining feasible interval.
+
+```math
+\|\eta d+s a\|^2\le\|d+qa\|^2,\qquad
+\widetilde Y=X+\eta d+s a.
+```
+
+The continuous proposal is clipped and quantized. If rounding exceeds the unamplified output's pixel budget, the integer RGB residual is rounded inward. This bound concerns squared source error for the same endpoints. The six quality metrics are measured independently after generation.
 
 ## Installation
 
@@ -83,6 +90,8 @@ Official scoring uses CLIP ViT-L/14, squeeze LPIPS, and DINO ViT-B/8. The first 
 
 ## Main experiment
 
+On PIE-Bench, RefUnmix has the lowest seven-metric average rank. It leads on background SSIM and CLIP-Whole and ranks second on CLIP-Edited. Among the single-update SD-Turbo methods, it scores better on all six quality metrics than ChordEdit, RRLS and WhereEdit. ChordEdit and WhereEdit take less time per image.
+
 The runner generates and evaluates seeds **42, 52, 3047, 3407**, in that order:
 
 ```bash
@@ -129,6 +138,12 @@ python -B conduct.py --action aggregate
 
 ## Ablations
 
+The core ablation uses the same paired field as the main method. The fixed-assignment row outputs $Q(X+d+wa)$, where $Q$ clips and quantizes RGB. The row without innovation enhancement outputs $Q(X+d+qa)$. Comparing these two rows holds prompt gain at one and isolates the effect of solving for shared adoption. The solved coefficient improves background PSNR and LPIPS, while both CLIP scores fall. Restoring innovation enhancement improves all six reported measures over the unamplified result.
+
+Replacing the zero-field endpoint with source RGB changes the shared response to $R_{(1,0)}-X$. The full model improves both preservation and text alignment over this replacement. Unified Gating applies $w$ to both responses, yielding $Q(X+w(d+a))$. Target-Endpoint Only directly decodes $R_{(1,1)}$ and omits both decomposition and assignment. This constructed baseline has the highest CLIP scores in the ablation and the largest background error.
+
+The following public profiles reproduce individual parameter controls. The structural variants above describe the comparisons in the paper.
+
 Each command runs all 700 requests with the same four seeds, evaluator, precision, and batch size.
 
 | Profile | Change from the main profile |
@@ -150,6 +165,16 @@ python -B conduct.py --profile condition
 The optional `calibration` control uses `--singlemode recenter --recenter .5 --singlebias`, restoring the complete Source-State Calibration module. It uses six denoiser condition samples in three logical forward calls. The `bias` and `locality` controls isolate source-bias projection without noise recentering. The `amplification` and `condition` profiles retain the main profile's disabled calibration module.
 
 Each profile writes separate seed reports and its own `mean.json`. Evaluation follows image generation. The masks and metric models never choose the generated output.
+
+## T2I backbones
+
+Within each of InstaFlow, SwiftBrush-v2 and SD-Turbo, RefUnmix improves both PSNR and CLIP-Edited over that backbone's Naive baseline. The largest PSNR gain occurs on SwiftBrush-v2 and the largest CLIP-Edited gain on InstaFlow.
+
+## Experimental settings
+
+The main SD-Turbo profile uses `--singlemode contrast --recenter 0 --no-singlebias`. It sets `conditiongain=1.25`, `singlegain=1.5` and `innovationgain=2`. Field time is 0.75 and endpoint time is 0.30. The first logical forward groups two condition samples and the second groups three. One output update uses one VAE encode and three decodes. FP32 generation uses batch 3 on one RTX 4090. Annotation masks and CLIP scores are used only for evaluation.
+
+The runs use the same 700 PIE-Bench requests and seeds 42, 52, 3047, 3407. Each baseline retains its official settings. The FlowEdit comparison uses ChordEdit's reported row, including its time on a Titan 24 GB. The timing protocol below applies to the locally measured rows.
 
 ## Metrics and aggregation
 
