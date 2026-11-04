@@ -7,7 +7,7 @@ from engine.session import tensor
 
 @torch.no_grad()
 def amplify(origin, conditional, shared, responsibility, coefficient, baseline, gain=2., penalty=1.):
-    # Reallocate endpoint energy toward conditional innovation within its budget.
+    # Maximize prompt gain within the unamplified pixel budget.
     for value in (origin, conditional, shared, baseline):
         tensor(value, 3)
     if not math.isfinite(gain) or not 1 <= gain <= 4:

@@ -96,7 +96,7 @@ def controls(origin, conditional, shared, weight, pixels, penalty):
 
 @torch.no_grad()
 def edit(session, args, metadata):
-    # Construct one calibrated conditional field without candidate selection.
+    # Construct a paired prompt field and render its endpoint response.
     conditioning = {"mode": "raw"}
     if args.singlecondition not in {"raw", "extrapolated"}:
         from engine.condition import refine

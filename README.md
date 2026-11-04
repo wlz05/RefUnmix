@@ -6,7 +6,15 @@ Even with the source prompt held fixed, applying an edit field can move the gene
 
 **Field construction.** Encode the source image $X$ as $z_0$. Evaluate the source prompt and the extrapolated target prompt at the same anchor, noise and field time. Scale the paired prediction difference by the field gain to obtain $F$ and the transported anchor $z_1=z_0+F$. With epsilon prediction, subtracting the clean-latent estimates cancels the explicit shared noisy input. The prompt difference still depends on where the denoiser is queried. The main profile uses the original sampled noise. The calibration control adds a source-only query, shifts the noise according to the source reconstruction residual and attenuates field components aligned with the local residual.
 
-**Matched endpoint decomposition.** Write $c_0=c_s$ and $c_1=c_t$. The native clean-latent prediction $P$ uses the original prompts at endpoint time $t_e$. Decode each endpoint with $V$ before differencing.
+The field uses an extrapolated target embedding only during construction:
+
+```math
+c_f=c_s+\gamma_c(c_t-c_s),\qquad
+F=\gamma_f\big[P_{t_f}(z_0,c_f;\epsilon)-P_{t_f}(z_0,c_s;\epsilon)\big],\qquad
+z_1=z_0+F.
+```
+
+**Matched endpoint decomposition.** Write $c_0=c_s$ and $c_1=c_t$. The native clean-latent prediction $P$ uses the original prompts at endpoint time $t_e$. Decode each endpoint with $V$ before differencing. The decoded RGB endpoints remain unclipped during response measurement.
 
 ```math
 h_{(i,j)}=P_{t_e}(z_i,c_j;\epsilon),\qquad
@@ -28,16 +36,29 @@ The middle endpoint holds the transported anchor fixed when measuring $d$ and th
 J_\eta(s)=(1-w)\|\eta d+s a\|^2+\lambda A(s-w)^2.
 ```
 
-Keep the minimizing coefficient if its quantized output stays within the source error of the fixed-weight proposal $X+d+wa$. Otherwise keep $w$. Call the accepted coefficient $q$.
+For $A>0$, interval projection gives the shared coefficient directly:
+
+```math
+s_0=\Pi_{[0,1]}\!\left(\frac{\lambda wA-(1-w)C}{(\lambda+1-w)A}\right).
+```
+
+Use $w$ when the shared response degenerates. Clip and quantize both the candidate and the fixed-weight proposal $X+d+wa$. Keep $s_0$ if its per-pixel RGB squared source error does not increase; otherwise keep $w$. Call the accepted coefficient $q$ and the unamplified output $Y_0=Q(X+d+qa)$, where $Q$ clips and quantizes to normalized 8-bit RGB.
 
 **Budgeted innovation enhancement.** RefUnmix chooses the largest feasible gain up to its cap and minimizes $J_\eta(s)$ over the remaining feasible interval.
 
 ```math
+1\le\eta\le\eta_{\max},\qquad 0\le s\le1,\qquad
 \|\eta d+s a\|^2\le\|d+qa\|^2,\qquad
 \widetilde Y=X+\eta d+s a.
 ```
 
-The continuous proposal is clipped and quantized. If rounding exceeds the unamplified output's pixel budget, the integer RGB residual is rounded inward. This bound concerns squared source error for the same endpoints. The six quality metrics are measured independently after generation.
+The continuous proposal is clipped and quantized. If rounding exceeds the unamplified output's pixel budget, the integer RGB residual is rounded inward. Let $\mathcal E(U;X)$ denote a pixel's quantized RGB squared source error. The written image satisfies
+
+```math
+\mathcal E(Y;X)\le\mathcal E(Y_0;X)\le\mathcal E(X+d+wa;X).
+```
+
+This bound concerns squared source error for the same endpoints. The six quality metrics are measured independently after generation.
 
 ## Installation
 
@@ -94,7 +115,19 @@ Official scoring uses CLIP ViT-L/14, squeeze LPIPS, and DINO ViT-B/8. The first 
 
 RefUnmix improves all six quality metrics over ChordEdit, RRLS and WhereEdit on the same single-update SD-Turbo backbone. ChordEdit and WhereEdit are faster per image. On PIE-Bench, RefUnmix ranks first on background SSIM and CLIP-Whole, second on CLIP-Edited, and first on the average rank over six quality metrics and runtime.
 
-The runner generates and evaluates seeds **42, 52, 3047, 3407**, in that order:
+`conduct.py` fixes the paper's main configuration and generates and evaluates seeds **42, 52, 3047, 3407**, in that order. Its call chain is:
+
+| Stage | Implementation |
+|---|---|
+| Fixed main settings and seed order | `conduct.py::generation()` |
+| Request loading and output records | `evaluate.py::request()` and `run.py::run()` |
+| Paired field and three matched endpoints | `engine/single.py::edit()` |
+| Native clean prediction and unclipped RGB decoding | `engine/session.py::Editor.predict()` and `Session.decode()` |
+| Shared coefficient and quantized acceptance | `engine/responsibility.py::resolve()` |
+| Feasible prompt gain and integer pixel budget | `engine/innovation.py::amplify()` |
+| Official quality scoring and seed means | `assess.py` and `aggregate.py` |
+
+In these functions, `conditional`, `shared`, `responsibility`, and `penalty` denote $d$, $a$, $w$, and $\lambda$. `conditiongain`, `singlegain`, and `innovationgain` set $\gamma_c$, $\gamma_f$, and $\eta_{\max}$. Use `conduct.py` to reproduce the main profile; `run.py` also exposes the other experimental configurations.
 
 ```bash
 python -B conduct.py --network
@@ -112,7 +145,7 @@ python -B conduct.py
 python -B conduct.py --batch 4 --output outputs/four
 ```
 
-Each seed writes its own images, inference summary, and metric report under `outputs/main/SEED/`. The final four-seed result is `outputs/main/mean.json`. Completed seeds are retained. An unfinished output directory requires a fresh destination. Saved recipes bind every seed to the same code and generation settings.
+Each seed writes its own images, inference summary, and metric report under `outputs/main/SEED/`. The four-seed quality result is `outputs/main/mean.json`. Completed seeds are retained. An unfinished output directory requires a fresh destination. Saved recipes bind every seed to the same code and generation settings.
 
 For the server layout with source in `RefUnmix/` and data, models, and caches in the surrounding workspace, run from that workspace:
 
@@ -144,7 +177,18 @@ The fixed-assignment and unamplified rows use the same three endpoints and retai
 
 Replacing the zero-field endpoint with the source image adds $R_{(0,0)}-X$ to the measured shared transport. This offset changes both the coefficient and the enhancement budget. Retaining the matched reference gives better results on all six aggregate metrics. Unified Gating applies $w$ to both responses. Against fixed assignment, gating the prompt response as well improves SSIM and slightly lowers both CLIP scores. Target-Endpoint Only directly decodes $R_{(1,1)}$. This constructed baseline has the highest CLIP scores in the ablation and the weakest background preservation.
 
-The following public profiles reproduce individual parameter controls. The structural variants above describe the comparisons in the paper.
+The structural comparisons use the following outputs. All retain the same paired field settings.
+
+| Paper row | Output rule |
+|---|---|
+| RefUnmix | Solve shared adoption, then enhance the prompt response within its pixel budget |
+| w/o Joint Assignment | $Q(X+d+wa)$; retain fixed spatial adoption and unit prompt gain |
+| w/o Zero-Field Reference | Replace $R_{(0,0)}$ by $X$, set $a'=R_{(1,0)}-X$, and solve adoption and enhancement again |
+| w/o Innovation Enhancement | $Y_0=Q(X+d+qa)$; retain solved adoption at unit prompt gain |
+| Unified Gating | $Q(X+w(d+a))$; apply one spatial weight to both responses |
+| Target-Endpoint Only | $Q(R_{(1,1)})$; decode only the target endpoint after field construction |
+
+The commands below run the published parameter controls. The `amplification` profile implements the unamplified row; the remaining profiles probe field construction.
 
 Each command runs all 700 requests with the same four seeds, evaluator, precision, and batch size.
 
@@ -212,7 +256,7 @@ Time is measured separately with batch 1 on an otherwise idle GPU. After five wa
 
 Avg. Rank averages ranks across PSNR, MSE, SSIM, LPIPS, CLIP-Whole, CLIP-Edited, and Time. Rank each metric in its stated direction after rounding to the reported precision; ties receive average ranks. Lower Avg. Rank is better. T-Free denotes training-free editing and I-Free denotes inversion-free editing. Comparisons separate multi-step, few-step, and single-update methods, and record condition evaluations separately from image-update counts.
 
-The final comparison uses the four-seed means produced by the commands above. Baselines retain their official algorithm parameters. The three RefUnmix gains apply to its own field and response allocation.
+The quality commands above produce per-seed reports and their equal-weight four-seed means. The comparison combines these quality means with the separately measured Time means to compute the seven-metric Avg. Rank. Inference summaries also record request durations and dataset throughput; the reported Time uses the dedicated batch-1 protocol above. Baselines retain their official algorithm parameters. The three RefUnmix gains apply to its own field and response allocation.
 
 ## Related methods
 

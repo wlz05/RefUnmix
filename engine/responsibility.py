@@ -7,7 +7,7 @@ from engine.session import tensor
 
 @torch.no_grad()
 def resolve(origin, conditional, shared, responsibility, penalty=1., gain=1.):
-    # Preserve conditional innovation while regulating shared endpoint advection.
+    # Solve shared adoption from the coupled RGB responses.
     for value in (origin, conditional, shared):
         tensor(value, 3)
     tensor(responsibility, 1)
