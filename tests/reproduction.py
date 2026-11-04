@@ -42,7 +42,7 @@ class ReproductionTests(unittest.TestCase):
                 self.assertEqual(settings.innovationgain, 1. if profile == 'amplification' else 2.)
                 self.assertEqual(settings.singlemode, 'recenter' if profile == 'calibration' else 'contrast')
                 self.assertEqual(settings.recenter, .5 if profile == 'calibration' else 0.)
-                self.assertEqual(settings.singlebias, profile != 'bias')
+                self.assertEqual(settings.singlebias, profile in {'calibration', 'bias', 'locality'})
                 self.assertEqual(settings.biasgeometry, 'global' if profile == 'locality' else 'local')
                 self.assertFalse(settings.control)
                 self.assertFalse(settings.cfg)

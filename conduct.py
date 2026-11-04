@@ -41,15 +41,15 @@ def entry(name):
     return Path(__file__).resolve().with_name(name).relative_to(Path.cwd().resolve()).as_posix()
 
 def generation(args, seed, target):
-    command = [sys.executable, "-B", "evaluate.py", "--dataset", (args.dataset).as_posix(), "--mapping", (args.mapping).as_posix(), "--images", (args.images).as_posix(), "--split", "all", "--model", (args.model).as_posix(), "--backbone", "vp", "--device", args.device, "--precision", "fp32", "--size", "512", "--seed", str(seed), "--seeds", str(seed), "--batch", str(args.batch), "--output", (target).as_posix(), "--single", "--singlemode", "contrast", "--singlecondition", "extrapolated", "--conditiongain", "1.25", "--singlegain", "1.5", "--innovationgain", "2", "--singleend", "responsibility", "--start", ".75", "--delta", "0", "--end", ".30", "--noise", "1", "--scale", "1", "--cleanup", "--recenter", "0", "--singlebias", "--biasgeometry", "local", "--biaswindow", "5", "--biasridge", ".1", "--responsepower", ".5", "--responsepenalty", "1", "--method", "raw", "--field", "chord", "--poststeps", "1", "--guidance", "1", "--no-cfg", "--prior", "off", "--no-control", "--no-compensation", "--no-frontier", "--no-heldout", "--maxsamples", "64", "--maxcalls", "64"]
+    command = [sys.executable, "-B", "evaluate.py", "--dataset", (args.dataset).as_posix(), "--mapping", (args.mapping).as_posix(), "--images", (args.images).as_posix(), "--split", "all", "--model", (args.model).as_posix(), "--backbone", "vp", "--device", args.device, "--precision", "fp32", "--size", "512", "--seed", str(seed), "--seeds", str(seed), "--batch", str(args.batch), "--output", (target).as_posix(), "--single", "--singlemode", "contrast", "--singlecondition", "extrapolated", "--conditiongain", "1.25", "--singlegain", "1.5", "--innovationgain", "2", "--singleend", "responsibility", "--start", ".75", "--delta", "0", "--end", ".30", "--noise", "1", "--scale", "1", "--cleanup", "--recenter", "0", "--no-singlebias", "--biasgeometry", "local", "--biaswindow", "5", "--biasridge", ".1", "--responsepower", ".5", "--responsepenalty", "1", "--method", "raw", "--field", "chord", "--poststeps", "1", "--guidance", "1", "--no-cfg", "--prior", "off", "--no-control", "--no-compensation", "--no-frontier", "--no-heldout", "--maxsamples", "64", "--maxcalls", "64"]
     changes = {"calibration": ("--recenter", ".5"), "locality": ("--biasgeometry", "global"), "amplification": ("--innovationgain", "1"), "condition": ("--conditiongain", "1")}
     if args.profile in changes:
         flag, value = changes[args.profile]
         command[command.index(flag) + 1] = value
     if args.profile == "calibration":
         command[command.index("--singlemode") + 1] = "recenter"
-    if args.profile == "bias":
-        command[command.index("--singlebias")] = "--no-singlebias"
+    if args.profile in {"calibration", "bias", "locality"}:
+        command[command.index("--no-singlebias")] = "--singlebias"
     command[2] = entry("evaluate.py")
     return command
 
