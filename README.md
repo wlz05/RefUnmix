@@ -170,7 +170,7 @@ Each profile writes separate seed reports and its own `mean.json`. Evaluation fo
 
 ## T2I backbones
 
-Within each of InstaFlow, SwiftBrush-v2 and SD-Turbo, RefUnmix improves both PSNR and CLIP-Edited over that backbone's Naive baseline. The largest PSNR gain occurs on SwiftBrush-v2 and the largest CLIP-Edited gain on InstaFlow.
+Table 3 compares RefUnmix with each backbone's own Naive output. Both PSNR and CLIP-Edited increase on InstaFlow, SwiftBrush-v2 and SD-Turbo. SwiftBrush-v2 shows the largest gain in PSNR, while InstaFlow shows the largest gain in CLIP-Edited.
 
 ## Experimental settings
 
