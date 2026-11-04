@@ -4,7 +4,7 @@ Even with the source prompt held fixed, applying an edit field can move the gene
 
 ## Method
 
-**Build the field.** Encode the source image $X$ as $z_0$. Evaluate the source prompt and the extrapolated target prompt at the same anchor, noise and field time. Scale the paired prediction difference by the field gain to obtain $F$ and the transported anchor $z_1=z_0+F$. The main profile uses the sampled noise directly, with source-state calibration disabled.
+**Field construction.** Encode the source image $X$ as $z_0$. Evaluate the source prompt and the extrapolated target prompt at the same anchor, noise and field time. Scale the paired prediction difference by the field gain to obtain $F$ and the transported anchor $z_1=z_0+F$. With epsilon prediction, subtracting the clean-latent estimates cancels the explicit shared noisy input. The prompt difference still depends on where the denoiser is queried. The main profile uses the original sampled noise. The calibration control adds a source-only query, shifts the noise according to the source reconstruction residual and attenuates field components aligned with the local residual.
 
 **Measure three endpoints.** Write $c_0=c_s$ and $c_1=c_t$. The native clean-latent prediction $P$ uses the original prompts at endpoint time $t_e$. Decode each endpoint with $V$ before differencing.
 
