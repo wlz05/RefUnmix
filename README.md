@@ -7,7 +7,7 @@ RefUnmix separates a generator's conditional innovation from its shared source-c
 ```text
 Source image + source/target prompts
                   |
-      Calibrated conditional field
+        Paired conditional field
                   |
      Three matched native endpoints
                   |
@@ -28,7 +28,7 @@ Y=X+\eta d+qa.
 
 The interaction between d and a determines how much shared transport to retain while increasing conditional innovation. A per-pixel source-error envelope constrains allocation through clipping and 8-bit export. Responsibility is measured from model responses. Generation uses no annotation mask or CLIP-based output selection.
 
-The main profile fixes `conditiongain=1.25`, `singlegain=1.5`, and `innovationgain=2`. The field time is 0.75 and native continuation time is 0.30. One final image update uses six denoiser condition samples in three logical forward calls, one VAE encode, and three VAE decodes. The controller and candidate-search branches are inactive.
+The main profile constructs the field from paired source/target predictions with shared sampled noise (`--singlemode contrast --recenter 0`). Local source-bias projection and joint response allocation remain active. The profile fixes `conditiongain=1.25`, `singlegain=1.5`, and `innovationgain=2`; the field time is 0.75 and native continuation time is 0.30. One final image update uses five denoiser condition samples in two logical forward calls, one VAE encode, and three VAE decodes. The controller and candidate-search branches are inactive.
 
 ## Installation
 
@@ -133,7 +133,7 @@ Each command runs all 700 requests with the same four seeds, evaluator, precisio
 
 | Profile | Change from the main profile |
 |---|---|
-| `calibration` | Set source-state recentering to zero |
+| `calibration` | Enable source-noise recentering with gain 0.5 |
 | `bias` | Disable the source-bias quotient |
 | `locality` | Replace the local quotient with its global counterpart |
 | `amplification` | Set the innovation cap to one |
@@ -146,6 +146,8 @@ python -B conduct.py --profile locality
 python -B conduct.py --profile amplification
 python -B conduct.py --profile condition
 ```
+
+The `calibration` control uses `--singlemode recenter --recenter .5`, adding one source prediction to correct the sampled noise before the paired field query. It uses six denoiser condition samples in three logical forward calls. The other profiles start from the main configuration above.
 
 Each profile writes separate seed reports and its own `mean.json`. Evaluation follows image generation. The masks and metric models never choose the generated output.
 

@@ -397,13 +397,37 @@ class ProtocolTests(unittest.TestCase):
     def testdocumentedplans(self):
         _, options = self.documented()
         self.assertTrue(options.single)
-        self.assertEqual((options.method, options.singlemode, options.singleend), ("raw", "recenter", "responsibility"))
+        self.assertEqual((options.method, options.singlemode, options.singleend), ("raw", "contrast", "responsibility"))
         self.assertEqual((options.start, options.delta, options.end), (.75, 0., .30))
-        self.assertEqual((options.recenter, options.conditiongain, options.innovationgain), (.5, 1.25, 2.))
+        self.assertEqual((options.recenter, options.conditiongain, options.innovationgain), (0., 1.25, 2.))
         self.assertEqual((options.batch, options.precision, options.device), (3, "fp32", "cuda:0"))
         self.assertFalse(options.control or options.heldout or options.compensation or options.frontier or options.cfg)
         self.assertEqual((options.poststeps, options.prior), (1, "off"))
         self.assertEqual((options.mapping, options.images, options.split), ("mapping_file.json", "annotation_images", "all"))
+
+    def testdocumentednoisequeries(self):
+        from engine.single import edit
+        _, main = self.documented()
+        _, calibration = self.documented(profile="calibration")
+        disabled = deepcopy(calibration)
+        disabled.recenter = 0.
+        image = Image.new("RGB", (16, 16), (96, 128, 160))
+        for kind in ("epsilon", "sample", "vprediction"):
+            for seed in (42, 52):
+                with self.subTest(kind=kind, seed=seed):
+                    results = []
+                    for options in (main, disabled, calibration):
+                        current = editor(kind).prepare(image, "source", "target long", seed=seed)
+                        results.append(edit(current, options, {"source": "source", "target": "target long"}))
+                    self.assertTrue(torch.equal(results[0][0], results[1][0]))
+                    for result, samples, calls in zip(results, (5, 6, 6), (2, 3, 3)):
+                        current = result[2]
+                        self.assertEqual((current.samples, current.calls, current.decodes), (samples, calls, 3))
+                    self.assertEqual([row["samples"] for row in results[0][2].queries], [2, 3])
+                    self.assertEqual(results[0][1]["sourcecalibration"], [])
+                    self.assertIn("sourcequotient", results[0][1]["field"]["calibration"])
+                    self.assertIn("innovation", results[0][1]["field"]["response"])
+                    self.assertEqual(len(results[2][1]["sourcecalibration"]), 1)
 
     def testdocumentedcurves(self):
         text, _ = self.documented()
@@ -411,7 +435,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(len(commands), 5)
         profiles = [self.documented(profile=command[command.index("--profile") + 1])[1] for command in commands]
         self.assertTrue(any(value.innovationgain == 1 for value in profiles))
-        self.assertTrue(any(value.recenter == 0 for value in profiles))
+        self.assertTrue(any(value.singlemode == "recenter" and value.recenter == .5 for value in profiles))
         self.assertTrue(any(value.conditiongain == 1 and value.singlegain == 1.5 for value in profiles))
         self.assertTrue(any(not value.singlebias for value in profiles))
         self.assertTrue(any(value.biasgeometry == "global" for value in profiles))
