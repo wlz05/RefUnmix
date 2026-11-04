@@ -92,7 +92,7 @@ Official scoring uses CLIP ViT-L/14, squeeze LPIPS, and DINO ViT-B/8. The first 
 
 ## Main experiment
 
-RefUnmix improves all six quality metrics over ChordEdit, RRLS and WhereEdit on the same single-update SD-Turbo backbone. ChordEdit and WhereEdit are faster per image. Across all eleven methods, RefUnmix ranks first on background SSIM and CLIP-Whole, second on CLIP-Edited, and first on the average rank over six quality metrics and runtime.
+RefUnmix improves all six quality metrics over ChordEdit, RRLS and WhereEdit on the same single-update SD-Turbo backbone. ChordEdit and WhereEdit are faster per image. On PIE-Bench, RefUnmix ranks first on background SSIM and CLIP-Whole, second on CLIP-Edited, and first on the average rank over six quality metrics and runtime.
 
 The runner generates and evaluates seeds **42, 52, 3047, 3407**, in that order:
 
@@ -176,7 +176,7 @@ Table 3 compares RefUnmix with each backbone's own Naive output. Both PSNR and C
 
 The main SD-Turbo profile uses `--singlemode contrast --recenter 0 --no-singlebias`. It sets `conditiongain=1.25`, `singlegain=1.5` and `innovationgain=2`. Field time is 0.75 and endpoint time is 0.30. The first logical forward groups two condition samples and the second groups three. One output update uses one VAE encode and three decodes. FP32 generation uses batch 3 on one RTX 4090. Annotation masks and CLIP scores are used only for evaluation.
 
-The runs use the same 700 PIE-Bench requests and seeds 42, 52, 3047, 3407. Each baseline retains its official settings. The FlowEdit comparison uses ChordEdit's reported row, including its time on a Titan 24 GB. The timing protocol below applies to the locally measured rows.
+The runs use the same 700 PIE-Bench requests and seeds 42, 52, 3047, 3407. Each baseline retains its official settings. All methods use the same evaluation and timing protocol.
 
 ## Metrics and aggregation
 
