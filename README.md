@@ -22,13 +22,15 @@ R_{(1,1)}-R_{(0,0)}
 
 The middle endpoint holds the transported anchor fixed when measuring $d$ and the source prompt fixed when measuring $a$. The latent prompt difference gives a spatial weight $w$. All three endpoints share one noise realization. The source image anchors the final edit. The generated zero-field endpoint anchors the transport measurement, so the offset between the source image and its zero-field prediction stays out of $a$.
 
-**Assign the responses.** For each RGB pixel, the interaction $C=\langle d,a\rangle$ determines how retaining $a$ affects the source error. Set $A=\|a\|^2$ and minimize the following objective over $0\le s\le1$ with $\eta=1$.
+**Joint assignment.** For each RGB pixel, the interaction $C=\langle d,a\rangle$ determines how retaining $a$ affects the source error. Aligned responses add to the squared displacement, while opposed responses can partially cancel. Set $A=\|a\|^2$ and minimize the following objective over $0\le s\le1$ with $\eta=1$.
 
 ```math
 J_\eta(s)=(1-w)\|\eta d+s a\|^2+\lambda A(s-w)^2.
 ```
 
-Keep the minimizing coefficient if its quantized output stays within the source error of the fixed-weight proposal $X+d+wa$. Otherwise keep $w$. Call the accepted coefficient $q$. Innovation enhancement chooses the largest feasible gain up to its cap and minimizes $J_\eta(s)$ over the remaining feasible interval.
+Keep the minimizing coefficient if its quantized output stays within the source error of the fixed-weight proposal $X+d+wa$. Otherwise keep $w$. Call the accepted coefficient $q$.
+
+**Budgeted innovation enhancement.** RefUnmix chooses the largest feasible gain up to its cap and minimizes $J_\eta(s)$ over the remaining feasible interval.
 
 ```math
 \|\eta d+s a\|^2\le\|d+qa\|^2,\qquad
