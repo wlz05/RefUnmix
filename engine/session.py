@@ -216,6 +216,7 @@ class Editor:
         generator = torch.Generator(device=self.device).manual_seed(int(seed))
         noises = torch.randn((int(noise), *anchor.shape[1:]), generator=generator, device=self.device, dtype=self.dtype)
         result = Session(self, anchor, origin, mask, self.prompt(source.strip()), self.prompt(target.strip()), noises, end, cleanup, scale)
+        result.seed = int(seed)
         result.area = area
         result.started = started
         result.textbase = textbase

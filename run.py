@@ -34,6 +34,7 @@ def times(values):
 def common(parser):
     parser.add_argument("--model", default="./models")
     parser.add_argument("--single", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--naive", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--keystrength", type=float, default=0.)
     parser.add_argument("--valuestrength", type=float, default=0.)
     parser.add_argument("--referencephase", choices=("field", "endpoint", "both"), default="field")
@@ -67,7 +68,7 @@ def common(parser):
     parser.add_argument("--singlenorm", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--singlebasis", choices=("output", "input"), default="output")
     parser.add_argument("--singlegeometry", choices=("local", "global"), default="local")
-    parser.add_argument("--backbone", type=str.casefold, choices=("vp", "flux", "sd3"), default="vp")
+    parser.add_argument("--backbone", type=str.casefold, choices=("vp", "sdturbo", "swiftbrush", "instaflow", "flux", "sd3"), default="vp")
     parser.add_argument("--flowguidance", type=float, default=3.5)
     parser.add_argument("--flowconsistency", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--clip", default=None)
@@ -326,13 +327,20 @@ def saveartifacts(session, root):
     return result
 
 def validate(args):
+    if args.naive:
+        if args.single or args.method != "raw" or args.field != "chord" or args.delta != 0 or not args.cleanup or args.poststeps != 1 or args.cfg or args.guidance != 1:
+            raise ValueError("Table 3 Naive requires a delta-zero raw field and one unguided refinement.")
+        if args.backbone not in {"vp", "sdturbo", "swiftbrush", "instaflow"} or args.control or args.heldout or args.compensation or args.frontier or args.tangent or args.factorial or args.adapter or getattr(args, "unmix", False) or args.prior != "off":
+            raise ValueError("Table 3 Naive uses a supported backbone without adaptive allocation or search.")
+        if getattr(args, "oracle", False) or getattr(args, "region", None) is not None:
+            raise ValueError("Table 3 Naive does not use annotation masks during generation.")
     if args.responsecontrols and (not args.single or args.singleend != "responsibility"):
         raise ValueError("Response controls require the single-field responsibility endpoint.")
     if args.innovationgain != 1 and (not args.single or args.singleend != "responsibility"):
         raise ValueError("Innovation amplification requires the single-field responsibility endpoint.")
     if any(not math.isfinite(value) or not 0 <= value <= 1 for value in (args.keystrength, args.valuestrength)):
         raise ValueError("Reference strengths must be finite and in [0, 1].")
-    if (args.keystrength or args.valuestrength) and (not args.single or args.backbone != "vp" or args.noise != 1):
+    if (args.keystrength or args.valuestrength) and (not args.single or args.backbone not in {"vp", "sdturbo", "swiftbrush"} or args.noise != 1):
         raise ValueError("Reference fields require single VP mode with one noise sample.")
     if (args.keystrength or args.valuestrength) and args.referencephase != "field" and args.singleend not in {"paired", "quotient", "response", "anchored", "responsibility"}:
         raise ValueError("Reference endpoints require a paired continuation.")
@@ -343,8 +351,8 @@ def validate(args):
             raise ValueError("Single-field mode requires poststeps=1 and unguided native predictions.")
         if args.control or args.heldout or args.compensation or args.frontier or args.prior != "off":
             raise ValueError("Single-field mode requires controller, held-out search, compensation, frontier, and prior to be disabled.")
-        if args.backbone != "vp" or args.method != "raw" or args.tangent or getattr(args, "unmix", False):
-            raise ValueError("Single-field construction requires VP raw mode without search.")
+        if args.backbone not in {"vp", "sdturbo", "swiftbrush", "instaflow"} or args.method != "raw" or args.tangent or getattr(args, "unmix", False):
+            raise ValueError("Single-field construction requires a supported one-step raw backbone without search.")
         if not math.isfinite(args.innovationgain) or not 1 <= args.innovationgain <= 4:
             raise ValueError("Innovation gain must be finite and in [1, 4].")
         if not math.isfinite(args.responsesharp) or not 1 <= args.responsesharp <= 8:
@@ -393,7 +401,7 @@ def validate(args):
         raise ValueError("Tangent refinement requires coupled pullback, a local scorer, native cleanup, no field repair, and field, raw, or path output.")
     if args.method == "field" and (args.prior != "off" or args.heldout or args.control or args.frontier or args.compensation or args.factorial):
         raise ValueError("Integrated field output excludes reference search and its diagnostics.")
-    if args.field == "ect" and (args.backbone != "vp" or args.delta != 0):
+    if args.field == "ect" and (args.backbone not in {"vp", "sdturbo", "swiftbrush"} or args.delta != 0):
         raise ValueError("ECT transport requires --backbone vp and --delta 0.")
     if args.localizationtime is not None:
         number(args.localizationtime, "Localization time", 0, 1)
@@ -415,7 +423,12 @@ def validate(args):
         raise ValueError("Numeric options must be finite, including inactive report settings.")
     if args.flowguidance < 0:
         raise ValueError("Flow guidance embeddings must be nonnegative.")
-    if args.backbone != "vp":
+    if args.backbone == "instaflow":
+        if not args.naive and (not args.single or args.singlemode != "contrast" or args.singleend != "responsibility" or args.recenter != 0 or args.singlebias or args.carry or args.delta != 0):
+            raise ValueError("InstaFlow requires the Naive or uncalibrated responsibility profile.")
+        if getattr(args, "batch", 1) != 1 or args.flowconsistency or args.prior != "off" or args.variance is not None:
+            raise ValueError("Use InstaFlow with batch=1 and without consistency probes.")
+    elif args.backbone in {"flux", "sd3"}:
         if args.prior not in {"flow", "off"} or args.prior == "flow" and not args.flowconsistency or args.variance is not None:
             raise ValueError("Flow backbones require --prior off or declared --flowconsistency --prior flow.")
         if args.adapter or args.method not in {"field", "path", "raw", "fixed"} or args.localization in {"attention", "hybrid"}:
@@ -456,9 +469,9 @@ def load(args):
     root = str(locate(Path("."), clean(args.model, "model")))
     import torch
     try:
-        if args.backbone == "vp":
-            from engine.session import Editor
-            editor = Editor.load(root, args.device, args.precision, args.size)
+        if args.backbone in {"vp", "sdturbo", "swiftbrush", "instaflow"}:
+            from engine.native import load as native
+            editor = native(root, args.backbone, args.device, args.precision, args.size)
         else:
             from engine.flow import Editor
             editor = Editor.load(root, args.device, args.precision, args.size, args.backbone, args.flowguidance, args.flowconsistency)
@@ -491,6 +504,8 @@ def stopped(session, metadata, method, error, latent=None, judge=None, initial=N
     return output, report, session
 
 def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
+    if (args.naive or getattr(args, "single", False)) and mask is not None:
+        raise ValueError("Naive and single-field editing do not accept annotation masks.")
     from dataclasses import replace
     from engine.response import select
     from engine.locality import locate as region, partition
@@ -512,6 +527,9 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
     metadata["controlactive"] = judge is not None and (args.method not in {"raw", "fixed", "base"} or args.tangent)
     if source.strip().casefold() == target.strip().casefold():
         return session.origin, {**metadata, "method": args.method, "noop": True, "reason": "case-insensitive identical prompts", "stats": session.stats(), "seed": args.seed}, session
+    if args.naive:
+        from engine.native import naive
+        return naive(session, args, metadata)
     if getattr(args, "single", False):
         from engine.single import edit
         return edit(session, args, metadata)

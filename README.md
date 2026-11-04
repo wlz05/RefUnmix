@@ -216,6 +216,57 @@ Each profile writes separate seed reports and its own `mean.json`. Evaluation fo
 
 Table 3 compares RefUnmix with each backbone's own Naive output. Both PSNR and CLIP-Edited increase on InstaFlow, SwiftBrush-v2 and SD-Turbo. SwiftBrush-v2 shows the largest gain in PSNR, while InstaFlow shows the largest gain in CLIP-Edited.
 
+### Table 3 Naive and the native predictor
+
+`--profile naive` is the Table 3 control. It uses the selected backbone's native clean predictor $P$ with ChordEdit's instantaneous field ($\delta=0$) and target refinement:
+
+```math
+u_{\mathrm{naive}}=P_{t_f}(z_0,c_t;\epsilon)-P_{t_f}(z_0,c_s;\epsilon),\qquad
+z_1=z_0+u_{\mathrm{naive}},\qquad
+Y_{\mathrm{naive}}=Q\!\left(V\!\left(P_{t_e}(z_1,c_t;\epsilon)\right)\right).
+```
+
+The preset follows the controls in the [ChordEdit benchmark entry](https://github.com/ChordEdit/ChordEdit/blob/main/run_pie_bench.py), with its temporal window set to zero: field time 0.90, refinement time 0.30, unit transport scale, one shared noise sample, one transport update and one target refinement. It uses the original source and target prompts without CFG. The three RefUnmix gains apply to `--profile main`. Naive uses three condition samples in two logical forwards, one VAE encode and one decode.
+
+Both profiles load their predictor through `engine/native.py::load()`. Naive calls `engine/native.py::naive()`, which builds the instantaneous field, calls `Native.endpoint()` and decodes the target prediction. RefUnmix calls `engine/single.py::edit()` and uses that same predictor for its matched endpoints. The choice of backbone changes $P$; the profile determines how its predictions form the edited output.
+
+| Backbone | `--backbone` | Native output | Model clock | Clean predictor |
+|---|---|---|---|---|
+| SD-Turbo | `sdturbo` (`vp` is the generic VP option) | Predicted noise | $k=\operatorname{round}((T-1)t)$ | VP noise recovery |
+| SwiftBrush-v2 | `swiftbrush` | Predicted noise | $k=\operatorname{round}((T-1)t)$ | VP noise recovery |
+| InstaFlow-0.9B | `instaflow` | Noise-to-data velocity | $k=1000\sigma$ on the integer clock | Linear-bridge velocity recovery |
+
+For SD-Turbo and SwiftBrush-v2, let $\alpha_k=\sqrt{\bar\alpha_k}$ and $\sigma_k=\sqrt{1-\bar\alpha_k}$ from the model schedule. `engine/session.py` computes
+
+```math
+x_k=\alpha_k z+\sigma_k\epsilon,\qquad
+P_t(z,c;\epsilon)=\frac{x_k-\sigma_k\widehat\epsilon_\theta(x_k,k,c)}{\alpha_k}.
+```
+
+The named loaders require epsilon-prediction components. SwiftBrush-v2 uses its own UNet with matching SD2.1 VAE, text encoder, tokenizer and scheduler components, without the SwiftEdit inverter or IP adapter. The native noise-prediction recovery follows the [SwiftBrush-v2 inference code](https://github.com/VinAIResearch/SwiftBrushV2/blob/main/infer_by_prompt.py).
+
+For InstaFlow, `engine/linear.py` uses the linear bridge and the positive noise-to-data velocity:
+
+```math
+x_\sigma=(1-\sigma)z+\sigma\epsilon,\qquad
+P_\sigma(z,c;\epsilon)=x_\sigma+\sigma v_\theta(x_\sigma,1000\sigma,c).
+```
+
+At $\sigma=1$, this gives the official one-step update $\epsilon+v_\theta(\epsilon,1000,c)$. The generation ODE starts at time zero with model clock 1000. Use the one-step `XCLiu/instaflow_0_9B_from_sd_1_5` checkpoint. Its [official pipeline](https://github.com/gnobitab/InstaFlow/blob/main/code/pipeline_rf.py) uses one Euler update without CFG. The loader retains the checkpoint's local components; the linear bridge supplies the noising rule. InstaFlow runs with batch 1, and its profile excludes VP source-state calibration and multi-step continuation.
+
+Prepare each local model root with `unet/`, `vae/`, `scheduler/`, `tokenizer/` and `text_encoder/`. Naive and RefUnmix runs on a given backbone use the same root. The following commands keep paired outputs separate:
+
+```bash
+python -B conduct.py --backbone sdturbo --model models --profile naive --output outputs/turbo
+python -B conduct.py --backbone sdturbo --model models --profile main --output outputs/turbo
+python -B conduct.py --backbone swiftbrush --model models/brush --profile naive --output outputs/brush
+python -B conduct.py --backbone swiftbrush --model models/brush --profile main --output outputs/brush
+python -B conduct.py --backbone instaflow --model models/insta --batch 1 --profile naive --output outputs/insta
+python -B conduct.py --backbone instaflow --model models/insta --batch 1 --profile main --output outputs/insta
+```
+
+Each command uses the same four seeds and official quality evaluator. It writes the selected profile under its output root, including the generation recipe, per-request records and four-seed quality mean. The model weight and configuration hashes identify the predictor used in each run.
+
 ## Experimental settings
 
 The main SD-Turbo profile uses `--singlemode contrast --recenter 0 --no-singlebias`. It sets `conditiongain=1.25`, `singlegain=1.5` and `innovationgain=2`. Field time is 0.75 and endpoint time is 0.30. The first logical forward groups two condition samples and the second groups three. One output update uses one VAE encode and three decodes. FP32 generation uses batch 3 on one RTX 4090. Annotation masks and CLIP scores are used only for evaluation.

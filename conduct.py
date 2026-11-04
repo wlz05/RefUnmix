@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 SEEDS = (42, 52, 3047, 3407)
-PROFILES = ("main", "calibration", "bias", "locality", "amplification", "condition")
+PROFILES = ("main", "calibration", "bias", "locality", "amplification", "condition", "naive")
 
 def relative(value):
     path = Path(value)
@@ -28,6 +28,7 @@ def parser():
     result.add_argument("--mapping", type=relative, default=Path("mapping_file.json"))
     result.add_argument("--images", type=relative, default=Path("annotation_images"))
     result.add_argument("--model", type=relative, default=Path("models"))
+    result.add_argument("--backbone", choices=("vp", "sdturbo", "swiftbrush", "instaflow"), default="vp")
     result.add_argument("--cache", type=relative, default=Path("cache/metrics"))
     result.add_argument("--protocol", type=relative, default=Path("protocol/metrics.py"))
     result.add_argument("--output", type=relative, default=Path("outputs"))
@@ -41,6 +42,10 @@ def entry(name):
     return Path(__file__).resolve().with_name(name).relative_to(Path.cwd().resolve()).as_posix()
 
 def generation(args, seed, target):
+    if args.backbone == "instaflow" and (args.batch != 1 or args.profile in {"calibration", "bias", "locality"}):
+        raise ValueError("Use InstaFlow with --batch 1 and calibration disabled.")
+    if args.profile == "naive":
+        return naive(args, seed, target)
     command = [sys.executable, "-B", "evaluate.py", "--dataset", (args.dataset).as_posix(), "--mapping", (args.mapping).as_posix(), "--images", (args.images).as_posix(), "--split", "all", "--model", (args.model).as_posix(), "--backbone", "vp", "--device", args.device, "--precision", "fp32", "--size", "512", "--seed", str(seed), "--seeds", str(seed), "--batch", str(args.batch), "--output", (target).as_posix(), "--single", "--singlemode", "contrast", "--singlecondition", "extrapolated", "--conditiongain", "1.25", "--singlegain", "1.5", "--innovationgain", "2", "--singleend", "responsibility", "--start", ".75", "--delta", "0", "--end", ".30", "--noise", "1", "--scale", "1", "--cleanup", "--recenter", "0", "--no-singlebias", "--biasgeometry", "local", "--biaswindow", "5", "--biasridge", ".1", "--responsepower", ".5", "--responsepenalty", "1", "--method", "raw", "--field", "chord", "--poststeps", "1", "--guidance", "1", "--no-cfg", "--prior", "off", "--no-control", "--no-compensation", "--no-frontier", "--no-heldout", "--maxsamples", "64", "--maxcalls", "64"]
     changes = {"calibration": ("--recenter", ".5"), "locality": ("--biasgeometry", "global"), "amplification": ("--innovationgain", "1"), "condition": ("--conditiongain", "1")}
     if args.profile in changes:
@@ -50,8 +55,13 @@ def generation(args, seed, target):
         command[command.index("--singlemode") + 1] = "recenter"
     if args.profile in {"calibration", "bias", "locality"}:
         command[command.index("--no-singlebias")] = "--singlebias"
+    command[command.index("--backbone") + 1] = args.backbone
     command[2] = entry("evaluate.py")
     return command
+
+def naive(args, seed, target):
+    # Match ChordEdit controls while disabling its temporal smoothing.
+    return [sys.executable, "-B", entry("evaluate.py"), "--dataset", args.dataset.as_posix(), "--mapping", args.mapping.as_posix(), "--images", args.images.as_posix(), "--split", "all", "--model", args.model.as_posix(), "--backbone", args.backbone, "--device", args.device, "--precision", "fp32", "--size", "512", "--seed", str(seed), "--seeds", str(seed), "--batch", str(args.batch), "--output", target.as_posix(), "--naive", "--no-single", "--method", "raw", "--field", "chord", "--start", ".90", "--delta", "0", "--end", ".30", "--scale", "1", "--noise", "1", "--cleanup", "--poststeps", "1", "--guidance", "1", "--no-cfg", "--prior", "off", "--no-control", "--no-heldout", "--no-compensation", "--no-frontier", "--singlemode", "contrast", "--singlecondition", "raw", "--conditiongain", "1", "--singlegain", "1", "--innovationgain", "1", "--recenter", "0", "--no-singlebias", "--maxsamples", "64", "--maxcalls", "64"]
 
 def scoring(args, seed, target):
     return [sys.executable, "-B", entry("assess.py"), "--input", (target / "summary.json").as_posix(), "--dataset", (args.dataset).as_posix(), "--mapping", (args.mapping).as_posix(), "--images", (args.images).as_posix(), "--scope", "benchmark", "--seeds", str(seed), "--protocol", (args.protocol).as_posix(), "--device", args.device, "--network" if args.network else "--offline", "--cache", (args.cache).as_posix(), "--output", (target / "metrics.json").as_posix()]

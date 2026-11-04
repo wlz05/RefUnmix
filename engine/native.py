@@ -4,6 +4,34 @@
 import torch
 from engine.session import number, tensor
 
+def load(root="./models", backbone="vp", device=None, precision="fp32", size=512):
+    # Naive and RefUnmix share the same backbone prediction interface.
+    if backbone == "instaflow":
+        from engine.linear import Editor
+        editor = Editor.load(root, device, precision, size)
+        editor.metadata["root"] = str(root)
+        return editor
+    if backbone not in {"vp", "sdturbo", "swiftbrush"}:
+        raise ValueError("Unknown one-step native backbone.")
+    from engine.session import Editor
+    editor = Editor.load(root, device, precision, size)
+    if backbone == "vp":
+        return editor
+    if editor.kind != "epsilon":
+        raise ValueError("SD-Turbo and SwiftBrush-v2 require epsilon-prediction components.")
+    editor.metadata.update({"architecture": backbone, "root": str(root), "native": {"prediction": editor.kind, "bridge": "alpha * anchor + sigma * noise", "clock": "round((training steps - 1) * time)", "recovery": "(state - sigma * predicted noise) / alpha"}})
+    return editor
+
+@torch.no_grad()
+def naive(session, args, metadata):
+    # Table 3 uses the ChordEdit delta-zero control with refinement.
+    field = session.field(args.start, 0.)
+    native = create(session, 1, 1., False, "prediction")
+    latent = native.endpoint(field)
+    pixels = session.decode(latent).clamp(0, 1)
+    report = {**metadata, "method": "naive", "renderer": "native", "selected": "naive", "field": {"start": args.start, "delta": 0., "end": args.end, "scale": session.scale, "conditioning": "original source and target prompts"}, "backend": native.metadata(), "stats": session.stats(), "controller": {"enabled": False}, "candidates": [], "explicitregion": False, "scope": "Table 3 Naive: native prediction, instantaneous prompt difference, and target refinement."}
+    return pixels, report, session
+
 def create(session, steps=1, guidance=1., cfg=False, path="auto"):
     if getattr(session.editor, "metadata", {}).get("family") == "flow":
         from engine.flow import Native as Flow
@@ -18,6 +46,8 @@ class Native:
             raise ValueError("Native steps and CFG capability are invalid.")
         if not cfg and self.guidance != 1:
             raise ValueError("Nonunit guidance requires an explicit CFG capability.")
+        if getattr(session.editor, "metadata", {}).get("family") == "linear" and (steps != 1 or cfg):
+            raise ValueError("The InstaFlow one-step checkpoint requires one unguided prediction.")
         if path == "auto":
             path = "prediction" if cfg else "embedding"
         if path not in {"prediction", "embedding", "discrete"}:
@@ -105,7 +135,7 @@ class Native:
         return result.detach().clone()
 
     def metadata(self):
-        return {"kind": self.mode, "steps": self.steps, "ticks": self.ticks, "cfg": self.cfg, "guidance": self.guidance, "referencepath": self.path, "continuous": self.continuous, "affine": self.affine, "conditional": self.session.cleanup, "endpoints": self.endpoints, "sampler": "Deterministic DDIM without latent clipping." if self.steps > 1 else "One clean prediction without latent clipping."}
+        return {"kind": self.mode, "steps": self.steps, "ticks": self.ticks, "cfg": self.cfg, "guidance": self.guidance, "referencepath": self.path, "continuous": self.continuous, "affine": self.affine, "conditional": self.session.cleanup, "endpoints": self.endpoints, "prediction": getattr(self.session.editor, "metadata", {}).get("native"), "sampler": "Deterministic DDIM without latent clipping." if self.steps > 1 else "One clean prediction without latent clipping."}
 
 # Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

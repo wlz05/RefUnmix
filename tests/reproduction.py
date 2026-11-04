@@ -34,6 +34,13 @@ class ReproductionTests(unittest.TestCase):
                 args = conduct.parser().parse_args(['--profile', profile])
                 command = conduct.generation(args, 42, Path('outputs') / profile / '42')
                 settings = datasetargs(common(argparse.ArgumentParser())).parse_args(command[3:])
+                if profile == 'naive':
+                    self.assertTrue(settings.naive)
+                    self.assertFalse(settings.single)
+                    self.assertEqual((settings.start, settings.delta, settings.end), (.90, 0., .30))
+                    self.assertEqual((settings.conditiongain, settings.singlegain, settings.innovationgain), (1., 1., 1.))
+                    self.assertTrue(settings.cleanup)
+                    continue
                 self.assertTrue(settings.single)
                 self.assertEqual(settings.seed, 42)
                 self.assertEqual(settings.seeds, [42])
