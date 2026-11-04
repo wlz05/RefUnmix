@@ -2,13 +2,19 @@
 # RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
 
 import argparse
+import contextlib
+import io
+import json
+import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 from PIL import Image
 import torch
 import conduct
 from engine.linear import Editor as Linear
+from engine.comparison import Registry
 from engine.native import create, load
 from evaluate import datasetargs
 from run import common, run, validate
@@ -170,6 +176,150 @@ class NativeTests(unittest.TestCase):
             args = conduct.parser().parse_args(options)
             with self.assertRaises(ValueError):
                 conduct.generation(args, 42, Path("outputs/main/42"))
+
+class MatrixTests(unittest.TestCase):
+    def session(self, backbone="sdturbo", seed=52):
+        current = linear() if backbone == "instaflow" else editor()
+        current.metadata["architecture"] = backbone
+        return current.prepare(Image.new("RGB", (16, 16), (96, 128, 160)), "source", "target long", seed=seed)
+
+    def metadata(self):
+        return {"source": "source", "target": "target long", "seed": 52}
+
+    def adapter(self, session, settings, metadata):
+        latent = session.predict(session.anchor, session.noises[:1], session.editor.index(.3), session.target)
+        return session.decode(latent).clamp(0, 1), {"selected": "official"}
+
+    def testmatrixplanning(self):
+        plan = Registry().plan()
+        self.assertEqual(len(plan["rows"]), 18)
+        self.assertEqual(sum(row["status"] == "builtin" for row in plan["rows"]), 6)
+        self.assertEqual(sum(row["status"] == "adapter required" for row in plan["rows"]), 12)
+        self.assertEqual(plan["action"], "plan only")
+        for row in plan["rows"]:
+            if row["status"] == "builtin":
+                command = row["command"]
+                self.assertEqual(command[command.index("--backbone") + 1], row["backbone"])
+        for methods, backbones in ((("naive", "naive"), ("sdturbo",)), (("unknown",), ("sdturbo",)), (("naive",), ())):
+            with self.assertRaises(ValueError):
+                Registry().plan(methods, backbones)
+        with self.assertRaises(ValueError):
+            Registry().plan(models={"sdturbo": "../escape"})
+        for invalid in (None, "naive", [["naive"]]):
+            with self.assertRaises(ValueError):
+                Registry().plan(methods=invalid)
+
+    def testbuiltinmatrixexecution(self):
+        for name in ("naive", "refunmix"):
+            for backbone in ("sdturbo", "swiftbrush", "instaflow"):
+                current = self.session(backbone)
+                pixels, report, returned = Registry().apply(name, backbone, current, self.metadata())
+                self.assertIs(returned, current)
+                self.assertEqual(report["comparison"], {"method": name, "backbone": backbone})
+                self.assertEqual(report["settings"]["seed"], 52)
+                self.assertTrue(torch.isfinite(pixels).all())
+        current = self.session()
+        with self.assertRaises(ValueError):
+            Registry().apply("naive", "swiftbrush", current, self.metadata())
+        with self.assertRaises(ValueError):
+            Registry().apply("naive", "sdturbo", current, {**self.metadata(), "seed": 42})
+
+    def testexternaladapter(self):
+        registry = Registry()
+        settings = {"official": True}
+        registry.register("rrls", self.adapter, ("sdturbo",), settings)
+        settings["official"] = False
+        self.assertEqual(registry.status("rrls", "instaflow"), "unsupported")
+        current = self.session()
+        _, report, _ = registry.apply("rrls", "sdturbo", current, self.metadata())
+        self.assertTrue(report["officialsettings"]["official"])
+        self.assertEqual(report["stats"]["samples"], 1)
+        with self.assertRaises(ValueError):
+            registry.apply("rrls", "sdturbo", current, self.metadata())
+        registry.entries["rrls"]["settings"]["official"] = False
+        with self.assertRaises(ValueError):
+            registry.apply("rrls", "sdturbo", self.session(), self.metadata())
+        with self.assertRaises(ValueError):
+            registry.register("rrls", self.adapter, ("sdturbo",), {})
+        with self.assertRaises(ValueError):
+            registry.register("swiftedit", self.adapter, ("instaflow",), {})
+        with self.assertRaises(ValueError):
+            registry.register("where", self.adapter, ("sdturbo",), {}, {"sdturbo": {"inverter": "../weights"}})
+        for settings in ({"steps": float("nan")}, {"steps": object()}):
+            with self.assertRaises(ValueError):
+                Registry().register("where", self.adapter, ("sdturbo",), settings)
+        with self.assertRaises(ValueError):
+            Registry().register("where", self.adapter, ("sdturbo",), {}, [])
+        registry = Registry()
+        registry.register("where", self.adapter, ("sdturbo",), {})
+        with self.assertRaises(ValueError):
+            registry.apply("where", "sdturbo", self.session(), {**self.metadata(), "seed": 42})
+
+    def testinvalidadapteroutputs(self):
+        def changed(session, settings, metadata):
+            session.origin.zero_()
+            return session.origin, {}
+        def unmetered(session, settings, metadata):
+            session.calls += 1
+            return session.origin.clone(), {}
+        for edit in (lambda session, settings, metadata: (session.origin[..., :1], {}), lambda session, settings, metadata: (session.origin * float("nan"), {}), changed, unmetered):
+            registry = Registry()
+            registry.register("where", edit, ("sdturbo",), {})
+            with self.assertRaises(ValueError):
+                registry.apply("where", "sdturbo", self.session(), self.metadata())
+
+    def testcheckpointpreparation(self):
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                os.chdir(directory)
+                Path("weights").mkdir()
+                weight = Path("weights/model.bin")
+                weight.write_bytes(b"test weight")
+                registry = Registry()
+                registry.register("swiftedit", self.adapter, ("sdturbo",), {}, {"sdturbo": {"inverter": "weights"}})
+                from engine.checkpoint import fingerprint
+                with patch("engine.checkpoint.fingerprint", wraps=fingerprint) as hasher:
+                    first = registry.prepare("swiftedit", "sdturbo")
+                    self.assertEqual(first, registry.prepare("swiftedit", "sdturbo"))
+                    self.assertEqual(hasher.call_count, 1)
+                weight.write_bytes(b"changed weight")
+                with self.assertRaises(ValueError):
+                    registry.prepare("swiftedit", "sdturbo")
+                registry.register("where", self.adapter, ("sdturbo",), {}, {"sdturbo": {"adapter": "missing.bin"}})
+                self.assertEqual(registry.status("where", "sdturbo"), "weights required")
+                with self.assertRaises(ValueError):
+                    registry.prepare("where", "sdturbo")
+            finally:
+                os.chdir(previous)
+
+    def testadapterloadandrollback(self):
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                os.chdir(directory)
+                path = Path("external.py")
+                path.write_text("def edit(session, settings, metadata):\n    return session.origin.clone(), {}\ndef register(registry):\n    registry.register('chord', edit, ('sdturbo',), {'delta': .15})\n", encoding="ascii")
+                registry = Registry()
+                registry.load("external.py")
+                self.assertEqual(registry.status("chord", "sdturbo"), "adapter")
+                self.assertEqual(len(registry.plan(("chord",))["rows"][0]["adapter"]["sha256"]), 64)
+                path.write_text("def register(registry):\n    registry.register('where', lambda *args: None, ('sdturbo',), {})\n    raise ValueError('bad adapter')\n", encoding="ascii")
+                with self.assertRaises(ValueError):
+                    registry.load("external.py")
+                self.assertNotIn("where", registry.entries)
+                with self.assertRaises(ValueError):
+                    registry.apply("chord", "sdturbo", self.session(), self.metadata())
+            finally:
+                os.chdir(previous)
+
+    def testplancommanddoesnotgenerate(self):
+        import compare
+        stream = io.StringIO()
+        with patch("sys.argv", ["compare.py"]), patch("engine.native.load") as loader, contextlib.redirect_stdout(stream):
+            compare.main()
+        loader.assert_not_called()
+        self.assertEqual(len(json.loads(stream.getvalue())["rows"]), 18)
 
 if __name__ == "__main__":
     unittest.main()

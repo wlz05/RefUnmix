@@ -267,6 +267,41 @@ python -B conduct.py --backbone instaflow --model models/insta --batch 1 --profi
 
 Each command uses the same four seeds and official quality evaluator. It writes the selected profile under its output root, including the generation recipe, per-request records and four-seed quality mean. The model weight and configuration hashes identify the predictor used in each run.
 
+### Method-by-backbone interface
+
+`engine/comparison.py::Registry` separates the editing method from the native backbone. The matrix contains Naive, ChordEdit, RRLS, WhereEdit, SwiftEdit and RefUnmix crossed with InstaFlow, SwiftBrush-v2 and SD-Turbo. Each method retains its own algorithm settings. Native prediction supplies the common backbone API; the method adapter implements the editor around that API.
+
+Print the matrix without loading checkpoints or generating images:
+
+```bash
+python -B compare.py
+python -B compare.py --methods chord rrls where swiftedit refunmix --backbones instaflow swiftbrush sdturbo
+```
+
+Naive and RefUnmix have built-in entries. The other methods have adapter slots. The plan reports `adapter required`, `unsupported` or `weights required` for combinations awaiting an implementation or dedicated components. Built-in rows include the corresponding `conduct.py` command. Every combination keeps separate outputs and uses seeds 42, 52, 3047 and 3407 with all 700 requests.
+
+A method adapter exports `edit(session, settings, metadata)` and `register(registry)`. Its registration declares the supported backbones, actual official settings and any backbone-specific trained components:
+
+```python
+def register(registry):
+    registry.register(
+        name="rrls",
+        edit=edit,
+        backbones=("sdturbo",),
+        settings=OFFICIAL_SETTINGS,
+    )
+```
+
+`edit` returns normalized RGB pixels and a report dictionary. It uses `session.predict()`, `session.state()` or `session.velocity()` for backbone queries and `session.decode()` for decoded outputs. Each request starts with a fresh session. The source pixels, query ledger and output geometry are checked at the interface. Dedicated inversion or adapter networks retain their own measured costs in the method report. SwiftEdit registrations must declare trained components for every backbone they support.
+
+Load an adapter into a comparison plan with a local relative path:
+
+```bash
+python -B compare.py --adapters adapters/rrls.py --methods rrls --backbones instaflow swiftbrush sdturbo
+```
+
+Before editing, call `registry.prepare(method, backbone)` to validate and hash dedicated weights once. `registry.apply(method, backbone, session, metadata)` then dispatches the selected method. Metadata contains the original `source`, `target` and `seed`; the native loader records the backbone and checkpoint identity. The report retains the adapter source hash, official-setting hash and dedicated-weight hashes. Changed adapters or prepared weights require a fresh registry. Image generation, official quality scoring and exclusive runtime measurement remain separate stages.
+
 ## Experimental settings
 
 The main SD-Turbo profile uses `--singlemode contrast --recenter 0 --no-singlebias`. It sets `conditiongain=1.25`, `singlegain=1.5` and `innovationgain=2`. Field time is 0.75 and endpoint time is 0.30. The first logical forward groups two condition samples and the second groups three. One output update uses one VAE encode and three decodes. FP32 generation uses batch 3 on one RTX 4090. Annotation masks and CLIP scores are used only for evaluation.
