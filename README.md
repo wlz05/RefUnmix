@@ -18,11 +18,11 @@ Source image + source/target prompts
            Edited RGB image
 ```
 
-Let $h_{0,0}$, $h_{1,0}$, and $h_{1,1}$ denote the source-zero, source-field, and target-field native latent endpoints. The first index indicates whether the field is applied (0 or 1); the second selects the source (0) or target (1) condition. Their decoded differences give conditional innovation $d$ and shared transport $a$:
+Let $h_{(0,0)}$, $h_{(1,0)}$, and $h_{(1,1)}$ denote the source-zero, source-field, and target-field native latent endpoints. The first index indicates whether the field is applied (0 or 1); the second selects the source (0) or target (1) condition. Their decoded differences give conditional innovation $d$ and shared transport $a$:
 
 ```math
-d=V(h_{1,1})-V(h_{1,0}),\qquad
-a=V(h_{1,0})-V(h_{0,0}),\qquad
+d=V(h_{(1,1)})-V(h_{(1,0)}),\qquad
+a=V(h_{(1,0)})-V(h_{(0,0)}),\qquad
 Y=X+\eta d+qa.
 ```
 
