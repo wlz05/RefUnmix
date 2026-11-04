@@ -1,6 +1,6 @@
 # RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
 
-RefUnmix edits a source image with a frozen generator. Three matched predictions distinguish what changes when the prompt changes from what would change under the source prompt alone. RefUnmix assigns the two responses separately and writes a single edited image.
+Even with the source prompt held fixed, applying an edit field can move the generator's output. Switching prompts at that transported anchor adds a second displacement. RefUnmix measures both responses, assigns them separate coefficients and writes the edit back to the source image in one update.
 
 ## Method
 
