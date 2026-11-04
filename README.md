@@ -92,7 +92,7 @@ Official scoring uses CLIP ViT-L/14, squeeze LPIPS, and DINO ViT-B/8. The first 
 
 ## Main experiment
 
-On PIE-Bench, RefUnmix has the lowest seven-metric average rank. It leads on background SSIM and CLIP-Whole and ranks second on CLIP-Edited. Among the single-update SD-Turbo methods, it scores better on all six quality metrics than ChordEdit, RRLS and WhereEdit. ChordEdit and WhereEdit take less time per image.
+RefUnmix improves all six quality metrics over ChordEdit, RRLS and WhereEdit on the same single-update SD-Turbo backbone. ChordEdit and WhereEdit are faster per image. Across all eleven methods, RefUnmix ranks first on background SSIM and CLIP-Whole, second on CLIP-Edited, and first on the average rank over six quality metrics and runtime.
 
 The runner generates and evaluates seeds **42, 52, 3047, 3407**, in that order:
 
@@ -140,9 +140,9 @@ python -B conduct.py --action aggregate
 
 ## Ablations
 
-The core ablation uses the same paired field as the main method. The fixed-assignment row outputs $Q(X+d+wa)$, where $Q$ clips and quantizes RGB. The row without innovation enhancement outputs $Q(X+d+qa)$. Comparing these two rows holds prompt gain at one and isolates the effect of solving for shared adoption. The solved coefficient improves background PSNR and LPIPS, while both CLIP scores fall. Restoring innovation enhancement improves all six reported measures over the unamplified result.
+The fixed-assignment and unamplified rows use the same three endpoints and retain the prompt response at unit gain. Fixed assignment writes $Q(X+d+wa)$, while the unamplified method writes $Q(X+d+qa)$ with a solved shared coefficient. Solving for $q$ improves background PSNR and LPIPS, with a drop in both CLIP scores. Starting from that accepted output, innovation enhancement improves all six quality metrics.
 
-Replacing the zero-field endpoint with source RGB changes the shared response to $R_{(1,0)}-X$. The full model improves both preservation and text alignment over this replacement. Unified Gating applies $w$ to both responses, yielding $Q(X+w(d+a))$. Target-Endpoint Only directly decodes $R_{(1,1)}$ and omits both decomposition and assignment. This constructed baseline has the highest CLIP scores in the ablation and the largest background error.
+Replacing the zero-field endpoint with the source image adds $R_{(0,0)}-X$ to the measured shared transport. This offset changes both the coefficient and the enhancement budget. Retaining the matched reference gives better results on all six aggregate metrics. Unified Gating applies $w$ to both responses. Against fixed assignment, gating the prompt response as well improves SSIM and slightly lowers both CLIP scores. Target-Endpoint Only directly decodes $R_{(1,1)}$. This constructed baseline has the highest CLIP scores in the ablation and the weakest background preservation.
 
 The following public profiles reproduce individual parameter controls. The structural variants above describe the comparisons in the paper.
 
@@ -164,7 +164,7 @@ python -B conduct.py --profile amplification
 python -B conduct.py --profile condition
 ```
 
-The optional `calibration` control uses `--singlemode recenter --recenter .5 --singlebias`, restoring the complete Source-State Calibration module. It uses six denoiser condition samples in three logical forward calls. The `bias` and `locality` controls isolate source-bias projection without noise recentering. The `amplification` and `condition` profiles retain the main profile's disabled calibration module.
+The calibration control probes the field construction stage. The zero-field reference ablation probes the decoded transport measurement. The optional `calibration` control uses `--singlemode recenter --recenter .5 --singlebias`, restoring the complete Source-State Calibration module. It uses six denoiser condition samples in three logical forward calls. The `bias` and `locality` controls isolate source-bias projection without noise recentering. The `amplification` and `condition` profiles retain the main profile's disabled calibration module.
 
 Each profile writes separate seed reports and its own `mean.json`. Evaluation follows image generation. The masks and metric models never choose the generated output.
 
