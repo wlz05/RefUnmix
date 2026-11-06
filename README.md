@@ -70,14 +70,13 @@ Use a Linux shell for installation. If the checkout already exists, enter its ro
 
 ```bash
 git clone https://github.com/wlz05/RefUnmix.git
-cd RefUnmix
 python -m venv env
 source env/bin/activate
 python -m pip install torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cu130
 python -m pip install diffusers==0.35.1 transformers==4.57.1 numpy==1.26.4 torchmetrics==1.8.2 accelerate safetensors pillow scipy scikit-image huggingface-hub
 ```
 
-Run subsequent commands from the repository root with this environment active.
+Run subsequent commands from the workspace containing the RefUnmix checkout, with this environment active. Keep data, models, protocol, caches and outputs alongside the code directory.
 
 Download [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) into `models/`:
 
@@ -130,19 +129,19 @@ RefUnmix improves all six quality metrics over ChordEdit, RRLS and WhereEdit on 
 In these functions, `conditional`, `shared`, `responsibility`, and `penalty` denote $d$, $a$, $w$, and $\lambda$. `conditiongain`, `singlegain`, and `innovationgain` set $\gamma_c$, $\gamma_f$, and $\eta_{\max}$. Use `conduct.py` to reproduce the main profile; `run.py` also exposes the other experimental configurations.
 
 ```bash
-python -B conduct.py --network
+python -B RefUnmix/conduct.py --network
 ```
 
 With populated metric caches:
 
 ```bash
-python -B conduct.py
+python -B RefUnmix/conduct.py
 ```
 
 `--batch 3` is the default. Four concurrent images use the same GPU:
 
 ```bash
-python -B conduct.py --batch 4 --output outputs/four
+python -B RefUnmix/conduct.py --batch 4 --output outputs/four
 ```
 
 Each seed writes its own images, inference summary, and metric report under `outputs/main/SEED/`. The four-seed quality result is `outputs/main/mean.json`. Completed seeds are retained. An unfinished output directory requires a fresh destination. Saved recipes bind every seed to the same code and generation settings.
@@ -156,151 +155,124 @@ env/bin/python -B RefUnmix/conduct.py --protocol protocol/official/metrics.py
 Run the stages separately:
 
 ```bash
-python -B conduct.py --action generate
-python -B conduct.py --action score --network
-python -B conduct.py --action aggregate
+python -B RefUnmix/conduct.py --action generate
+python -B RefUnmix/conduct.py --action score --network
+python -B RefUnmix/conduct.py --action aggregate
 ```
 
 Individual seeds can also be completed in sequence:
 
 ```bash
-python -B conduct.py --seeds 42 --network
-python -B conduct.py --seeds 52
-python -B conduct.py --seeds 3047
-python -B conduct.py --seeds 3407
-python -B conduct.py --action aggregate
+python -B RefUnmix/conduct.py --seeds 42 --network
+python -B RefUnmix/conduct.py --seeds 52
+python -B RefUnmix/conduct.py --seeds 3047
+python -B RefUnmix/conduct.py --seeds 3407
+python -B RefUnmix/conduct.py --action aggregate
 ```
 
 ## Ablations
 
-The fixed-assignment and unamplified rows use the same three endpoints and retain the prompt response at unit gain. Fixed assignment writes $Q(X+d+wa)$, while the unamplified method writes $Q(X+d+qa)$ with a solved shared coefficient. Solving for $q$ improves background PSNR and LPIPS, with a drop in both CLIP scores. Starting from that accepted output, innovation enhancement improves all six quality metrics.
+The core controls retain the main profile's uncalibrated paired field. Each profile changes the stated response measurement or output rule and writes separate predictions and metric reports.
 
-Replacing the zero-field endpoint with the source image adds $R_{(0,0)}-X$ to the measured shared transport. This offset changes both the coefficient and the enhancement budget. Retaining the matched reference gives better results on all six aggregate metrics. Unified Gating applies $w$ to both responses. Against fixed assignment, gating the prompt response as well improves SSIM and slightly lowers both CLIP scores. Target-Endpoint Only directly decodes $R_{(1,1)}$. This constructed baseline has the highest CLIP scores in the ablation and the weakest background preservation.
+| Paper row | Profile | Output rule |
+|---|---|---|
+| RefUnmix | `main` | Solve shared adoption, then enhance the prompt response within its pixel budget |
+| w/o Joint Assignment | `assignment` | $Q(X+d+wa)$; retain fixed spatial adoption and unit prompt gain |
+| w/o Zero-Field Reference | `reference` | Skip the source-zero prediction and decode, replace $R_{(0,0)}$ by $X$, and solve allocation with $a'=R_{(1,0)}-X$ |
+| w/o Innovation Enhancement | `amplification` | $Q(X+d+qa)$; retain joint adoption with unit prompt gain |
+| Unified Gating | `gating` | $Q(X+w(d+a))$; apply the same spatial gate to both responses |
+| Target-Endpoint Only | `target` | $Q(R_{(1,1)})$; construct the field and decode only the target endpoint |
 
-The structural comparisons use the following outputs. All retain the same paired field settings.
-
-| Paper row | Output rule |
-|---|---|
-| RefUnmix | Solve shared adoption, then enhance the prompt response within its pixel budget |
-| w/o Joint Assignment | $Q(X+d+wa)$; retain fixed spatial adoption and unit prompt gain |
-| w/o Zero-Field Reference | Replace $R_{(0,0)}$ by $X$, set $a'=R_{(1,0)}-X$, and solve adoption and enhancement again |
-| w/o Innovation Enhancement | $Y_0=Q(X+d+qa)$; retain solved adoption at unit prompt gain |
-| Unified Gating | $Q(X+w(d+a))$; apply one spatial weight to both responses |
-| Target-Endpoint Only | $Q(R_{(1,1)})$; decode only the target endpoint after field construction |
-
-The commands below run the published parameter controls. The `amplification` profile implements the unamplified row; the remaining profiles probe field construction.
-
-Each command runs all 700 requests with the same four seeds, evaluator, precision, and batch size.
-
-| Profile | Change from the main profile |
-|---|---|
-| `calibration` | Enable full Source-State Calibration: noise recentering at gain 0.5 and local source-bias projection |
-| `bias` | Enable only local source-bias projection; keep noise recentering disabled |
-| `locality` | Enable only global source-bias projection; compare with `bias` to isolate geometry |
-| `amplification` | Set the innovation cap to one |
-| `condition` | Remove conditional extrapolation; retain field gain 1.5 |
+Target-Endpoint Only is a constructed baseline that removes the decomposition and downstream allocation together. The other rows retain their declared endpoint and allocation mechanisms. Source-State Calibration is disabled in the main profile; it is not an additional removal row.
 
 ```bash
-python -B conduct.py --profile calibration
-python -B conduct.py --profile bias
-python -B conduct.py --profile locality
-python -B conduct.py --profile amplification
-python -B conduct.py --profile condition
+python -B RefUnmix/conduct.py --profile assignment
+python -B RefUnmix/conduct.py --profile reference
+python -B RefUnmix/conduct.py --profile amplification
+python -B RefUnmix/conduct.py --profile gating
+python -B RefUnmix/conduct.py --profile target
 ```
 
-The calibration control probes the field construction stage. The zero-field reference ablation probes the decoded transport measurement. The optional `calibration` control uses `--singlemode recenter --recenter .5 --singlebias`, restoring the complete Source-State Calibration module. It uses six denoiser condition samples in three logical forward calls. The `bias` and `locality` controls isolate source-bias projection without noise recentering. The `amplification` and `condition` profiles retain the main profile's disabled calibration module.
+Auxiliary field controls are `calibration` (restore noise recentering and local source-bias projection), `bias` (local projection only), `locality` (global projection only), and `condition` (remove conditional extrapolation). The calibration control adds the module back to the main configuration. Each profile uses the same seed order, requests and official evaluator. Masks and metric scores do not select generated outputs.
 
-Each profile writes separate seed reports and its own `mean.json`. Evaluation follows image generation. The masks and metric models never choose the generated output.
+`ash
+python -B RefUnmix/conduct.py --profile calibration
+python -B RefUnmix/conduct.py --profile bias
+python -B RefUnmix/conduct.py --profile locality
+python -B RefUnmix/conduct.py --profile condition
+`
 
 ## T2I backbones
 
-Table 3 compares RefUnmix with each backbone's own Naive output. Both PSNR and CLIP-Edited increase on InstaFlow, SwiftBrush-v2 and SD-Turbo. SwiftBrush-v2 shows the largest gain in PSNR, while InstaFlow shows the largest gain in CLIP-Edited.
+RefUnmix uses SD-Turbo, SwiftBrush-v2 and InstaFlow through their native prediction interfaces. Model roots contain `unet/`, `vae/`, `scheduler/`, `tokenizer/` and `text_encoder/`. SwiftBrush-v2 uses its generator UNet and matching SD2.1 components. The InstaFlow root uses the one-step `XCLiu/instaflow_0_9B_from_sd_1_5` checkpoint.
 
-### Table 3 Naive and the native predictor
+| Backbone | Option | Native network output | Clean-latent recovery |
+|---|---|---|---|
+| [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) | `sdturbo` | Predicted noise | VP recovery |
+| [SwiftBrush-v2](https://github.com/VinAIResearch/SwiftBrushV2) | `swiftbrush` | Predicted noise | VP recovery |
+| [InstaFlow](https://github.com/gnobitab/InstaFlow) | `instaflow` | Noise-to-data velocity | Linear-bridge recovery |
 
-`--profile naive` is the Table 3 control. It uses the selected backbone's native clean predictor $P$ with ChordEdit's instantaneous field ($\delta=0$) and target refinement:
-
-```math
-u_{\mathrm{naive}}=P_{t_f}(z_0,c_t;\epsilon)-P_{t_f}(z_0,c_s;\epsilon),\qquad
-z_1=z_0+u_{\mathrm{naive}},\qquad
-Y_{\mathrm{naive}}=Q\!\left(V\!\left(P_{t_e}(z_1,c_t;\epsilon)\right)\right).
-```
-
-The preset follows the controls in the [ChordEdit benchmark entry](https://github.com/ChordEdit/ChordEdit/blob/main/run_pie_bench.py), with its temporal window set to zero: field time 0.90, refinement time 0.30, unit transport scale, one shared noise sample, one transport update and one target refinement. It uses the original source and target prompts without CFG. The three RefUnmix gains apply to `--profile main`. Naive uses three condition samples in two logical forwards, one VAE encode and one decode.
-
-Both profiles load their predictor through `engine/native.py::load()`. Naive calls `engine/native.py::naive()`, which builds the instantaneous field, calls `Native.endpoint()` and decodes the target prediction. RefUnmix calls `engine/single.py::edit()` and uses that same predictor for its matched endpoints. The choice of backbone changes $P$; the profile determines how its predictions form the edited output.
-
-| Backbone | `--backbone` | Native output | Model clock | Clean predictor |
-|---|---|---|---|---|
-| SD-Turbo | `sdturbo` (`vp` is the generic VP option) | Predicted noise | $k=\operatorname{round}((T-1)t)$ | VP noise recovery |
-| SwiftBrush-v2 | `swiftbrush` | Predicted noise | $k=\operatorname{round}((T-1)t)$ | VP noise recovery |
-| InstaFlow-0.9B | `instaflow` | Noise-to-data velocity | $k=1000\sigma$ on the integer clock | Linear-bridge velocity recovery |
-
-For SD-Turbo and SwiftBrush-v2, let $\alpha_k=\sqrt{\bar\alpha_k}$ and $\sigma_k=\sqrt{1-\bar\alpha_k}$ from the model schedule. `engine/session.py` computes
+For SD-Turbo and SwiftBrush-v2, write $alpha_k=sqrt{aralpha_k}$ and $sigma_k=sqrt{1-aralpha_k}$ from the checkpoint schedule:
 
 ```math
-x_k=\alpha_k z+\sigma_k\epsilon,\qquad
-P_t(z,c;\epsilon)=\frac{x_k-\sigma_k\widehat\epsilon_\theta(x_k,k,c)}{\alpha_k}.
+x_k=alpha_k z+sigma_kepsilon,qquad
+P_t(z,c;epsilon)=rac{x_k-sigma_kwidehatepsilon_	heta(x_k,k,c)}{alpha_k},qquad
+k=operatorname{round}((T-1)t).
 ```
 
-The named loaders require epsilon-prediction components. SwiftBrush-v2 uses its own UNet with matching SD2.1 VAE, text encoder, tokenizer and scheduler components, without the SwiftEdit inverter or IP adapter. The native noise-prediction recovery follows the [SwiftBrush-v2 inference code](https://github.com/VinAIResearch/SwiftBrushV2/blob/main/infer_by_prompt.py).
-
-For InstaFlow, `engine/linear.py` uses the linear bridge and the positive noise-to-data velocity:
+For InstaFlow, the linear bridge and positive noise-to-data velocity give
 
 ```math
-x_\sigma=(1-\sigma)z+\sigma\epsilon,\qquad
-P_\sigma(z,c;\epsilon)=x_\sigma+\sigma v_\theta(x_\sigma,1000\sigma,c).
+x_sigma=(1-sigma)z+sigmaepsilon,qquad
+P_sigma(z,c;epsilon)=x_sigma+sigma v_	heta(x_sigma,1000sigma,c).
 ```
 
-At $\sigma=1$, this gives the official one-step update $\epsilon+v_\theta(\epsilon,1000,c)$. The generation ODE starts at time zero with model clock 1000. Use the one-step `XCLiu/instaflow_0_9B_from_sd_1_5` checkpoint. Its [official pipeline](https://github.com/gnobitab/InstaFlow/blob/main/code/pipeline_rf.py) uses one Euler update without CFG. The loader retains the checkpoint's local components; the linear bridge supplies the noising rule. InstaFlow runs with batch 1, and its profile excludes VP source-state calibration and multi-step continuation.
+At $sigma=1$, the clean prediction is the native one-step update $epsilon+v_	heta(epsilon,1000,c)$. The ODE starts at time zero with UNet clock 1000. InstaFlow uses batch 1 with calibration disabled.
 
-Prepare each local model root with `unet/`, `vae/`, `scheduler/`, `tokenizer/` and `text_encoder/`. Naive and RefUnmix runs on a given backbone use the same root. The following commands keep paired outputs separate:
+### Naive control
+
+The table row is named **Naive**. Native denotes the backbone prediction interface $P$, not a separate editing method. Naive uses the original image and prompts, an instantaneous paired field, and one target refinement:
+
+```math
+F_{mathrm{naive}}=P_{t_f}(z_0,c_t;epsilon)-P_{t_f}(z_0,c_s;epsilon),qquad
+z_1=z_0+F_{mathrm{naive}},qquad
+Y_{mathrm{naive}}=Q!left(V!left(P_{t_e}(z_1,c_t;epsilon)
+ight)
+ight).
+```
+
+Its fixed settings are field time 0.90, time window $delta=0$, endpoint time 0.30, unit field scale, one shared noise sample, one image update and one target refinement without CFG. This follows the instantaneous-field control used by ChordEdit. RefUnmix's three gains apply to the main profile. Naive uses original prompt embeddings and no response allocation. It makes three condition evaluations in two logical forwards, one VAE encode and one decode.
 
 ```bash
-python -B conduct.py --backbone sdturbo --model models --profile naive --output outputs/turbo
-python -B conduct.py --backbone sdturbo --model models --profile main --output outputs/turbo
-python -B conduct.py --backbone swiftbrush --model models/brush --profile naive --output outputs/brush
-python -B conduct.py --backbone swiftbrush --model models/brush --profile main --output outputs/brush
-python -B conduct.py --backbone instaflow --model models/insta --batch 1 --profile naive --output outputs/insta
-python -B conduct.py --backbone instaflow --model models/insta --batch 1 --profile main --output outputs/insta
+python -B RefUnmix/conduct.py --backbone sdturbo --model models --profile naive --output outputs/turbo
+python -B RefUnmix/conduct.py --backbone sdturbo --model models --profile main --output outputs/turbo
+python -B RefUnmix/conduct.py --backbone swiftbrush --model models/brush --profile naive --output outputs/brush
+python -B RefUnmix/conduct.py --backbone swiftbrush --model models/brush --profile main --output outputs/brush
+python -B RefUnmix/conduct.py --backbone instaflow --model models/insta --batch 1 --profile naive --output outputs/insta
+python -B RefUnmix/conduct.py --backbone instaflow --model models/insta --batch 1 --profile main --output outputs/insta
 ```
 
-Each command uses the same four seeds and official quality evaluator. It writes the selected profile under its output root, including the generation recipe, per-request records and four-seed quality mean. The model weight and configuration hashes identify the predictor used in each run.
-
-### Method-by-backbone interface
-
-`engine/comparison.py::Registry` separates the editing method from the native backbone. The matrix contains Naive, ChordEdit, RRLS, WhereEdit, SwiftEdit and RefUnmix crossed with InstaFlow, SwiftBrush-v2 and SD-Turbo. Each method retains its own algorithm settings. Native prediction supplies the common backbone API; the method adapter implements the editor around that API.
-
-Print the matrix without loading checkpoints or generating images:
+The default matrix command prints a plan without loading models. Add `--run` to execute the selected cells and official quality scoring:
 
 ```bash
-python -B compare.py
-python -B compare.py --methods chord rrls where swiftedit refunmix --backbones instaflow swiftbrush sdturbo
+python -B RefUnmix/compare.py --methods naive refunmix
+python -B RefUnmix/compare.py --methods naive refunmix --run
+python -B RefUnmix/compare.py --methods chord rrls where swiftedit --seeds 42 --run
 ```
 
-Naive and RefUnmix have built-in entries. The other methods have adapter slots. The plan reports `adapter required`, `unsupported` or `weights required` for combinations awaiting an implementation or dedicated components. Built-in rows include the corresponding `conduct.py` command. Every combination keeps separate outputs and uses seeds 42, 52, 3047 and 3407 with all 700 requests.
+Each cell has a distinct output directory, recipe and seed reports. Completed compatible reports are reused after integrity checks. A method requiring backbone-specific trained components remains unavailable when those components have not been released; the matrix records that state and leaves its metrics missing.
 
-A method adapter exports `edit(session, settings, metadata)` and `register(registry)`. Its registration declares the supported backbones, actual official settings and any backbone-specific trained components:
+## Comparisons
 
-```python
-def register(registry):
-    registry.register(
-        name="rrls",
-        edit=edit,
-        backbones=("sdturbo",),
-        settings=OFFICIAL_SETTINGS,
-    )
-```
+RefUnmix is compared with the following methods:
 
-`edit` returns normalized RGB pixels and a report dictionary. It uses `session.predict()`, `session.state()` or `session.velocity()` for backbone queries and `session.decode()` for decoded outputs. Each request starts with a fresh session. The source pixels, query ledger and output geometry are checked at the interface. Dedicated inversion or adapter networks retain their own measured costs in the method report. SwiftEdit registrations must declare trained components for every backbone they support.
+| Group | Methods |
+|---|---|
+| Multi-step | [MasaCtrl](https://github.com/TencentARC/MasaCtrl), [PnP](https://github.com/MichalGeyer/plug-and-play), [FlowEdit](https://github.com/fallenshock/FlowEdit) |
+| Few-step | [InfEdit](https://github.com/sled-group/InfEdit), [TurboEdit](https://github.com/GiilDe/turbo-edit), [InstantEdit](https://github.com/Supercomputing-System-AI-Lab/InstantEdit) |
+| One-step | [SwiftEdit](https://github.com/Qualcomm-AI-research/SwiftEdit), [ChordEdit](https://github.com/ChordEdit/ChordEdit), [RRLS](https://github.com/yhz5613813/RRLS), [WhereEdit](https://github.com/Xi-Mu-Yu/WhereEdit) |
 
-Load an adapter into a comparison plan with a local relative path:
-
-```bash
-python -B compare.py --adapters adapters/rrls.py --methods rrls --backbones instaflow swiftbrush sdturbo
-```
-
-Before editing, call `registry.prepare(method, backbone)` to validate and hash dedicated weights once. `registry.apply(method, backbone, session, metadata)` then dispatches the selected method. Metadata contains the original `source`, `target` and `seed`; the native loader records the backbone and checkpoint identity. The report retains the adapter source hash, official-setting hash and dedicated-weight hashes. Changed adapters or prepared weights require a fresh registry. Image generation, official quality scoring and exclusive runtime measurement remain separate stages.
+`baselines.py` provides inference, saved-output organization and official scoring entries for these ten methods and RefUnmix. `--action plan` is the default. Select the method with `--method`; source revisions and model identities are recorded in each generation recipe. The adapter implementation is kept in `engine/bench.py`, `engine/editors.py`, `engine/upstream.py` and `engine/flowedit.py`. `engine/comparison.py` retains the custom method registration API. The editing methods keep their own settings, while output geometry, request identities and scoring are checked by the common benchmark interface.
 
 ## Experimental settings
 
@@ -332,7 +304,7 @@ Background metrics include requests with nonempty unedited support; CLIP metrics
 `aggregate.py` recomputes the per-seed tables from the individual rows. It requires all requested seeds, 700 distinct request identities per seed, matching generation settings, and the pinned calculator. Missing values are never substituted with zero.
 
 ```bash
-python -B aggregate.py \
+python -B RefUnmix/aggregate.py \
   --input outputs/main/42/metrics.json outputs/main/52/metrics.json \
           outputs/main/3047/metrics.json outputs/main/3407/metrics.json \
   --seeds 42 52 3047 3407

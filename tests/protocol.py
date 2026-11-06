@@ -381,7 +381,7 @@ class ProtocolTests(unittest.TestCase):
     def testdocumentedexecution(self):
         from conduct import parser as reproduction
         text, _ = self.documented()
-        commands = [shlex.split(line) for line in text.splitlines() if line.startswith("python -B conduct.py --seeds")]
+        commands = [shlex.split(line) for line in text.splitlines() if line.startswith("python -B RefUnmix/conduct.py --seeds")]
         seeds = [reproduction().parse_args(command[3:]).seeds for command in commands]
         self.assertEqual(seeds, [[42], [52], [3047], [3407]])
         self.assertNotIn("experiments/single.py", text)
@@ -434,8 +434,8 @@ class ProtocolTests(unittest.TestCase):
 
     def testdocumentedcurves(self):
         text, _ = self.documented()
-        commands = [shlex.split(line) for line in text.splitlines() if line.startswith("python -B conduct.py --profile")]
-        self.assertEqual(len(commands), 5)
+        commands = [shlex.split(line) for line in text.splitlines() if line.startswith("python -B RefUnmix/conduct.py --profile")]
+        self.assertEqual({command[command.index("--profile") + 1] for command in commands}, {"assignment", "reference", "amplification", "gating", "target", "calibration", "bias", "locality", "condition"})
         profiles = [self.documented(profile=command[command.index("--profile") + 1])[1] for command in commands]
         self.assertTrue(any(value.innovationgain == 1 for value in profiles))
         self.assertTrue(any(value.singlemode == "recenter" and value.recenter == .5 for value in profiles))
