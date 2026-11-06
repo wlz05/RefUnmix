@@ -25,14 +25,42 @@ R_{(i,j)}=V(h_{(i,j)}),\qquad
 (i,j)\in\{(0,0),(1,0),(1,1)\}.
 ```
 
+The endpoint differences first give the prompt response and the original shared transport:
+
+```math
+d=R_{(1,1)}-R_{(1,0)},\qquad
+a_0=R_{(1,0)}-R_{(0,0)}.
+```
+
+```math
+d+a_0=
+\underbrace{R_{(1,1)}-R_{(1,0)}}_{\text{prompt response}}
++\underbrace{R_{(1,0)}-R_{(0,0)}}_{\text{shared transport}}
+=R_{(1,1)}-R_{(0,0)}.
+```
+
+The first difference changes the prompt at a fixed transported anchor; the second changes the anchor while retaining the source prompt. Keeping both measured differences allows their contributions to be weighted separately.
+
 Native cross-attention of the source-zero and target-field endpoints provides a soft support $m$ for changed prompt tokens. The reference interpolates between the zero-field prediction and the source:
 
 ```math
 B=(1-m)R_{(0,0)}+mX,\qquad
-d=R_{(1,1)}-R_{(1,0)},\qquad a=R_{(1,0)}-B.
+a=R_{(1,0)}-B=a_0+m(R_{(0,0)}-X).
 ```
 
-The prompt response $d$ compares prompts at a fixed transported anchor. Writing the original shared transport as $a_0=R_{(1,0)}-R_{(0,0)}$ gives $a=a_0+m(R_{(0,0)}-X)$: the shared component also absorbs the shift from the generated reference toward the source image. It can carry useful geometry as well as reconstruction drift. The latent prompt response supplies a responsibility map $r$, combined with support as $w=r+m(1-r)$. Attention is read from existing forwards without modifying attention probabilities or adding model queries.
+The reference correction enters the shared component. With prompt gain $\eta$ and shared-adoption coefficient $s$, the continuous writeback displacement expands to
+
+```math
+\begin{aligned}
+\Delta_{\eta,s}
+&=\eta d+sa\\
+&=\eta(R_{(1,1)}-R_{(1,0)})
++s(R_{(1,0)}-R_{(0,0)})\\
+&\quad+sm(R_{(0,0)}-X).
+\end{aligned}
+```
+
+The three terms retain the prompt response, adopt shared transport, and account for source-reference grounding. At unit coefficients, $d+a=R_{(1,1)}-B$. The proposal $X+\Delta_{\eta,s}$ then passes through the digital budget repair and final support contraction described below. The latent prompt response supplies a responsibility map $r$, combined with support as $w=r+m(1-r)$. Attention is read from existing forwards without modifying attention probabilities or adding model queries.
 
 **Joint assignment.** For one RGB pixel, define $A=\|a\|^2$ and $C=\langle d,a\rangle$. Shared adoption depends on the interaction of both responses:
 
@@ -271,7 +299,7 @@ Use the original calculator's valid support for each metric. Background metrics 
 \sum_{i\in\mathcal I_s}m_{i,s}.
 ```
 
-The four-seed main result is $\frac{1}{4}\sum_{s\in\{42,52,3047,3407\}}\bar m_s$. Paired seed-42 comparisons use $\bar m_{42}$. Each table identifies its seed scope; a four-seed RefUnmix result is not substituted into a seed-42 comparison. The aggregator verifies request identities, settings, calculator provenance and completeness.
+The four-seed main result is $\frac{1}{4}\sum_{s\in\{42,52,3047,3407\}}\bar m_s$. The complete SD-Turbo RefUnmix row uses this mean throughout the reported tables. Ablation controls, Native predictions and other backbones retain their seed-42 results $\bar m_{42}$, with the scope identified for each row. The aggregator verifies request identities, settings, calculator provenance and completeness within each experiment.
 
 ```bash
 python -B RefUnmix/aggregate.py --input outputs/main/42/metrics.json outputs/main/52/metrics.json outputs/main/3047/metrics.json outputs/main/3407/metrics.json --seeds 42 52 3047 3407
