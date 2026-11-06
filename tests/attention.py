@@ -33,6 +33,34 @@ class Model(torch.nn.Module):
         self.attn2 = Attention()
 
 class AttentionTests(unittest.TestCase):
+    def testinsertionneighbors(self):
+        original = tokens(Tokenizer(), "a shirt", "a striped shirt", 8)
+        self.assertEqual(original[0], [])
+        grounded = tokens(Tokenizer(), "a shirt", "a striped shirt", 8, gaps=True)
+        self.assertEqual(grounded[0], [1, 2])
+        self.assertEqual(grounded[1], [1, 2, 3])
+        extended = tokens(Tokenizer(), "a blue shirt on man", "a striped blue shirt on man", 9, gaps=True, following=2)
+        self.assertEqual(extended[0], [1, 2, 3])
+        self.assertEqual(extended[1], [1, 2, 3, 4])
+        with self.assertRaises(ValueError):
+            tokens(Tokenizer(), "a shirt", "a blue shirt", 8, following=0)
+
+    def testtriplet(self):
+        model = Model()
+        hidden, context = torch.randn(3, 4, 4), torch.randn(3, 5, 4)
+        plain = model.attn2(hidden, encoder_hidden_states=context)
+        triplet = Collector(model, [[1], [2]], (4, 4), layout=3)
+        with triplet:
+            observed = model.attn2(hidden, encoder_hidden_states=context)
+        pair = Collector(model, [[1], [2]], (4, 4))
+        with pair:
+            model.attn2(hidden[[0, 2]], encoder_hidden_states=context[[0, 2]])
+        torch.testing.assert_close(observed, plain, atol=0, rtol=0)
+        torch.testing.assert_close(triplet.result(), pair.result())
+        self.assertEqual(len(model.attn2._forward_pre_hooks), 0)
+        with self.assertRaises(ValueError):
+            Collector(model, [[1], [2]], (4, 4), layout=4)
+
     def testtokens(self):
         result = tokens(Tokenizer(), "a blue shirt on man", "a striped shirt on man", 8)
         self.assertIn(2, result[0])

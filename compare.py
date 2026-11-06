@@ -10,14 +10,14 @@ from engine.comparison import BACKBONES, METHODS, Registry
 
 def main():
     parser = argparse.ArgumentParser(description="Plan the method-by-backbone matrix, or execute its official adapters with --run.")
-    parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
+    parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS[:-1]))
     parser.add_argument("--backbones", nargs="+", choices=BACKBONES, default=list(BACKBONES))
     parser.add_argument("--adapters", nargs="*", default=[])
     parser.add_argument("--turbo", default="models")
     parser.add_argument("--brush", default="models/brush")
     parser.add_argument("--insta", default="models/insta")
     parser.add_argument("--run", action="store_true")
-    parser.add_argument("--seeds", nargs="+", type=int, choices=(42, 52, 3047, 3407), default=[42, 52, 3047, 3407])
+    parser.add_argument("--seeds", nargs="+", type=int, choices=(42, 52, 3047, 3407), default=[42])
     parser.add_argument("--sources", default="baselines")
     parser.add_argument("--weights", default="models/baselines")
     parser.add_argument("--dataset", default="data")
@@ -35,6 +35,7 @@ def main():
     for path in args.adapters:
         registry.load(path)
     plan = registry.plan(args.methods, args.backbones, {"sdturbo": args.turbo, "swiftbrush": args.brush, "instaflow": args.insta})
+    plan["seeds"] = args.seeds
     if args.run:
         execute(args, plan)
         return
@@ -53,9 +54,9 @@ def execute(args, plan):
     rows = []
     for row in plan["rows"]:
         method, backbone = row["method"], row["backbone"]
-        if method == "naive":
-            root = output / "naive" / backbone
-            command = [str(relative(args.python, "interpreter")) if args.python else sys.executable, "-B", str(Path(__file__).with_name("conduct.py")), "--profile", "naive", "--backbone", backbone, "--model", str(relative(roots[backbone], "model")), "--batch", "1" if backbone == "instaflow" else "3", "--seeds", *map(str, args.seeds), "--output", str(root)]
+        if method in {"native", "naive"}:
+            root = output / method / backbone
+            command = [str(relative(args.python, "interpreter")) if args.python else sys.executable, "-B", str(Path(__file__).with_name("conduct.py")), "--profile", method, "--backbone", backbone, "--model", str(relative(roots[backbone], "model")), "--batch", "1", "--seeds", *map(str, args.seeds), "--output", str(root)]
             for name in ("dataset", "mapping", "images", "protocol", "cache", "device"):
                 command.extend(("--" + name, str(getattr(args, name))))
             if args.network:
@@ -65,8 +66,8 @@ def execute(args, plan):
                 idle(lockargs)
                 subprocess.run(command, check=True)
             from aggregate import combine
-            value = combine([root / "naive" / str(seed) / "metrics.json" for seed in args.seeds], args.seeds, args.dataset, args.mapping, args.images)
-            rows.append({"method": method, "backbone": backbone, "state": "complete", "output": str(root / "naive"), "table": value["table"]})
+            value = combine([root / method / str(seed) / "metrics.json" for seed in args.seeds], args.seeds, args.dataset, args.mapping, args.images)
+            rows.append({"method": method, "backbone": backbone, "state": "complete", "output": str(root / method), "table": value["table"]})
         elif not compatible(method, backbone):
             rows.append({"method": method, "backbone": backbone, "state": "unsupported released weights", "metrics": None})
         else:

@@ -7,8 +7,10 @@ import math
 import torch
 import torch.nn.functional as functional
 
-def tokens(tokenizer, source, target, length, words=None):
+def tokens(tokenizer, source, target, length, words=None, gaps=False, following=1):
     # Include neighboring tokens for phrase matching.
+    if type(following) is not int or not 1 <= following <= 4:
+        raise ValueError("Following context must contain one to four tokens.")
     encoded = tokenizer([source, target], padding="max_length", truncation=True, max_length=length, return_tensors="pt").input_ids
     special = set(getattr(tokenizer, "all_special_ids", []))
     positions = [[index for index, value in enumerate(row) if int(value) not in special] for row in encoded]
@@ -24,16 +26,19 @@ def tokens(tokenizer, source, target, length, words=None):
             if tag == "equal":
                 continue
             for side, start, stop in ((0, left, endleft), (1, right, endright)):
-                if stop > start:
-                    selected[side].update(positions[side][max(0, start - 1):min(len(values[side]), stop + 1)])
+                if stop > start or gaps:
+                    selected[side].update(positions[side][max(0, start - 1):min(len(values[side]), stop + following)])
     return [sorted(side) for side in selected]
 
 class Collector:
-    def __init__(self, model, indices, shape, count=1, maximum=1024):
+    def __init__(self, model, indices, shape, count=1, maximum=1024, layout=2):
         if len(indices) != 2 or any(any(type(index) is not int or index < 0 for index in side) for side in indices):
             raise ValueError("Attention indices must contain source and target token positions.")
         if type(count) is not int or count < 1 or type(maximum) is not int or maximum < 1:
             raise ValueError("Attention sample and query limits must be positive integers.")
+        if type(layout) is not int or layout not in (2, 3):
+            raise ValueError("Attention layout must contain two or three endpoint groups.")
+        self.layout = layout
         self.model, self.indices, self.shape = model, indices, tuple(shape)
         self.count, self.maximum = count, maximum
         self.handles, self.maps, self.skipped = [], [], {}
@@ -67,7 +72,7 @@ class Collector:
             self.skip("unsupported attention layout")
             return
         batch, queries, _ = hidden.shape
-        if batch != 2 * self.count or queries > self.maximum or not any(self.indices):
+        if batch != self.layout * self.count or queries > self.maximum or not any(self.indices):
             self.skip("batch, query limit, or empty tokens")
             return
         height = round(math.sqrt(queries * self.shape[0] / self.shape[1]))
@@ -92,7 +97,8 @@ class Collector:
         for side, indices in enumerate(self.indices):
             valid = [index for index in indices if index < context.shape[1]]
             if valid:
-                values = probabilities[side * self.count:(side + 1) * self.count, :, valid].mean(dim=(0, 2))
+                first = (0 if side == 0 else self.layout - 1) * self.count
+                values = probabilities[first:first + self.count, :, valid].mean(dim=(0, 2))
                 maps.append(values.reshape(1, 1, height, width))
         if maps:
             value = torch.stack(maps).amax(0)
@@ -104,7 +110,7 @@ class Collector:
         return torch.stack(self.maps).mean(0) if self.maps else None
 
     def report(self):
-        return {"tokens": self.indices, "maps": len(self.maps), "skipped": self.skipped, "maximumqueries": self.maximum, "note": "Read-only attention reconstruction with token-neighbor phrase heuristics."}
+        return {"layout": self.layout, "tokens": self.indices, "maps": len(self.maps), "skipped": self.skipped, "maximumqueries": self.maximum, "note": "Read-only attention reconstruction with token-neighbor phrase heuristics."}
 
 # Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

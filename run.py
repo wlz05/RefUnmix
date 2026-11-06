@@ -34,8 +34,12 @@ def times(values):
 def common(parser):
     parser.add_argument("--model", default="./models")
     parser.add_argument("--single", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--ablation", choices=("full", "assignment", "reference", "gating", "target"), default="full")
+    parser.add_argument("--ablation", choices=("full", "assignment", "reference", "gating", "target", "grounding", "attraction"), default="full")
     parser.add_argument("--naive", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--native", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--referencelocal", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--targetpull", type=float, default=.15)
+    parser.add_argument("--retainedcontext", type=float, default=.10)
     parser.add_argument("--keystrength", type=float, default=0.)
     parser.add_argument("--valuestrength", type=float, default=0.)
     parser.add_argument("--referencephase", choices=("field", "endpoint", "both"), default="field")
@@ -328,6 +332,22 @@ def saveartifacts(session, root):
     return result
 
 def validate(args):
+    if args.native:
+        if args.naive or args.single or args.method != "raw" or not args.cleanup or args.poststeps != 1 or args.cfg or args.guidance != 1 or args.noise != 1:
+            raise ValueError("Native requires one source-anchored target prediction without an editing field.")
+        if args.backbone not in {"vp", "sdturbo", "swiftbrush", "instaflow"} or args.control or args.heldout or args.compensation or args.frontier or args.tangent or args.factorial or args.adapter or getattr(args, "unmix", False) or args.prior != "off":
+            raise ValueError("Native requires a supported backbone without adaptive editing or search.")
+        if args.singlemode != "contrast" or args.singlebias or args.recenter != 0 or args.singlecondition != "raw" or args.conditiongain != 1 or args.singlegain != 1 or args.innovationgain != 1 or args.targetpull != 0 or args.retainedcontext != 1 or args.referencelocal or args.keystrength or args.valuestrength:
+            raise ValueError("Native uses the original target prompt without calibration, support or gains.")
+        if getattr(args, "oracle", False) or getattr(args, "region", None) is not None or args.localization in {"attention", "hybrid"}:
+            raise ValueError("Native does not use annotation masks or attention localization.")
+    for value in (args.targetpull, args.retainedcontext):
+        if isinstance(value, bool) or not math.isfinite(value) or not 0 <= value <= 1:
+            raise ValueError("Target pull and retained context must be finite values in [0, 1].")
+    if args.ablation in {"grounding", "attraction"} and not args.referencelocal:
+        raise ValueError("This structural control requires the grounded RefUnmix path.")
+    if args.referencelocal and (not args.single or args.singleend != "responsibility" or args.singlemode != "contrast" or args.singlebias or args.recenter != 0 or args.noise != 1 or args.delta != 0 or args.keystrength or args.valuestrength or getattr(args, "batch", 1) != 1 or args.backbone not in {"vp", "sdturbo", "swiftbrush", "instaflow"}):
+        raise ValueError("Grounded references require one uncalibrated field, one noise sample and batch one.")
     if args.naive:
         if args.single or args.method != "raw" or args.field != "chord" or args.delta != 0 or not args.cleanup or args.poststeps != 1 or args.cfg or args.guidance != 1:
             raise ValueError("Table 3 Naive requires a delta-zero raw field and one unguided refinement.")
@@ -429,7 +449,7 @@ def validate(args):
     if args.flowguidance < 0:
         raise ValueError("Flow guidance embeddings must be nonnegative.")
     if args.backbone == "instaflow":
-        if not args.naive and (not args.single or args.singlemode != "contrast" or args.singleend != "responsibility" or args.recenter != 0 or args.singlebias or args.carry or args.delta != 0):
+        if not (args.naive or args.native) and (not args.single or args.singlemode != "contrast" or args.singleend != "responsibility" or args.recenter != 0 or args.singlebias or args.carry or args.delta != 0):
             raise ValueError("InstaFlow requires the Naive or uncalibrated responsibility profile.")
         if getattr(args, "batch", 1) != 1 or args.flowconsistency or args.prior != "off" or args.variance is not None:
             raise ValueError("Use InstaFlow with batch=1 and without consistency probes.")
@@ -509,7 +529,7 @@ def stopped(session, metadata, method, error, latent=None, judge=None, initial=N
     return output, report, session
 
 def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
-    if (args.naive or getattr(args, "single", False)) and mask is not None:
+    if (args.native or args.naive or getattr(args, "single", False)) and mask is not None:
         raise ValueError("Naive and single-field editing do not accept annotation masks.")
     from dataclasses import replace
     from engine.response import select
@@ -530,6 +550,9 @@ def run(editor, judge, image, source, target, args, mask=None, polarity="edit"):
     metadata["reproducibility"] = snapshot()
     metadata["controlsignature"] = signature(args)
     metadata["controlactive"] = judge is not None and (args.method not in {"raw", "fixed", "base"} or args.tangent)
+    if args.native:
+        from engine.native import direct
+        return direct(session, args, metadata)
     if source.strip().casefold() == target.strip().casefold():
         return session.origin, {**metadata, "method": args.method, "noop": True, "reason": "case-insensitive identical prompts", "stats": session.stats(), "seed": args.seed}, session
     if args.naive:

@@ -18,7 +18,11 @@ from engine.comparison import Registry
 from engine.native import create, load
 from evaluate import datasetargs
 from run import common, run, validate
-from session import editor
+from session import editor as baseeditor
+from intervention import Collector
+
+def editor(kind="epsilon"):
+    return baseeditor(kind, channels=4)
 
 def linear():
     base = editor()
@@ -49,7 +53,7 @@ class NativeTests(unittest.TestCase):
             self.assertTrue(baseline.naive)
             self.assertFalse(main.naive)
             self.assertEqual((baseline.start, baseline.end, baseline.scale, baseline.noise), (.90, .30, 1., 1))
-            self.assertEqual((main.conditiongain, main.singlegain, main.innovationgain), (1.25, 1.5, 2.))
+            self.assertEqual((main.conditiongain, main.singlegain, main.innovationgain), (1.25, 1., 3.))
 
     def testnativevpdispatch(self):
         for name in ("vp", "sdturbo", "swiftbrush"):
@@ -138,6 +142,34 @@ class NativeTests(unittest.TestCase):
                 self.assertEqual(report["candidates"], [])
                 self.assertEqual([query["samples"] for query in session.queries], [2, 1])
 
+    def testdirectpredictionwithoutfield(self):
+        image = Image.new("RGB", (16, 16), (96, 128, 160))
+        for name in ("sdturbo", "swiftbrush", "instaflow"):
+            for source in ("source", "different source", "target long"):
+                with self.subTest(backbone=name, source=source):
+                    current = linear() if name == "instaflow" else editor()
+                    args = self.settings(name, "native")
+                    reference = current.prepare(image, source, "target long", seed=42)
+                    latent = current.predict(reference.anchor, reference.noises[:1], current.index(.3), reference.target)
+                    expected = ((current.decode(latent) + 1) / 2).clamp(0, 1)
+                    with patch.object(type(reference), "field", side_effect=AssertionError("Native must not construct a field")):
+                        pixels, report, session = run(current, None, image, source, "target long", args)
+                    torch.testing.assert_close(pixels, expected)
+                    self.assertEqual((session.samples, session.calls, session.decodes, session.encodes), (1, 1, 1, 1))
+                    self.assertEqual(report["method"], "native")
+                    self.assertFalse(report["editingfield"])
+                    self.assertFalse(report["controller"]["enabled"])
+
+    def testdirectinvalidsettings(self):
+        for values in ({"naive": True}, {"single": True}, {"noise": 2}, {"singlebias": True}, {"recenter": .5}, {"conditiongain": 1.25}, {"targetpull": .15}, {"oracle": True}, {"referencelocal": True}, {"cfg": True}, {"poststeps": 2}, {"adapter": "external.py"}):
+            args = self.settings("sdturbo", "native")
+            for key, value in values.items():
+                setattr(args, key, value)
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                validate(args)
+
+    @patch("engine.attention.Collector", new=Collector)
+    @patch("engine.attention.tokens", new=lambda *args, **kwargs: ((1,), (1,)))
     def testmainkeepsmatchedendpoints(self):
         image = Image.new("RGB", (16, 16), (96, 128, 160))
         for name in ("sdturbo", "swiftbrush", "instaflow"):
@@ -163,7 +195,7 @@ class NativeTests(unittest.TestCase):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 validate(args)
         image = Image.new("RGB", (16, 16))
-        for profile in ("naive", "main"):
+        for profile in ("native", "naive", "main"):
             with self.assertRaises(ValueError):
                 run(editor(), None, image, "source", "target long", self.settings(profile=profile), Image.new("L", image.size, 255))
         session = linear().prepare(Image.new("RGB", (16, 16)), "source", "target")
@@ -172,7 +204,7 @@ class NativeTests(unittest.TestCase):
                 create(session, **options)
 
     def testinstaflowprofilebounds(self):
-        for options in (["--backbone", "instaflow"], ["--backbone", "instaflow", "--batch", "1", "--profile", "calibration"]):
+        for options in (["--backbone", "instaflow", "--batch", "3"], ["--backbone", "instaflow", "--batch", "1", "--profile", "calibration"]):
             args = conduct.parser().parse_args(options)
             with self.assertRaises(ValueError):
                 conduct.generation(args, 42, Path("outputs/main/42"))
@@ -200,6 +232,9 @@ class MatrixTests(unittest.TestCase):
             if row["status"] == "builtin":
                 command = row["command"]
                 self.assertEqual(command[command.index("--backbone") + 1], row["backbone"])
+                options = conduct.parser().parse_args(command[3:])
+                args = datasetargs(common(argparse.ArgumentParser())).parse_args(conduct.generation(options, 42, Path("outputs/check/42"))[3:])
+                validate(args)
         for methods, backbones in ((("naive", "naive"), ("sdturbo",)), (("unknown",), ("sdturbo",)), (("naive",), ())):
             with self.assertRaises(ValueError):
                 Registry().plan(methods, backbones)
@@ -209,8 +244,10 @@ class MatrixTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 Registry().plan(methods=invalid)
 
+    @patch("engine.attention.Collector", new=Collector)
+    @patch("engine.attention.tokens", new=lambda *args, **kwargs: ((1,), (1,)))
     def testbuiltinmatrixexecution(self):
-        for name in ("naive", "refunmix"):
+        for name in ("native", "naive", "refunmix"):
             for backbone in ("sdturbo", "swiftbrush", "instaflow"):
                 current = self.session(backbone)
                 pixels, report, returned = Registry().apply(name, backbone, current, self.metadata())

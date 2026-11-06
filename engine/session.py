@@ -163,7 +163,8 @@ class Editor:
         if keys or values:
             if layout not in (2, 3) or anchor.shape[0] % layout:
                 raise ValueError("Reference fields require complete endpoint groups.")
-            from engine.memory import route
+            from engine.memory import install, route
+            install(self.unet)
             with route(keys, values, layout) as counts:
                 result = self.state(sample, tick, embed)
                 if keys and counts[0] == 0 or values and counts[1] == 0:
@@ -377,7 +378,7 @@ class Session:
         return report
 
     def stats(self):
-        return {"calls": self.calls, "samples": self.samples, "decodes": self.decodes, "encodes": self.encodes, "textcalls": self.editor.textcalls - self.textbase, "ticks": sorted(self.cache), "queryticks": sorted({item["tick"] for item in self.queries}), "queries": list(self.queries), "elapsed": perf_counter() - self.started, "attention": self.attentionlog, "renders": dict(self.renders), "references": [{"cleanup": key is not None, "tick": key, "decoded": entry["pixels"] is not None} for key, entry in self.references.items()], "budget": self.limit.report() if self.limit is not None else None}
+        return {"calls": self.calls, "samples": self.samples, "decodes": self.decodes, "encodes": self.encodes, "textcalls": self.editor.textcalls - self.textbase, "ticks": sorted(self.cache), "queryticks": sorted({item["tick"] for item in self.queries}), "queries": list(self.queries), "elapsed": perf_counter() - self.started, "attention": {str(key): value for key, value in self.attentionlog.items()}, "renders": dict(self.renders), "references": [{"cleanup": key is not None, "tick": key, "decoded": entry["pixels"] is not None} for key, entry in self.references.items()], "budget": self.limit.report() if self.limit is not None else None}
 
 # Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

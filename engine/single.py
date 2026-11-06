@@ -2,6 +2,7 @@
 # RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
 
 import math
+from contextlib import nullcontext
 import torch
 import torch.nn.functional as functional
 from engine.session import tensor
@@ -109,6 +110,10 @@ def edit(session, args, metadata):
     ticks = [session.editor.index(args.start)] if args.delta == 0 else [session.editor.index(args.start), session.editor.index(args.start - args.delta)]
     times = [args.start] if args.delta == 0 else [args.start, args.start - args.delta]
     source, target, calibrations = [], [], []
+    if args.referencelocal:
+        from engine.attention import Collector, tokens
+        indices = tokens(session.editor.tokenizer, metadata["source"], metadata["target"], session.editor.tokens, gaps=True, following=2)
+        session.collector = Collector(session.editor.unet, indices, session.anchor.shape[-2:], maximum=1024, layout=3)
     for tick in ticks:
         count = session.noises.shape[0]
         anchors = session.anchor.expand(2 * count, -1, -1, -1)
@@ -184,24 +189,50 @@ def edit(session, args, metadata):
         details['sourcequotient'] = {'coefficient': coefficient, 'biasnorm': math.sqrt(square), 'correlation': cross / max(math.sqrt(square) * before, 1e-20), 'before': before, 'after': float(field.norm()), 'matched': args.biasnorm, 'normspace': 'input field', 'geometry': args.biasgeometry, 'local': localreport}
         field = field.float()
     field = field * args.singlegain
+    if args.referencelocal:
+        from engine.attraction import attract
+        field, details["targetattraction"] = attract(field, session.anchor, target[0], 0. if args.ablation == "attraction" else args.targetpull)
     transported = session.anchor + field
     if args.singleend == 'responsibility':
         if getattr(args, "ablation", "full") != "full":
             from engine.ablation import edit as ablate
+            if args.referencelocal:
+                from engine.intervention import edit as ablate
             return ablate(session, args, transported, metadata, times, details)
         from engine.response import region
         from engine.responsibility import resolve
         anchors = torch.cat((session.anchor, transported, transported))
-        predictions = session.predict(anchors, session.noises[:1].expand(3, -1, -1, -1), session.editor.index(session.end), torch.cat((session.source, session.source, session.target)), args.keystrength if args.referencephase in {"endpoint", "both"} else 0., args.valuestrength if args.referencephase in {"endpoint", "both"} else 0., 3)
+        with session.collector if args.referencelocal else nullcontext():
+            predictions = session.predict(anchors, session.noises[:1].expand(3, -1, -1, -1), session.editor.index(session.end), torch.cat((session.source, session.source, session.target)), args.keystrength if args.referencephase in {"endpoint", "both"} else 0., args.valuestrength if args.referencephase in {"endpoint", "both"} else 0., 3)
+        if args.referencelocal:
+            captured = session.collector.result()
+            if captured is None and any(session.collector.indices):
+                raise RuntimeError("Matched endpoint attention was not captured by the backend.")
+            tick = session.editor.index(session.end)
+            session.attentions[tick] = captured
+            session.attentionlog[tick] = session.collector.report()
         weight = region(predictions[2:3] - predictions[1:2]).pow(args.responsepower)
         positive = weight.pow(args.responsesharp)
         negative = (1 - weight).pow(args.responsesharp)
         weight = positive / (positive + negative).clamp_min(1e-12)
         weight = functional.interpolate(weight, session.origin.shape[-2:], mode="bilinear", align_corners=False)
         reference, shared, targetimage = [session.decode(predictions[index:index + 1]) for index in range(3)]
+        if args.referencelocal:
+            from engine.grounding import reference as grounded, supply
+            attention = session.attention()
+            if attention is None:
+                attention = torch.zeros_like(predictions[:1, :1])
+            reference, scope = grounded(session.origin, reference, attention)
+            weight = supply(weight, scope)
+            metadata["grounding"] = {"mean": float(scope.mean()), "tokens": session.collector.indices, "source": "Changed-word cross-attention from the source-zero and target-field endpoint groups", "rule": "Use source RGB and permit full transport inside semantic support; retain the matched zero-field reference and response prior outside."}
+            session.artifacts["scope"] = scope.expand_as(session.origin)
         conditional = targetimage - shared
         advection = shared - reference
         pixels, response = resolve(session.origin, conditional, advection, weight, args.responsepenalty, args.innovationgain)
+        if args.referencelocal:
+            from engine.grounding import restrict
+            pixels, response["support"] = restrict(session.origin, pixels, scope, args.retainedcontext)
+            response["digitalerrorafter"] = response["support"]["digitalerrorafter"]
         if args.responsecontrols:
             session.artifacts, response["controls"] = controls(session.origin, conditional, advection, weight, pixels, args.responsepenalty)
         report = {**metadata, 'method': 'single', 'renderer': 'responsibility', 'field': {'requested': args.singlemode, 'actual': args.singlemode, 'times': times, 'gain': args.singlegain, 'calibration': details, 'response': response}, 'stats': session.stats(), 'selected': 'single', 'controller': {'enabled': False}, 'candidates': [], 'explicitregion': False, 'scope': 'One field update from matched source-zero, source-field and target-field endpoints.'}

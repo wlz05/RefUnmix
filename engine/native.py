@@ -23,6 +23,14 @@ def load(root="./models", backbone="vp", device=None, precision="fp32", size=512
     return editor
 
 @torch.no_grad()
+def direct(session, args, metadata):
+    # Apply one target-conditioned prediction to the source anchor.
+    latent = session.predict(session.anchor, session.noises[:1], session.editor.index(session.end), session.target)
+    pixels = session.decode(latent).clamp(0, 1)
+    report = {**metadata, "method": "native", "renderer": "source-anchored native prediction", "selected": "native", "endpointtime": session.end, "editingfield": False, "stats": session.stats(), "controller": {"enabled": False}, "candidates": [], "explicitregion": False, "scope": "One target-conditioned native prediction from the encoded source, with no editing field or allocation."}
+    return pixels, report, session
+
+@torch.no_grad()
 def naive(session, args, metadata):
     # Match the delta-zero ChordEdit control with one target refinement.
     field = session.field(args.start, 0.)

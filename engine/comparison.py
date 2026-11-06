@@ -12,8 +12,8 @@ import torch
 from engine.session import relative, tensor
 
 BACKBONES = ("instaflow", "swiftbrush", "sdturbo")
-METHODS = ("naive", "chord", "rrls", "where", "swiftedit", "refunmix")
-PROFILES = {"naive": "naive", "refunmix": "main"}
+METHODS = ("native", "chord", "rrls", "where", "swiftedit", "refunmix", "naive")
+PROFILES = {"native": "native", "naive": "naive", "refunmix": "main"}
 
 def digest(settings):
     return hashlib.sha256(json.dumps(settings, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
@@ -124,7 +124,7 @@ class Registry:
                 self.prepared[key] = {"manifest": manifest, "weights": weights}
             return deepcopy(self.prepared[key]["weights"])
 
-    def plan(self, methods=METHODS, backbones=BACKBONES, models=None):
+    def plan(self, methods=METHODS[:-1], backbones=BACKBONES, models=None):
         methods, backbones = unique(methods, METHODS, "methods"), unique(backbones, BACKBONES, "backbones")
         roots = {"sdturbo": "models", "swiftbrush": "models/brush", "instaflow": "models/insta"}
         if models is not None:
@@ -138,9 +138,9 @@ class Registry:
                 entry = self.entries.get(name)
                 command = None
                 if name in PROFILES:
-                    command = ["python", "-B", "conduct.py", "--backbone", backbone, "--model", roots[backbone], "--profile", PROFILES[name], "--batch", "1" if backbone == "instaflow" else "3", "--output", "outputs/matrix/" + name + "/" + backbone]
+                    command = ["python", "-B", "conduct.py", "--backbone", backbone, "--model", roots[backbone], "--profile", PROFILES[name], "--batch", "1", "--output", "outputs/matrix/" + name + "/" + backbone]
                 rows.append({"method": name, "backbone": backbone, "model": roots[backbone], "status": self.status(name, backbone), "command": command, "settings": deepcopy(entry["settings"]) if entry else None, "settingssha256": entry["settingssha256"] if entry else None, "checkpoints": deepcopy(entry["checkpoints"].get(backbone, {})) if entry else {}, "adapter": deepcopy(entry["source"]) if entry else None})
-        return {"schema": 1, "seeds": [42, 52, 3047, 3407], "requestsperseed": 700, "rows": rows, "action": "plan only"}
+        return {"schema": 1, "seeds": [42], "requestsperseed": 700, "rows": rows, "action": "plan only"}
 
     @torch.no_grad()
     def apply(self, name, backbone, session, metadata):
@@ -173,7 +173,9 @@ class Registry:
             metadata["seed"] = requestseed
             if session.end != args.end or not session.cleanup or session.scale != 1 or session.noises.shape[0] != 1:
                 raise ValueError("Builtin profiles require one shared noise, endpoint time .30 and unit-scale refinement.")
-            if name == "naive":
+            if name == "native":
+                from engine.native import direct as edit
+            elif name == "naive":
                 from engine.native import naive as edit
             else:
                 from engine.single import edit

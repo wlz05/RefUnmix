@@ -21,6 +21,7 @@ from engine.sources import RELEASES
 from evaluate import datasetargs
 from run import common, run, validate
 from session import editor
+from intervention import Collector
 
 @contextlib.contextmanager
 def workspace():
@@ -145,22 +146,23 @@ class AblationTests(unittest.TestCase):
         return args
 
     def testactualendpointqueryskips(self):
-        expected = {'main': (5, 2, 3), 'assignment': (5, 2, 3), 'reference': (4, 2, 2), 'amplification': (5, 2, 3), 'gating': (5, 2, 3), 'target': (3, 2, 1)}
-        for profile, cost in expected.items():
-            with self.subTest(profile=profile):
-                args = self.options(profile)
-                pixels, report, session = run(editor(), None, Image.new('RGB', (16, 16), (90, 130, 160)), 'source', 'target long', args)
-                self.assertEqual((session.samples, session.calls, session.decodes), cost)
-                self.assertEqual(len(session.queries), session.calls)
-                self.assertTrue(torch.isfinite(pixels).all())
-                self.assertFalse(args.singlebias)
-                self.assertEqual(args.recenter, 0)
+        expected = {'main': (5, 2, 3), 'assignment': (5, 2, 3), 'reference': (5, 2, 2), 'amplification': (5, 2, 3), 'gating': (5, 2, 3), 'target': (3, 2, 1)}
+        with patch('engine.attention.Collector', Collector), patch('engine.attention.tokens', return_value=((1,), (1,))):
+            for profile, cost in expected.items():
+                with self.subTest(profile=profile):
+                    args = self.options(profile)
+                    pixels, report, session = run(editor(channels=4), None, Image.new('RGB', (16, 16), (90, 130, 160)), 'source', 'target long', args)
+                    self.assertEqual((session.samples, session.calls, session.decodes), cost)
+                    self.assertEqual(len(session.queries), session.calls)
+                    self.assertTrue(torch.isfinite(pixels).all())
+                    self.assertFalse(args.singlebias)
+                    self.assertEqual(args.recenter, 0)
 
     def testcalibrationisaddback(self):
         main, restored = self.options('main'), self.options('calibration')
         self.assertEqual((main.singlemode, main.singlebias, main.recenter), ('contrast', False, 0))
         self.assertEqual((restored.singlemode, restored.singlebias, restored.recenter), ('recenter', True, .5))
-        self.assertEqual((main.conditiongain, main.singlegain, main.innovationgain), (1.25, 1.5, 2))
+        self.assertEqual((main.conditiongain, main.singlegain, main.innovationgain), (1.25, 1., 3.))
 
 # Author: Weiliang Zhu; Other main author: Yeming Dai
 # Email: wlzchina05@gmail.com

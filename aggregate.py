@@ -5,12 +5,33 @@ import argparse
 import hashlib
 import json
 import math
+import statistics
 import sys
 from pathlib import Path
 
 from assess import grouped, coverage
 from data import records
 from dataset import annotation
+
+def finite(rows, field):
+    # Exclude undefined or nonfinite values only from their own metric.
+    result = {}
+    for metric in sorted({key for row in rows for key in row[field]}):
+        values = [row[field].get(metric) for row in rows]
+        valid = [value for value in values if type(value) in (int, float) and math.isfinite(value)]
+        excluded = sum(row.get("status", {}).get(metric) in {"positive infinity", "negative infinity", "nan", "nonfinite"} or type(value) in (int, float) and not math.isfinite(value) for row, value in zip(rows, values))
+        result[metric] = {"mean": statistics.fmean(valid) if valid else None, "count": len(valid), "excludednonfinite": excluded}
+    return result
+
+def equal(reports):
+    result = {}
+    for metric in sorted({key for report in reports.values() for key in report["table"]}):
+        values = [report["table"][metric] for report in reports.values()]
+        missing = [seed for seed, report in reports.items() if report["table"][metric]["mean"] is None]
+        result[metric] = {"mean": None if missing else statistics.fmean(value["mean"] for value in values), "count": sum(value["count"] for value in values), "excludednonfinite": sum(value["excludednonfinite"] for value in values)}
+        if missing:
+            result[metric].update(status="undefined seed", undefinedseeds=missing)
+    return result
 
 def combine(paths, seeds, dataset="data", mapping="mapping_file.json", images="annotation_images"):
     # Require the same complete request grid and frozen field profile.
@@ -80,12 +101,12 @@ def combine(paths, seeds, dataset="data", mapping="mapping_file.json", images="a
         byseed = {"raw": grouped(samples, "raw"), "table": grouped(samples, "table"), "coverage": coverage(samples)}
         if byseed != document["byseed"].get(str(seed)):
             raise ValueError("Stored byseed values do not match the per-request metrics.")
-        reports[str(seed)] = byseed
+        reports[str(seed)] = {"raw": finite(samples, "raw"), "table": finite(samples, "table"), "coverage": byseed["coverage"]}
         rows.extend(samples)
     if set(map(int, reports)) != set(seeds):
         raise ValueError("A requested seed is missing.")
-    table = grouped(rows, "table", {seed: value["table"] for seed, value in reports.items()})
-    return {"seeds": seeds, "requestsperseed": 700, "byseed": reports, "table": table, "coverage": coverage(rows), "aggregation": "Mean across valid requests within each seed, then mean across the requested seed means."}
+    table = equal(reports)
+    return {"seeds": seeds, "requestsperseed": 700, "byseed": reports, "table": table, "coverage": coverage(rows), "aggregation": "Exclude nonfinite values separately per metric; arithmetic mean within each seed, then equal-weight mean across all requested seeds. Raw calculator reports remain unchanged."}
 
 def main():
     parser = argparse.ArgumentParser()

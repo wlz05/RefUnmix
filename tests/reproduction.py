@@ -11,8 +11,8 @@ import conduct
 class ReproductionTests(unittest.TestCase):
     def test_schedule(self):
         args = conduct.parser().parse_args([])
-        self.assertEqual(args.seeds, [42, 52, 3047, 3407])
-        self.assertEqual(args.batch, 3)
+        self.assertEqual(args.seeds, [42])
+        self.assertEqual(args.batch, 1)
         self.assertEqual(args.profile, 'main')
 
     def test_containing_workspace(self):
@@ -34,19 +34,21 @@ class ReproductionTests(unittest.TestCase):
                 args = conduct.parser().parse_args(['--profile', profile])
                 command = conduct.generation(args, 42, Path('outputs') / profile / '42')
                 settings = datasetargs(common(argparse.ArgumentParser())).parse_args(command[3:])
-                if profile == 'naive':
-                    self.assertTrue(settings.naive)
+                if profile in {'native', 'naive'}:
+                    self.assertEqual(settings.naive, profile == 'naive')
+                    self.assertEqual(settings.native, profile == 'native')
                     self.assertFalse(settings.single)
-                    self.assertEqual((settings.start, settings.delta, settings.end), (.90, 0., .30))
+                    self.assertEqual((settings.start, settings.delta, settings.end), (.90 if profile == 'naive' else .30, 0., .30))
                     self.assertEqual((settings.conditiongain, settings.singlegain, settings.innovationgain), (1., 1., 1.))
                     self.assertTrue(settings.cleanup)
                     continue
                 self.assertTrue(settings.single)
                 self.assertEqual(settings.seed, 42)
                 self.assertEqual(settings.seeds, [42])
-                self.assertEqual(settings.singlegain, 1.5)
+                self.assertEqual(settings.singlegain, 1.5 if profile in conduct.LEGACY else 1.)
                 self.assertEqual(settings.conditiongain, 1. if profile == 'condition' else 1.25)
-                self.assertEqual(settings.innovationgain, 1. if profile == 'amplification' else 2.)
+                self.assertEqual(settings.innovationgain, 1. if profile == 'amplification' else 2. if profile in conduct.LEGACY else 3.)
+                self.assertEqual(settings.referencelocal, profile not in conduct.LEGACY)
                 self.assertEqual(settings.singlemode, 'recenter' if profile == 'calibration' else 'contrast')
                 self.assertEqual(settings.recenter, .5 if profile == 'calibration' else 0.)
                 self.assertEqual(settings.singlebias, profile in {'calibration', 'bias', 'locality'})

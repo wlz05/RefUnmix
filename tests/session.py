@@ -23,12 +23,18 @@ class Unet(torch.nn.Module):
 class Vae(torch.nn.Module):
     config = SimpleNamespace(scaling_factor=0.5)
 
+    def __init__(self, channels=3):
+        super().__init__()
+        self.channels = channels
+
     def encode(self, image):
         value = functional.avg_pool2d(image, 8) + 0.04
+        if self.channels == 4:
+            value = torch.cat((value, torch.zeros_like(value[:, :1])), dim=1)
         return SimpleNamespace(latent_dist=SimpleNamespace(mode=lambda: value))
 
     def decode(self, latent):
-        return SimpleNamespace(sample=functional.interpolate(latent, scale_factor=8, mode="nearest"))
+        return SimpleNamespace(sample=functional.interpolate(latent[:, :3], scale_factor=8, mode="nearest"))
 
 class Text(torch.nn.Module):
     config = SimpleNamespace(max_position_embeddings=77)
@@ -42,10 +48,10 @@ class Tokenizer:
     def __call__(self, values, **kwargs):
         return SimpleNamespace(input_ids=torch.tensor([[len(value)] for value in values]))
 
-def editor(kind="epsilon"):
+def editor(kind="epsilon", channels=3):
     config = SimpleNamespace(num_train_timesteps=101, prediction_type=kind)
     scheduler = SimpleNamespace(config=config, alphas_cumprod=torch.linspace(0.99, 0.01, 101))
-    return Editor(Unet(), scheduler, Vae(), Tokenizer(), Text(), size=16)
+    return Editor(Unet(), scheduler, Vae(channels), Tokenizer(), Text(), size=16)
 
 class Processor:
     image_processor = SimpleNamespace(size={"shortest_edge": 4}, crop_size={"height": 4, "width": 4}, image_mean=[0.5] * 3, image_std=[0.5] * 3)

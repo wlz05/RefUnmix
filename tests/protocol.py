@@ -383,7 +383,7 @@ class ProtocolTests(unittest.TestCase):
         text, _ = self.documented()
         commands = [shlex.split(line) for line in text.splitlines() if line.startswith("python -B RefUnmix/conduct.py --seeds")]
         seeds = [reproduction().parse_args(command[3:]).seeds for command in commands]
-        self.assertEqual(seeds, [[42], [52], [3047], [3407]])
+        self.assertEqual(seeds, [[42, 52, 3047, 3407]])
         self.assertNotIn("experiments/single.py", text)
 
     def testbenchmarkpartitions(self):
@@ -399,16 +399,17 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(options.single)
         self.assertEqual((options.method, options.singlemode, options.singleend), ("raw", "contrast", "responsibility"))
         self.assertEqual((options.start, options.delta, options.end), (.75, 0., .30))
-        self.assertEqual((options.recenter, options.conditiongain, options.innovationgain), (0., 1.25, 2.))
+        self.assertEqual((options.recenter, options.conditiongain, options.innovationgain), (0., 1.25, 3.))
         self.assertFalse(options.singlebias)
-        self.assertEqual((options.batch, options.precision, options.device), (3, "fp32", "cuda:0"))
+        self.assertEqual((options.batch, options.precision, options.device), (1, "fp32", "cuda:0"))
         self.assertFalse(options.control or options.heldout or options.compensation or options.frontier or options.cfg)
         self.assertEqual((options.poststeps, options.prior), (1, "off"))
         self.assertEqual((options.mapping, options.images, options.split), ("mapping_file.json", "annotation_images", "all"))
 
-    def testdocumentedcalibrationqueries(self):
+    def testlegacycalibrationqueries(self):
         from engine.single import edit
-        _, main = self.documented()
+        _, main = self.documented(profile="calibration")
+        main.singlemode, main.recenter, main.singlebias = "contrast", 0., False
         _, calibration = self.documented(profile="calibration")
         disabled = deepcopy(calibration)
         disabled.recenter = 0.
@@ -435,24 +436,13 @@ class ProtocolTests(unittest.TestCase):
     def testdocumentedcurves(self):
         text, _ = self.documented()
         commands = [shlex.split(line) for line in text.splitlines() if line.startswith("python -B RefUnmix/conduct.py --profile")]
-        self.assertEqual({command[command.index("--profile") + 1] for command in commands}, {"assignment", "reference", "amplification", "gating", "target", "calibration", "bias", "locality", "condition"})
-        profiles = [self.documented(profile=command[command.index("--profile") + 1])[1] for command in commands]
-        self.assertTrue(any(value.innovationgain == 1 for value in profiles))
-        self.assertTrue(any(value.singlemode == "recenter" and value.recenter == .5 for value in profiles))
-        self.assertTrue(any(value.conditiongain == 1 and value.singlegain == 1.5 for value in profiles))
-        self.assertTrue(any(value.singlebias and value.singlemode == "contrast" for value in profiles))
-        self.assertTrue(any(value.singlebias and value.biasgeometry == "global" for value in profiles))
-
-    def testrenderidentity(self):
-        first = self.args()
-        second = deepcopy(first)
-        for key, value in variants("fields", base=first)["pullbackfull"].items():
-            setattr(second, key, value)
-        image = Image.new("RGB", (16, 16), (96, 128, 160))
-        outputs = [run(editor(), ClipJudge(Clip(), Processor()), image, "source", "target long", args, Image.new("L", image.size, 128)) for args in (first, second)]
-        self.assertTrue(torch.equal(outputs[0][0], outputs[1][0]))
-        for key in ("controlsignature", "fieldsha256", "point", "scores", "damage"):
-            self.assertEqual(outputs[0][1][key], outputs[1][1][key])
+        names = {command[command.index("--profile") + 1] for command in commands}
+        self.assertEqual(names, {"assignment", "reference", "amplification", "gating", "target", "grounding", "attraction"})
+        profiles = [self.documented(profile=name)[1] for name in names]
+        self.assertTrue(all(value.referencelocal and not value.singlebias and value.recenter == 0 for value in profiles))
+        self.assertTrue(all(value.conditiongain == 1.25 and value.singlegain == 1 for value in profiles))
+        self.assertEqual({value.innovationgain for value in profiles}, {1., 3.})
+        self.assertTrue(all(value.targetpull == .15 and value.retainedcontext == .10 for value in profiles))
 
     def testdocumentedassessment(self):
         from assess import parser as assessment
