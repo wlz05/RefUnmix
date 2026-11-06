@@ -1,6 +1,6 @@
-# RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
+# RefUnmix: Reference-Grounded Response Unmixing for One-Step Image Editing
 
-An edit field changes a generator's output even when the prompt stays fixed. A target prompt adds another response at the transported anchor. Treating their sum as a single edit hides which displacement should be retained. RefUnmix measures these two responses with matched predictions and allocates them jointly before writing one update to the source image.
+A target-conditioned prediction mixes the requested change with displacement already induced by the editing field. RefUnmix separates these responses through matched predictions, grounds their shared component in the source image, and jointly allocates them under a per-pixel displacement budget. This permits stronger prompt response without increasing the accepted source-error budget.
 
 ## Method
 
@@ -184,13 +184,13 @@ The same response allocation operates on SD-Turbo, SwiftBrush-v2 and InstaFlow. 
 | [SwiftBrush-v2](https://github.com/VinAIResearch/SwiftBrushV2) | `swiftbrush` | Noise prediction with VP recovery |
 | [InstaFlow](https://github.com/gnobitab/InstaFlow) | `instaflow` | Noise-to-data velocity with linear-bridge recovery |
 
-For VP predictors, let $\alpha_k=\sqrt{\bar\alpha_k}$ and $\sigma_k=\sqrt{1-\bar\alpha_k}$:
+For VP predictors, let $N$ be the number of training timesteps, $\alpha_k=\sqrt{\bar\alpha_k}$ and $\sigma_k=\sqrt{1-\bar\alpha_k}$:
 
 ```math
 x_k=\alpha_k z+\sigma_k\epsilon,\qquad
 P_t(z,c;\epsilon)=
 \frac{x_k-\sigma_k\widehat\epsilon_\theta(x_k,k,c)}{\alpha_k},
-\qquad k=\operatorname{round}((T-1)t).
+\qquad k=\mathrm{round}((N-1)t).
 ```
 
 InstaFlow uses its velocity parameterization directly:
@@ -240,7 +240,7 @@ RefUnmix is compared with the following methods:
 
 | Group | Methods |
 |---|---|
-| Multi-step | [MasaCtrl](https://github.com/TencentARC/MasaCtrl), [PnP](https://github.com/MichalGeyer/plug-and-play), [FlowEdit](https://github.com/fallenshock/FlowEdit) |
+| Multi-step | [PnP](https://github.com/MichalGeyer/plug-and-play), [MasaCtrl](https://github.com/TencentARC/MasaCtrl), [FlowEdit](https://github.com/fallenshock/FlowEdit) |
 | Few-step | [InfEdit](https://github.com/sled-group/InfEdit), [TurboEdit](https://github.com/GiilDe/turbo-edit), [InstantEdit](https://github.com/Supercomputing-System-AI-Lab/InstantEdit) |
 | One-step | [SwiftEdit](https://github.com/Qualcomm-AI-research/SwiftEdit), [ChordEdit](https://github.com/ChordEdit/ChordEdit), [RRLS](https://github.com/yhz5613813/RRLS), [WhereEdit](https://github.com/Xi-Mu-Yu/WhereEdit) |
 
@@ -292,4 +292,23 @@ Avg. Rank is the mean rank across six quality metrics and Time. Rank after round
 
 ## Related methods
 
-[ChordEdit](https://github.com/ChordEdit/ChordEdit), [WhereEdit](https://github.com/Xi-Mu-Yu/WhereEdit), [RRLS](https://github.com/yhz5613813/RRLS), [SwiftEdit](https://github.com/Qualcomm-AI-research/SwiftEdit), [FlowEdit](https://github.com/fallenshock/FlowEdit), [InfEdit](https://github.com/sled-group/InfEdit), [InstantEdit](https://github.com/Supercomputing-System-AI-Lab/InstantEdit), [TurboEdit](https://github.com/GiilDe/turbo-edit), [MasaCtrl](https://github.com/TencentARC/MasaCtrl), and [PnP](https://github.com/MichalGeyer/plug-and-play).
+Methods are grouped by editing steps and ordered by their first public paper release within each group.
+
+### Multi-step
+
+- **PnP** (2022-11-22): [Paper](https://arxiv.org/abs/2211.12572) | [Code](https://github.com/MichalGeyer/plug-and-play)
+- **MasaCtrl** (2023-04-17): [Paper](https://arxiv.org/abs/2304.08465) | [Code](https://github.com/TencentARC/MasaCtrl)
+- **FlowEdit** (2024-12-11): [Paper](https://arxiv.org/abs/2412.08629) | [Code](https://github.com/fallenshock/FlowEdit)
+
+### Few-step
+
+- **InfEdit** (2023-12-07): [Paper](https://arxiv.org/abs/2312.04965) | [Code](https://github.com/sled-group/InfEdit)
+- **TurboEdit** (2024-08-01): [Paper](https://arxiv.org/abs/2408.00735) | [Code](https://github.com/GiilDe/turbo-edit)
+- **InstantEdit** (2025-08-08): [Paper](https://arxiv.org/abs/2508.06033) | [Code](https://github.com/Supercomputing-System-AI-Lab/InstantEdit)
+
+### One-step
+
+- **SwiftEdit** (2024-12-05): [Paper](https://arxiv.org/abs/2412.04301) | [Code](https://github.com/Qualcomm-AI-research/SwiftEdit)
+- **ChordEdit** (2026-02-22): [Paper](https://arxiv.org/abs/2602.19083) | [Code](https://github.com/ChordEdit/ChordEdit)
+- **RRLS** (2026-06-23): [Paper](https://arxiv.org/abs/2606.24844) | [Code](https://github.com/yhz5613813/RRLS)
+- **WhereEdit** (2026-07-23): [Paper](https://arxiv.org/abs/2607.20883) | [Code](https://github.com/Xi-Mu-Yu/WhereEdit)
