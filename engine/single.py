@@ -186,6 +186,9 @@ def edit(session, args, metadata):
     field = field * args.singlegain
     transported = session.anchor + field
     if args.singleend == 'responsibility':
+        if getattr(args, "ablation", "full") != "full":
+            from engine.ablation import edit as ablate
+            return ablate(session, args, transported, metadata, times, details)
         from engine.response import region
         from engine.responsibility import resolve
         anchors = torch.cat((session.anchor, transported, transported))

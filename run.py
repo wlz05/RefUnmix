@@ -34,6 +34,7 @@ def times(values):
 def common(parser):
     parser.add_argument("--model", default="./models")
     parser.add_argument("--single", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--ablation", choices=("full", "assignment", "reference", "gating", "target"), default="full")
     parser.add_argument("--naive", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--keystrength", type=float, default=0.)
     parser.add_argument("--valuestrength", type=float, default=0.)
@@ -344,7 +345,11 @@ def validate(args):
         raise ValueError("Reference fields require single VP mode with one noise sample.")
     if (args.keystrength or args.valuestrength) and args.referencephase != "field" and args.singleend not in {"paired", "quotient", "response", "anchored", "responsibility"}:
         raise ValueError("Reference endpoints require a paired continuation.")
+    if getattr(args, "ablation", "full") != "full" and not args.single:
+        raise ValueError("Structural ablations require the single-field RefUnmix path.")
     if getattr(args, "single", False):
+        if getattr(args, "ablation", "full") != "full" and (args.singlemode != "contrast" or args.singlebias or args.recenter != 0 or args.singleend != "responsibility" or args.delta != 0 or args.noise != 1 or args.keystrength or args.valuestrength):
+            raise ValueError("Structural ablations retain the uncalibrated main field and matched endpoint settings.")
         if getattr(args, "oracle", False) or getattr(args, "region", None) is not None:
             raise ValueError("Single-field mode estimates its response prior without an external region.")
         if args.poststeps != 1 or args.cfg or args.guidance != 1:

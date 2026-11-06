@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 SEEDS = (42, 52, 3047, 3407)
-PROFILES = ("main", "calibration", "bias", "locality", "amplification", "condition", "naive")
+PROFILES = ("main", "assignment", "reference", "amplification", "gating", "target", "calibration", "bias", "locality", "condition", "naive")
 
 def relative(value):
     path = Path(value)
@@ -55,6 +55,8 @@ def generation(args, seed, target):
         command[command.index("--singlemode") + 1] = "recenter"
     if args.profile in {"calibration", "bias", "locality"}:
         command[command.index("--no-singlebias")] = "--singlebias"
+    if args.profile in {"assignment", "reference", "gating", "target"}:
+        command.extend(("--ablation", args.profile))
     command[command.index("--backbone") + 1] = args.backbone
     command[2] = entry("evaluate.py")
     return command

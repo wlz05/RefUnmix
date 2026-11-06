@@ -5,7 +5,7 @@ import torch
 from engine.session import number, tensor
 
 def load(root="./models", backbone="vp", device=None, precision="fp32", size=512):
-    # Naive and RefUnmix share the same backbone prediction interface.
+    # Editing and native generation load the same local backbone components.
     if backbone == "instaflow":
         from engine.linear import Editor
         editor = Editor.load(root, device, precision, size)
@@ -24,12 +24,12 @@ def load(root="./models", backbone="vp", device=None, precision="fp32", size=512
 
 @torch.no_grad()
 def naive(session, args, metadata):
-    # Table 3 uses the ChordEdit delta-zero control with refinement.
+    # Match the delta-zero ChordEdit control with one target refinement.
     field = session.field(args.start, 0.)
     native = create(session, 1, 1., False, "prediction")
     latent = native.endpoint(field)
     pixels = session.decode(latent).clamp(0, 1)
-    report = {**metadata, "method": "naive", "renderer": "native", "selected": "naive", "field": {"start": args.start, "delta": 0., "end": args.end, "scale": session.scale, "conditioning": "original source and target prompts"}, "backend": native.metadata(), "stats": session.stats(), "controller": {"enabled": False}, "candidates": [], "explicitregion": False, "scope": "Table 3 Naive: native prediction, instantaneous prompt difference, and target refinement."}
+    report = {**metadata, "method": "naive", "renderer": "instantaneous field", "selected": "naive", "field": {"start": args.start, "delta": 0., "end": args.end, "scale": session.scale, "conditioning": "original source and target prompts"}, "backend": native.metadata(), "stats": session.stats(), "controller": {"enabled": False}, "candidates": [], "explicitregion": False, "scope": "Naive editing control: instantaneous prompt difference and one target refinement through the selected native backbone."}
     return pixels, report, session
 
 def create(session, steps=1, guidance=1., cfg=False, path="auto"):
