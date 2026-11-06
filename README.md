@@ -1,20 +1,23 @@
 # RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
 
-Even with the source prompt held fixed, applying an edit field can move the generator's output. Switching prompts at that transported anchor adds a second displacement. RefUnmix measures both responses, assigns them separate coefficients and writes the edit back to the source image in one update.
+An edit field changes a generator's output even when the prompt stays fixed. A target prompt adds another response at the transported anchor. Treating their sum as a single edit hides which displacement should be retained. RefUnmix measures these two responses with matched predictions and allocates them jointly before writing one update to the source image.
 
 ## Method
 
-**Field construction.** Encode the source image $X$ as $z_0$. Evaluate the source prompt and the extrapolated target prompt at the same anchor, noise and field time. Scale the paired prediction difference by the field gain to obtain $F$ and the transported anchor $z_1=z_0+F$. With epsilon prediction, subtracting the clean-latent estimates cancels the explicit shared noisy input. The prompt difference still depends on where the denoiser is queried. The main profile uses the original sampled noise. The calibration control adds a source-only query, shifts the noise according to the source reconstruction residual and attenuates field components aligned with the local residual.
-
-The field uses an extrapolated target embedding only during construction:
+**Paired field.** Let $X$ be the source image, $z_0=E(X)$ its latent, and $\epsilon$ one shared noise realization. The native predictor $P_t$ returns a clean-latent estimate. Source and target field queries use the same anchor and noise:
 
 ```math
 c_f=c_s+\gamma_c(c_t-c_s),\qquad
-F=\gamma_f\big[P_{t_f}(z_0,c_f;\epsilon)-P_{t_f}(z_0,c_s;\epsilon)\big],\qquad
-z_1=z_0+F.
+S=P_{t_f}(z_0,c_s;\epsilon),\qquad T=P_{t_f}(z_0,c_f;\epsilon),
 ```
 
-**Matched endpoint decomposition.** Write $c_0=c_s$ and $c_1=c_t$. The native clean-latent prediction $P$ uses the original prompts at endpoint time $t_e$. Decode each endpoint with $V$ before differencing. The decoded RGB endpoints remain unclipped during response measurement.
+```math
+F=\gamma_f(T-S)+\beta(T-z_0),\qquad z_1=z_0+F.
+```
+
+The paired difference supplies the editing direction; target attraction retains a controlled part of the target-conditioned displacement. The main profile uses sampled noise without source-state recentering or source-bias projection.
+
+**Matched response measurement.** With $c_0=c_s$ and $c_1=c_t$, evaluate three endpoints at the same endpoint time and noise:
 
 ```math
 h_{(i,j)}=P_{t_e}(z_i,c_j;\epsilon),\qquad
@@ -22,47 +25,50 @@ R_{(i,j)}=V(h_{(i,j)}),\qquad
 (i,j)\in\{(0,0),(1,0),(1,1)\}.
 ```
 
-```math
-R_{(1,1)}-R_{(0,0)}
-=\underbrace{R_{(1,1)}-R_{(1,0)}}_{d\ \text{(prompt response)}}
-+\underbrace{R_{(1,0)}-R_{(0,0)}}_{a\ \text{(shared transport)}}.
-```
-
-The middle endpoint holds the transported anchor fixed when measuring $d$ and the source prompt fixed when measuring $a$. The latent prompt difference gives a spatial weight $w$. All three endpoints share one noise realization. The source image anchors the final edit. The generated zero-field endpoint anchors the transport measurement, so the offset between the source image and its zero-field prediction stays out of $a$.
-
-**Joint assignment.** For each RGB pixel, the interaction $C=\langle d,a\rangle$ determines how retaining $a$ affects the source error. Aligned responses add to the squared displacement, while opposed responses can partially cancel. Set $A=\|a\|^2$ and minimize the following objective over $0\le s\le1$ with $\eta=1$.
+Native cross-attention of the source-zero and target-field endpoints provides a soft support $m$ for changed prompt tokens. The reference interpolates between the zero-field prediction and the source:
 
 ```math
-J_\eta(s)=(1-w)\|\eta d+s a\|^2+\lambda A(s-w)^2.
+B=(1-m)R_{(0,0)}+mX,\qquad
+d=R_{(1,1)}-R_{(1,0)},\qquad a=R_{(1,0)}-B.
 ```
 
-For $A>0$, interval projection gives the shared coefficient directly:
+The prompt response $d$ compares prompts at a fixed transported anchor. Writing the original shared transport as $a_0=R_{(1,0)}-R_{(0,0)}$ gives $a=a_0+m(R_{(0,0)}-X)$: the shared component also absorbs the shift from the generated reference toward the source image. It can carry useful geometry as well as reconstruction drift. The latent prompt response supplies a responsibility map $r$, combined with support as $w=r+m(1-r)$. Attention is read from existing forwards without modifying attention probabilities or adding model queries.
+
+**Joint assignment.** For one RGB pixel, define $A=\|a\|^2$ and $C=\langle d,a\rangle$. Shared adoption depends on the interaction of both responses:
 
 ```math
-s_0=\Pi_{[0,1]}\!\left(\frac{\lambda wA-(1-w)C}{(\lambda+1-w)A}\right).
+J_\eta(s)=(1-w)\|\eta d+sa\|^2+\lambda A(s-w)^2,\qquad 0\le s\le1.
 ```
 
-Use $w$ when the shared response degenerates. Clip and quantize both the candidate and the fixed-weight proposal $X+d+wa$. Keep $s_0$ if its per-pixel RGB squared source error does not increase; otherwise keep $w$. Call the accepted coefficient $q$ and the unamplified output $Y_0=Q(X+d+qa)$, where $Q$ clips and quantizes to normalized 8-bit RGB.
+At unit prompt gain, the closed-form candidate is
 
-**Budgeted innovation enhancement.** RefUnmix chooses the largest feasible gain up to its cap and minimizes $J_\eta(s)$ over the remaining feasible interval.
+```math
+s_0=\Pi_{[0,1]}\left(
+\frac{\lambda wA-(1-w)C}{(\lambda+1-w)A}
+\right).
+```
+
+Use $w$ when $A$ degenerates. Compare the clipped, quantized candidate with $Q(X+d+wa)$ and accept $s_0$ only where it does not increase squared RGB source error. Let $q$ denote the accepted coefficient and $Y_0=Q(X+d+qa)$. Here $Q$ converts to normalized 8-bit RGB.
+
+**Budgeted innovation.** Increase the prompt response while allowing shared adoption to adjust. Choose the largest feasible $\eta$, then minimize $J_\eta(s)$ over its feasible interval:
 
 ```math
 1\le\eta\le\eta_{\max},\qquad 0\le s\le1,\qquad
-\|\eta d+s a\|^2\le\|d+qa\|^2,\qquad
-\widetilde Y=X+\eta d+s a.
+\|\eta d+sa\|^2\le\|d+qa\|^2.
 ```
 
-The continuous proposal is clipped and quantized. If rounding exceeds the unamplified output's pixel budget, the integer RGB residual is rounded inward. Let $\mathcal E(U;X)$ denote a pixel's quantized RGB squared source error. The written image satisfies
+Quantize the proposal and round its integer residual inward wherever rounding exceeds the unamplified pixel budget. Finally, retain the fraction $\rho+(1-\rho)m$ of that residual, again rounding inward. Writing $\mathcal E$ for quantized per-pixel squared RGB source error gives
 
 ```math
-\mathcal E(Y;X)\le\mathcal E(Y_0;X)\le\mathcal E(X+d+wa;X).
+\mathcal E(Y;X)\le\mathcal E(Y_0;X)
+\le\mathcal E\!\left(Q(X+d+wa);X\right).
 ```
 
-This bound concerns squared source error for the same endpoints. The six quality metrics are measured independently after generation.
+The budget uses the source and matched predictions, not benchmark masks or CLIP scores.
 
 ## Installation
 
-Experiments use one NVIDIA RTX 4090, FP32 inference, and three concurrent images sharing one set of weights. `cuda:0` denotes the first visible GPU.
+Experiments use one NVIDIA RTX 4090, FP32 inference, and one image per request. `cuda:0` denotes the first visible GPU.
 
 The server uses Python 3.12, PyTorch 2.12.1 with CUDA 13.0, torchvision 0.27.1, diffusers 0.35.1, transformers 4.57.1, NumPy 1.26.4, and torchmetrics 1.8.2.
 
@@ -88,7 +94,7 @@ The model directory contains `unet/`, `vae/`, `scheduler/`, `tokenizer/`, and `t
 
 ## Data and evaluation
 
-Use the original [PIE-Bench](https://github.com/cure-lab/PnPInversion) release with all 700 requests:
+Use all 700 requests from the original [PIE-Bench](https://github.com/cure-lab/PnPInversion) release, covering ten editing categories:
 
 ```text
 data/
@@ -100,59 +106,38 @@ cache/
 outputs/
 ```
 
-PIE-Bench is the final benchmark, covering ten edit categories. RefUnmix is training-free. There is no training split or checkpoint selection on these requests. Development subsets used for diagnostics retain their own identities and are reported separately.
+Parameter development uses the complete 700-request benchmark with seed 42. The selected RefUnmix configuration is then evaluated with seeds 42, 52, 3047 and 3407, without further parameter changes. Ablations and backbone comparisons use paired seed 42. RefUnmix requires no weight training.
 
-[ChordEdit](https://github.com/ChordEdit/ChordEdit) refers to the PnPInversion data and metric protocol. Download the released calculator:
+Use the released PIE-Bench calculator:
 
 ```bash
 python -c "from pathlib import Path; from urllib.request import urlretrieve; Path('protocol').mkdir(exist_ok=True); urlretrieve('https://raw.githubusercontent.com/cure-lab/PnPInversion/07f97f448150e2ca220bebd54c8f687c5c50c67a/evaluation/matrics_calculator.py','protocol/metrics.py')"
 ```
 
-Official scoring uses CLIP ViT-L/14, squeeze LPIPS, and DINO ViT-B/8. The first scoring run with `--network` populates `cache/metrics/`. Subsequent runs load it offline. Move the code, model components, data, and cache together while retaining their relative layout.
+Official scoring uses CLIP ViT-L/14, squeeze LPIPS, and DINO ViT-B/8. A first scoring run with `--network` populates `cache/metrics/`; subsequent runs load the cache offline. Masks are supplied to evaluation, never to the editing pipeline.
 
 ## Main experiment
 
-RefUnmix improves all six quality metrics over ChordEdit, RRLS and WhereEdit on the same single-update SD-Turbo backbone. ChordEdit and WhereEdit are faster per image. On PIE-Bench, RefUnmix ranks first on background SSIM and CLIP-Whole, second on CLIP-Edited, and first on the average rank over six quality metrics and runtime.
-
-`conduct.py` fixes the paper's main configuration and generates and evaluates seeds **42, 52, 3047, 3407**, in that order. Its call chain is:
+`conduct.py` binds the fixed main configuration, complete request set, and source hashes.
 
 | Stage | Implementation |
 |---|---|
-| Fixed main settings and seed order | `conduct.py::generation()` |
-| Request loading and output records | `evaluate.py::request()` and `run.py::run()` |
-| Paired field and three matched endpoints | `engine/single.py::edit()` |
-| Native clean prediction and unclipped RGB decoding | `engine/session.py::Editor.predict()` and `Session.decode()` |
-| Shared coefficient and quantized acceptance | `engine/responsibility.py::resolve()` |
-| Feasible prompt gain and integer pixel budget | `engine/innovation.py::amplify()` |
-| Official quality scoring and seed means | `assess.py` and `aggregate.py` |
+| Main preset and paired controls | `conduct.py::generation()` |
+| Request loading and inference records | `evaluate.py::request()` and `run.py::run()` |
+| Paired field and matched endpoints | `engine/single.py::edit()` |
+| Native latent prediction and RGB decoding | `engine/session.py` and `engine/bridge.py` |
+| Read-only prompt support | `engine/attention.py` and `engine/grounding.py` |
+| Coupled shared adoption | `engine/responsibility.py::resolve()` |
+| Feasible innovation and digital budget | `engine/innovation.py::amplify()` |
+| Official scoring and verified aggregation | `assess.py` and `aggregate.py` |
 
-In these functions, `conditional`, `shared`, `responsibility`, and `penalty` denote $d$, $a$, $w$, and $\lambda$. `conditiongain`, `singlegain`, and `innovationgain` set $\gamma_c$, $\gamma_f$, and $\eta_{\max}$. Use `conduct.py` to reproduce the main profile; `run.py` also exposes the other experimental configurations.
-
-```bash
-python -B RefUnmix/conduct.py --network
-```
-
-With populated metric caches:
+Run from the workspace containing the checkout:
 
 ```bash
-python -B RefUnmix/conduct.py
+python -B RefUnmix/conduct.py --seeds 42 52 3047 3407 --network
 ```
 
-`--batch 3` is the default. Four concurrent images use the same GPU:
-
-```bash
-python -B RefUnmix/conduct.py --batch 4 --output outputs/four
-```
-
-Each seed writes its own images, inference summary, and metric report under `outputs/main/SEED/`. The four-seed quality result is `outputs/main/mean.json`. Completed seeds are retained. An unfinished output directory requires a fresh destination. Saved recipes bind every seed to the same code and generation settings.
-
-For the server layout with source in `RefUnmix/` and data, models, and caches in the surrounding workspace, run from that workspace:
-
-```bash
-env/bin/python -B RefUnmix/conduct.py --protocol protocol/official/metrics.py
-```
-
-Run the stages separately:
+With populated caches, omit `--network`. The default is seed 42, FP32, batch 1. Each profile writes images, request records, `summary.json` and `metrics.json` under `outputs/PROFILE/SEED/`. The four-seed aggregate is `outputs/PROFILE/mean.json`; a seed-42 run writes `mean42.json`. Recipes prevent outputs from different code or settings from being combined.
 
 ```bash
 python -B RefUnmix/conduct.py --action generate
@@ -160,30 +145,22 @@ python -B RefUnmix/conduct.py --action score --network
 python -B RefUnmix/conduct.py --action aggregate
 ```
 
-Individual seeds can also be completed in sequence:
-
-```bash
-python -B RefUnmix/conduct.py --seeds 42 --network
-python -B RefUnmix/conduct.py --seeds 52
-python -B RefUnmix/conduct.py --seeds 3047
-python -B RefUnmix/conduct.py --seeds 3407
-python -B RefUnmix/conduct.py --action aggregate
-```
-
 ## Ablations
 
-The core controls retain the main profile's uncalibrated paired field. Each profile changes the stated response measurement or output rule and writes separate predictions and metric reports.
+All core controls use the same seed, requests, field settings and official calculator. They change the specified operation, not the chosen output for each image.
 
-| Paper row | Profile | Output rule |
+| Paper row | Profile | Intervention |
 |---|---|---|
-| RefUnmix | `main` | Solve shared adoption, then enhance the prompt response within its pixel budget |
-| w/o Joint Assignment | `assignment` | $Q(X+d+wa)$; retain fixed spatial adoption and unit prompt gain |
-| w/o Zero-Field Reference | `reference` | Skip the source-zero prediction and decode, replace $R_{(0,0)}$ by $X$, and solve allocation with $a'=R_{(1,0)}-X$ |
-| w/o Innovation Enhancement | `amplification` | $Q(X+d+qa)$; retain joint adoption with unit prompt gain |
-| Unified Gating | `gating` | $Q(X+w(d+a))$; apply the same spatial gate to both responses |
-| Target-Endpoint Only | `target` | $Q(R_{(1,1)})$; construct the field and decode only the target endpoint |
+| RefUnmix | `main` | Joint adoption and budgeted innovation |
+| w/o Joint Assignment | `assignment` | Fix shared adoption to $w$ in both stages; retain feasible innovation with that coefficient fixed |
+| w/o Zero-Field Reference | `reference` | Replace $B$ by $X$ and omit the zero-field RGB decode; retain its prediction for matched attention |
+| w/o Innovation Enhancement | `amplification` | Set $\eta_{\max}=1$ and retain joint adoption |
+| Unified Gating | `gating` | Use $Q(X+w(d+a))$ before the same final support contraction |
+| Target-Endpoint Only | `target` | Decode only $R_{(1,1)}$; omit response allocation and final support contraction |
+| w/o Prompt Support | `grounding` | Remove support from reference interpolation, responsibility supply and final contraction |
+| w/o Target Attraction | `attraction` | Set $\beta=0$ and retain the remaining pipeline |
 
-Target-Endpoint Only is a constructed baseline that removes the decomposition and downstream allocation together. The other rows retain their declared endpoint and allocation mechanisms. Source-State Calibration is disabled in the main profile; it is not an additional removal row.
+Unified Gating is an alternative allocation rule. Target-Endpoint Only is a constructed truncation of the editing chain. The reference control removes one decode, not the attention-producing source-zero query. Source-State Calibration is already disabled in the complete method.
 
 ```bash
 python -B RefUnmix/conduct.py --profile assignment
@@ -191,76 +168,71 @@ python -B RefUnmix/conduct.py --profile reference
 python -B RefUnmix/conduct.py --profile amplification
 python -B RefUnmix/conduct.py --profile gating
 python -B RefUnmix/conduct.py --profile target
+python -B RefUnmix/conduct.py --profile grounding
+python -B RefUnmix/conduct.py --profile attraction
 ```
 
-Auxiliary field controls are `calibration` (restore noise recentering and local source-bias projection), `bias` (local projection only), `locality` (global projection only), and `condition` (remove conditional extrapolation). The calibration control adds the module back to the main configuration. Each profile uses the same seed order, requests and official evaluator. Masks and metric scores do not select generated outputs.
-
-`ash
-python -B RefUnmix/conduct.py --profile calibration
-python -B RefUnmix/conduct.py --profile bias
-python -B RefUnmix/conduct.py --profile locality
-python -B RefUnmix/conduct.py --profile condition
-`
+Legacy diagnostic profiles remain available for archived experiments; they are not rows of the current core ablation.
 
 ## T2I backbones
 
-RefUnmix uses SD-Turbo, SwiftBrush-v2 and InstaFlow through their native prediction interfaces. Model roots contain `unet/`, `vae/`, `scheduler/`, `tokenizer/` and `text_encoder/`. SwiftBrush-v2 uses its generator UNet and matching SD2.1 components. The InstaFlow root uses the one-step `XCLiu/instaflow_0_9B_from_sd_1_5` checkpoint.
+The same response allocation operates on SD-Turbo, SwiftBrush-v2 and InstaFlow. A model root contains `unet/`, `vae/`, `scheduler/`, `tokenizer/` and `text_encoder/`. SwiftBrush-v2 uses its generator UNet and matching SD2.1 components. InstaFlow uses the one-step `XCLiu/instaflow_0_9B_from_sd_1_5` checkpoint.
 
-| Backbone | Option | Native network output | Clean-latent recovery |
-|---|---|---|---|
-| [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) | `sdturbo` | Predicted noise | VP recovery |
-| [SwiftBrush-v2](https://github.com/VinAIResearch/SwiftBrushV2) | `swiftbrush` | Predicted noise | VP recovery |
-| [InstaFlow](https://github.com/gnobitab/InstaFlow) | `instaflow` | Noise-to-data velocity | Linear-bridge recovery |
+| Backbone | Option | Native prediction |
+|---|---|---|
+| [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) | `sdturbo` | Noise prediction with VP recovery |
+| [SwiftBrush-v2](https://github.com/VinAIResearch/SwiftBrushV2) | `swiftbrush` | Noise prediction with VP recovery |
+| [InstaFlow](https://github.com/gnobitab/InstaFlow) | `instaflow` | Noise-to-data velocity with linear-bridge recovery |
 
-For SD-Turbo and SwiftBrush-v2, write $alpha_k=sqrt{aralpha_k}$ and $sigma_k=sqrt{1-aralpha_k}$ from the checkpoint schedule:
-
-```math
-x_k=alpha_k z+sigma_kepsilon,qquad
-P_t(z,c;epsilon)=rac{x_k-sigma_kwidehatepsilon_	heta(x_k,k,c)}{alpha_k},qquad
-k=operatorname{round}((T-1)t).
-```
-
-For InstaFlow, the linear bridge and positive noise-to-data velocity give
+For VP predictors, let $\alpha_k=\sqrt{\bar\alpha_k}$ and $\sigma_k=\sqrt{1-\bar\alpha_k}$:
 
 ```math
-x_sigma=(1-sigma)z+sigmaepsilon,qquad
-P_sigma(z,c;epsilon)=x_sigma+sigma v_	heta(x_sigma,1000sigma,c).
+x_k=\alpha_k z+\sigma_k\epsilon,\qquad
+P_t(z,c;\epsilon)=
+\frac{x_k-\sigma_k\widehat\epsilon_\theta(x_k,k,c)}{\alpha_k},
+\qquad k=\operatorname{round}((T-1)t).
 ```
 
-At $sigma=1$, the clean prediction is the native one-step update $epsilon+v_	heta(epsilon,1000,c)$. The ODE starts at time zero with UNet clock 1000. InstaFlow uses batch 1 with calibration disabled.
-
-### Naive control
-
-The table row is named **Naive**. Native denotes the backbone prediction interface $P$, not a separate editing method. Naive uses the original image and prompts, an instantaneous paired field, and one target refinement:
+InstaFlow uses its velocity parameterization directly:
 
 ```math
-F_{mathrm{naive}}=P_{t_f}(z_0,c_t;epsilon)-P_{t_f}(z_0,c_s;epsilon),qquad
-z_1=z_0+F_{mathrm{naive}},qquad
-Y_{mathrm{naive}}=Q!left(V!left(P_{t_e}(z_1,c_t;epsilon)
-ight)
-ight).
+x_\sigma=(1-\sigma)z+\sigma\epsilon,\qquad
+P_\sigma(z,c;\epsilon)=
+x_\sigma+\sigma v_\theta(x_\sigma,1000\sigma,c).
 ```
 
-Its fixed settings are field time 0.90, time window $delta=0$, endpoint time 0.30, unit field scale, one shared noise sample, one image update and one target refinement without CFG. This follows the instantaneous-field control used by ChordEdit. RefUnmix's three gains apply to the main profile. Naive uses original prompt embeddings and no response allocation. It makes three condition evaluations in two logical forwards, one VAE encode and one decode.
+At $\sigma=1$, this is the official one-step update $\epsilon+v_\theta(\epsilon,1000,c)$. The generation ODE starts at zero while the UNet receives time 1000. The adapters preserve each predictor's clock, sign and text dimensions.
+
+### Native control
+
+**Native** in the backbone table applies one target-conditioned native prediction directly to the encoded source:
+
+```math
+Y_{\mathrm N}=Q\!\left(V\!\left(
+P_{t_e}(E(X),c_t;\epsilon)
+\right)\right).
+```
+
+The endpoint time is 0.30, matching RefUnmix, with the same seed and shared-noise draw. Native uses the original target embedding and the selected backbone's noise or velocity recovery, without constructing an editing field. Each request requires one conditional evaluation, one logical forward, one encode and one decode. The `native` profile is distinct from the retained historical `naive` profile.
 
 ```bash
-python -B RefUnmix/conduct.py --backbone sdturbo --model models --profile naive --output outputs/turbo
+python -B RefUnmix/conduct.py --backbone sdturbo --model models --profile native --output outputs/turbo
 python -B RefUnmix/conduct.py --backbone sdturbo --model models --profile main --output outputs/turbo
-python -B RefUnmix/conduct.py --backbone swiftbrush --model models/brush --profile naive --output outputs/brush
+python -B RefUnmix/conduct.py --backbone swiftbrush --model models/brush --profile native --output outputs/brush
 python -B RefUnmix/conduct.py --backbone swiftbrush --model models/brush --profile main --output outputs/brush
-python -B RefUnmix/conduct.py --backbone instaflow --model models/insta --batch 1 --profile naive --output outputs/insta
-python -B RefUnmix/conduct.py --backbone instaflow --model models/insta --batch 1 --profile main --output outputs/insta
+python -B RefUnmix/conduct.py --backbone instaflow --model models/insta --profile native --output outputs/insta
+python -B RefUnmix/conduct.py --backbone instaflow --model models/insta --profile main --output outputs/insta
 ```
 
-The default matrix command prints a plan without loading models. Add `--run` to execute the selected cells and official quality scoring:
+The method-by-backbone interface prints a plan by default. `--run` executes compatible cells, retaining separate recipes and reports:
 
 ```bash
-python -B RefUnmix/compare.py --methods naive refunmix
-python -B RefUnmix/compare.py --methods naive refunmix --run
+python -B RefUnmix/compare.py --methods native refunmix
+python -B RefUnmix/compare.py --methods native refunmix --seeds 42 --run
 python -B RefUnmix/compare.py --methods chord rrls where swiftedit --seeds 42 --run
 ```
 
-Each cell has a distinct output directory, recipe and seed reports. Completed compatible reports are reused after integrity checks. A method requiring backbone-specific trained components remains unavailable when those components have not been released; the matrix records that state and leaves its metrics missing.
+Completed reports are reused after verification. Cells without required released backbone-specific components remain unavailable.
 
 ## Comparisons
 
@@ -272,49 +244,51 @@ RefUnmix is compared with the following methods:
 | Few-step | [InfEdit](https://github.com/sled-group/InfEdit), [TurboEdit](https://github.com/GiilDe/turbo-edit), [InstantEdit](https://github.com/Supercomputing-System-AI-Lab/InstantEdit) |
 | One-step | [SwiftEdit](https://github.com/Qualcomm-AI-research/SwiftEdit), [ChordEdit](https://github.com/ChordEdit/ChordEdit), [RRLS](https://github.com/yhz5613813/RRLS), [WhereEdit](https://github.com/Xi-Mu-Yu/WhereEdit) |
 
-`baselines.py` provides inference, saved-output organization and official scoring entries for these ten methods and RefUnmix. `--action plan` is the default. Select the method with `--method`; source revisions and model identities are recorded in each generation recipe. The adapter implementation is kept in `engine/bench.py`, `engine/editors.py`, `engine/upstream.py` and `engine/flowedit.py`. `engine/comparison.py` retains the custom method registration API. The editing methods keep their own settings, while output geometry, request identities and scoring are checked by the common benchmark interface.
-
 ## Experimental settings
 
-The main SD-Turbo profile uses `--singlemode contrast --recenter 0 --no-singlebias`. It sets `conditiongain=1.25`, `singlegain=1.5` and `innovationgain=2`. Field time is 0.75 and endpoint time is 0.30. The first logical forward groups two condition samples and the second groups three. One output update uses one VAE encode and three decodes. FP32 generation uses batch 3 on one RTX 4090. Annotation masks and CLIP scores are used only for evaluation.
+The main preset uses `conditiongain=1.25`, `singlegain=1`, `innovationgain=3`, `targetpull=0.15` and `retainedcontext=0.10`. Field and endpoint times are 0.75 and 0.30. The responsibility exponent is 0.5 and the shared-adoption penalty is 1. Source-state calibration is off: `--singlemode contrast --recenter 0 --no-singlebias`.
 
-The runs use the same 700 PIE-Bench requests and seeds 42, 52, 3047, 3407. Each baseline retains its official settings. All methods use the same evaluation and timing protocol.
+Prompt support reads source-zero and target-field cross-attention groups at resolutions up to 1024 spatial queries. Token matching includes insertions, deletions and two following context tokens. Support uses 0.1/0.9 quantiles, a 0.25/0.75 transition, smoothstep and bilinear resizing. No attention weights are edited.
+
+The main pipeline performs five conditional evaluations in two logical forwards, one VAE encode and three decodes per image. This is one image update, not one network evaluation. Generation uses FP32 and batch 1 on one RTX 4090. Main-method replication uses four seeds; paired ablations and backbone comparisons use seed 42.
 
 ## Metrics and aggregation
 
-For each quality metric, first average all valid requests within each seed, then average the four seed results with equal weight:
-
-```math
-\bar m_s=\frac{1}{|\mathcal I_s|}\sum_{i\in\mathcal I_s}m_{i,s},\qquad
-\bar m=\frac{1}{4}\sum_{s\in\{42,52,3047,3407\}}\bar m_s.
-```
-
 | Metric | Measurement | Table scale |
 |---|---|---|
-| PSNR | Source fidelity outside the edit support; larger is better | dB |
-| MSE | Squared pixel error outside the edit support; smaller is better | x1000 |
-| SSIM | Structural similarity outside the edit support; larger is better | x100 |
-| LPIPS | Perceptual difference outside the edit support; smaller is better | x1000 |
-| CLIP-Whole | Whole-image similarity to the target caption; larger is better | Original score |
-| CLIP-Edited | Target-caption similarity with non-edit pixels zeroed; larger is better | Original score |
-| Time | Complete editing latency on one RTX 4090; smaller is better | Seconds/image |
+| PSNR | Background pixel fidelity; higher is better | dB |
+| MSE | Background squared error; lower is better | x1000 |
+| SSIM | Background structural similarity; higher is better | x100 |
+| LPIPS | Background perceptual distance; lower is better | x1000 |
+| CLIP-Whole | Whole-image target-caption similarity; higher is better | Original score |
+| CLIP-Edited | Target-caption similarity with non-edit pixels zeroed; higher is better | Original score |
+| Time | Complete editing latency; lower is better | Seconds/image |
 
-Background metrics include requests with nonempty unedited support; CLIP metrics cover the complete request set. Fully edited masks have undefined background scores. Exact matches can have infinite PSNR; these retain an explicit status. Average per-request PSNR directly, rather than deriving it from mean MSE.
+Use the original calculator's valid support for each metric. Background metrics exclude requests without background pixels; CLIP covers all requests. The reported mean excludes nonfinite values separately for each metric and averages the remaining finite values. An infinite PSNR does not remove that request's valid MSE, SSIM, LPIPS or CLIP scores. Preserve raw calculator outputs and record finite and excluded counts. Average per-request PSNR directly.
 
-`aggregate.py` recomputes the per-seed tables from the individual rows. It requires all requested seeds, 700 distinct request identities per seed, matching generation settings, and the pinned calculator. Missing values are never substituted with zero.
-
-```bash
-python -B RefUnmix/aggregate.py \
-  --input outputs/main/42/metrics.json outputs/main/52/metrics.json \
-          outputs/main/3047/metrics.json outputs/main/3407/metrics.json \
-  --seeds 42 52 3047 3407
+```math
+\bar m_s=\frac{1}{|\mathcal I_s|}
+\sum_{i\in\mathcal I_s}m_{i,s}.
 ```
 
-Time is measured separately with batch 1 on an otherwise idle GPU. After five warm-up requests, measure the same 50 fixed requests, five per edit category, for each seed. Synchronize CUDA before and after each request. Timing includes input loading, the complete editing algorithm, internal selection when used, and conversion to the final RGB image. It excludes checkpoint loading, output writes, and report-only evaluation. Average the 50 request times within each seed, then average the four seed means with equal weight.
+The four-seed main result is $\frac{1}{4}\sum_{s\in\{42,52,3047,3407\}}\bar m_s$. Paired seed-42 comparisons use $\bar m_{42}$. Each table identifies its seed scope; a four-seed RefUnmix result is not substituted into a seed-42 comparison. The aggregator verifies request identities, settings, calculator provenance and completeness.
 
-Avg. Rank averages ranks across PSNR, MSE, SSIM, LPIPS, CLIP-Whole, CLIP-Edited, and Time. Rank each metric in its stated direction after rounding to the reported precision; ties receive average ranks. Lower Avg. Rank is better. T-Free denotes training-free editing and I-Free denotes inversion-free editing. Comparisons separate multi-step, few-step, and single-update methods, and record condition evaluations separately from image-update counts.
+```bash
+python -B RefUnmix/aggregate.py --input outputs/main/42/metrics.json outputs/main/52/metrics.json outputs/main/3047/metrics.json outputs/main/3407/metrics.json --seeds 42 52 3047 3407
+```
 
-The quality commands above produce per-seed reports and their equal-weight four-seed means. The comparison combines these quality means with the separately measured Time means to compute the seven-metric Avg. Rank. Inference summaries also record request durations and dataset throughput; the reported Time uses the dedicated batch-1 protocol above. Baselines retain their official algorithm parameters. The three RefUnmix gains apply to its own field and response allocation.
+Time is measured separately on an otherwise idle RTX 4090 with batch 1. After five warm-up requests, measure 50 fixed requests, five per edit category, with CUDA synchronization around each request. Include input loading, complete editing and final RGB conversion; exclude checkpoint loading, output writes and report evaluation. Average the 50 durations. Dataset throughput is recorded separately.
+
+```bash
+python -B RefUnmix/timing.py --seed 42 --output outputs/timing
+python -B RefUnmix/timing.py --seed 52 --output outputs/timing
+python -B RefUnmix/timing.py --seed 3047 --output outputs/timing
+python -B RefUnmix/timing.py --seed 3407 --output outputs/timing
+```
+
+Compute each seed's mean from its 50 timed requests, then average the four seed means equally.
+
+Avg. Rank is the mean rank across six quality metrics and Time. Rank after rounding to the displayed precision, use average ranks for ties, and follow each metric's direction. Lower Avg. Rank is better. T-Free denotes training-free editing and I-Free denotes inversion-free editing.
 
 ## Related methods
 
