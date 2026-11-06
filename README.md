@@ -240,9 +240,9 @@ RefUnmix is compared with the following methods:
 
 | Group | Methods |
 |---|---|
-| Multi-step | [PnP](https://github.com/MichalGeyer/plug-and-play), [MasaCtrl](https://github.com/TencentARC/MasaCtrl), [FlowEdit](https://github.com/fallenshock/FlowEdit) |
-| Few-step | [InfEdit](https://github.com/sled-group/InfEdit), [TurboEdit](https://github.com/GiilDe/turbo-edit), [InstantEdit](https://github.com/Supercomputing-System-AI-Lab/InstantEdit) |
-| One-step | [SwiftEdit](https://github.com/Qualcomm-AI-research/SwiftEdit), [ChordEdit](https://github.com/ChordEdit/ChordEdit), [RRLS](https://github.com/yhz5613813/RRLS), [WhereEdit](https://github.com/Xi-Mu-Yu/WhereEdit) |
+| Multi-step | [PnP](https://github.com/MichalGeyer/plug-and-play) ([SD 1.4](https://huggingface.co/CompVis/stable-diffusion-v1-4))<br>[MasaCtrl](https://github.com/TencentARC/MasaCtrl) ([SD 1.4](https://huggingface.co/CompVis/stable-diffusion-v1-4))<br>[FlowEdit](https://github.com/fallenshock/FlowEdit) ([SD3-Medium](https://huggingface.co/stabilityai/stable-diffusion-3-medium-diffusers)) |
+| Few-step | [InfEdit](https://github.com/sled-group/InfEdit) ([LCM-DreamShaper v7](https://huggingface.co/SimianLuo/LCM_Dreamshaper_v7))<br>[TurboEdit](https://github.com/GiilDe/turbo-edit) ([SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo))<br>[InstantEdit](https://github.com/Supercomputing-System-AI-Lab/InstantEdit) ([PeRFlow-SD1.5 DreamShaper](https://huggingface.co/hansyan/perflow-sd15-dreamshaper)) |
+| One-step | [SwiftEdit](https://github.com/Qualcomm-AI-research/SwiftEdit) ([SwiftBrush-v2](https://github.com/VinAIResearch/SwiftBrushV2))<br>[ChordEdit](https://github.com/ChordEdit/ChordEdit) ([SD-Turbo](https://huggingface.co/stabilityai/sd-turbo))<br>[RRLS](https://github.com/yhz5613813/RRLS) ([SD-Turbo](https://huggingface.co/stabilityai/sd-turbo))<br>[WhereEdit](https://github.com/Xi-Mu-Yu/WhereEdit) ([SD-Turbo](https://huggingface.co/stabilityai/sd-turbo)) |
 
 ## Experimental settings
 
