@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
+# RefUnmix: Reference-Grounded Response Unmixing for One-Step Image Editing
 
 import math
 from contextlib import nullcontext
@@ -97,7 +97,7 @@ def controls(origin, conditional, shared, weight, pixels, penalty):
 
 @torch.no_grad()
 def edit(session, args, metadata):
-    # Construct a paired prompt field and render its endpoint response.
+    # Measure matched responses and allocate one source-image update.
     conditioning = {"mode": "raw"}
     if args.singlecondition not in {"raw", "extrapolated"}:
         from engine.condition import refine
@@ -192,6 +192,7 @@ def edit(session, args, metadata):
     if args.referencelocal:
         from engine.attraction import attract
         field, details["targetattraction"] = attract(field, session.anchor, target[0], 0. if args.ablation == "attraction" else args.targetpull)
+    # Main field: F = gamma_f * (T - S) + beta * (T - z0).
     transported = session.anchor + field
     if args.singleend == 'responsibility':
         if getattr(args, "ablation", "full") != "full":
@@ -226,6 +227,7 @@ def edit(session, args, metadata):
             weight = supply(weight, scope)
             metadata["grounding"] = {"mean": float(scope.mean()), "tokens": session.collector.indices, "source": "Changed-word cross-attention from the source-zero and target-field endpoint groups", "rule": "Use source RGB and permit full transport inside semantic support; retain the matched zero-field reference and response prior outside."}
             session.artifacts["scope"] = scope.expand_as(session.origin)
+        # d = R_(1,1) - R_(1,0); a = R_(1,0) - B.
         conditional = targetimage - shared
         advection = shared - reference
         pixels, response = resolve(session.origin, conditional, advection, weight, args.responsepenalty, args.innovationgain)

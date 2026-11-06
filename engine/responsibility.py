@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
+# RefUnmix: Reference-Grounded Response Unmixing for One-Step Image Editing
 
 import math
 import torch
@@ -7,7 +7,7 @@ from engine.session import tensor
 
 @torch.no_grad()
 def resolve(origin, conditional, shared, responsibility, penalty=1., gain=1.):
-    # Solve shared adoption from the coupled RGB responses.
+    # Minimize J_1(s) for d and reference-grounded a.
     for value in (origin, conditional, shared):
         tensor(value, 3)
     tensor(responsibility, 1)

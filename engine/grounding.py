@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
+# RefUnmix: Reference-Grounded Response Unmixing for One-Step Image Editing
 
 import math
 import torch
@@ -19,6 +19,7 @@ def support(attention, shape):
     return functional.interpolate(value, shape, mode="bilinear", align_corners=False)
 
 def reference(origin, decoded, attention):
+    # B = (1 - m) * R_(0,0) + m * X.
     if origin.shape != decoded.shape or origin.ndim != 4 or origin.shape[:2] != (1, 3):
         raise ValueError("Reference images must share single-image RGB geometry.")
     if origin.device != decoded.device or origin.device != attention.device:
@@ -30,7 +31,7 @@ def reference(origin, decoded, attention):
     return result, weight
 
 def supply(weight, scope):
-    # Permit native transport inside the semantic support.
+    # Supply shared adoption: w = r + m * (1 - r).
     if weight.shape != scope.shape or weight.ndim != 4 or weight.shape[:2] != (1, 1) or weight.device != scope.device:
         raise ValueError("Responsibility and semantic support must share geometry.")
     if any(not torch.isfinite(value).all() or torch.any((value < 0) | (value > 1)) for value in (weight, scope)):
@@ -38,7 +39,7 @@ def supply(weight, scope):
     return weight + scope * (1 - weight)
 
 def restrict(origin, pixels, scope, retained=0.):
-    # Contract the final byte displacement outside semantic support.
+    # Retain rho + (1 - rho) * m of the byte displacement.
     if origin.shape != pixels.shape or origin.ndim != 4 or origin.shape[:2] != (1, 3) or scope.shape != origin[:, :1].shape:
         raise ValueError("Output support must match RGB image geometry.")
     if any(value.device != origin.device or not torch.isfinite(value).all() or torch.any((value < 0) | (value > 1)) for value in (pixels, origin, scope)):

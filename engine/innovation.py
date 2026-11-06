@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
+# RefUnmix: Reference-Grounded Response Unmixing for One-Step Image Editing
 
 import math
 import torch
@@ -7,7 +7,7 @@ from engine.session import tensor
 
 @torch.no_grad()
 def amplify(origin, conditional, shared, responsibility, coefficient, baseline, gain=2., penalty=1.):
-    # Maximize prompt gain within the unamplified pixel budget.
+    # Maximize eta under ||eta*d + s*a||^2 <= ||d + q*a||^2.
     for value in (origin, conditional, shared, baseline):
         tensor(value, 3)
     if not math.isfinite(gain) or not 1 <= gain <= 4:

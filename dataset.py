@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
+# RefUnmix: Reference-Grounded Response Unmixing for One-Step Image Editing
 
 from __future__ import annotations
 from numbers import Integral

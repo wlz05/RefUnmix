@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# RefUnmix: Separating Prompt Response from Shared Transport in One-Step Image Editing
+# RefUnmix: Reference-Grounded Response Unmixing for One-Step Image Editing
 
 import torch
 from engine.session import number, tensor
@@ -24,7 +24,7 @@ def load(root="./models", backbone="vp", device=None, precision="fp32", size=512
 
 @torch.no_grad()
 def direct(session, args, metadata):
-    # Apply one target-conditioned prediction to the source anchor.
+    # Native: Q(V(P_te(E(X), c_t; noise))), with no editing field.
     latent = session.predict(session.anchor, session.noises[:1], session.editor.index(session.end), session.target)
     pixels = session.decode(latent).clamp(0, 1)
     report = {**metadata, "method": "native", "renderer": "source-anchored native prediction", "selected": "native", "endpointtime": session.end, "editingfield": False, "stats": session.stats(), "controller": {"enabled": False}, "candidates": [], "explicitregion": False, "scope": "One target-conditioned native prediction from the encoded source, with no editing field or allocation."}
