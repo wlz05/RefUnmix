@@ -288,7 +288,7 @@ python -B RefUnmix/timing.py --seed 3407 --output outputs/timing
 
 Compute each seed's mean from its 50 timed requests, then average the four seed means equally.
 
-Avg. Rank is the mean rank across six quality metrics and Time. Rank after rounding to the displayed precision, use average ranks for ties, and follow each metric's direction. Lower Avg. Rank is better. T-Free denotes training-free editing and I-Free denotes inversion-free editing.
+T-Free denotes training-free editing and I-Free denotes inversion-free editing.
 
 ## Related methods
 
