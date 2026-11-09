@@ -134,7 +134,9 @@ cache/
 outputs/
 ```
 
-Parameter development uses the complete 700-request benchmark with seed 42. The selected RefUnmix configuration is then evaluated with seeds 42, 52, 3047 and 3407, without further parameter changes. Ablations and backbone comparisons use paired seed 42. RefUnmix requires no weight training.
+The main experiment evaluates the fixed RefUnmix configuration on all 700 released requests with seeds 42, 52, 3047 and 3407. Each seed uses the same parameters and official calculator. Ablations and backbone comparisons use paired seed 42. RefUnmix requires no weight training.
+
+`conduct.py` creates the generation recipe before inference, verifies its source fingerprint on reuse, and scores the completed outputs. Benchmark membership remains fixed across seeds and methods. The separate `split.py` and `search.py` development interface is outside this main evaluation workflow.
 
 Use the released PIE-Bench calculator:
 
