@@ -248,5 +248,5 @@ def collect(editor, judge, items, configs, seeds, groups, local=0.5, completed=N
             report = result.report or {}
             yield {"key": item.key, "group": groups[item.key], "category": item.category, "seed": seed, "config": name, **scores, "original": originalscore, "editgain": scores["semantic"] - originalscore, "seconds": elapsed, "scoreseconds": scoring, "calls": report.get("calls", editor.calls), "samples": report.get("samples", editor.samples)}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

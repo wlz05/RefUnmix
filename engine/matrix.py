@@ -84,5 +84,5 @@ def propose(delta, gradients, protection, patch=32, ridge=.1, radius=.5):
     report = {"dictionaryrank": int(3 * ranks.sum()), "status": "resolved" if step > 0 else "no common interpolated ascent", "mixture": mixture, "step": step, "ridge": ridge, "radius": radius, "couplingcosine": inner(gram, semantic) / math.sqrt(repair * square), "predictedheadgains": [step * value for value in gains], "dimensions": 9 * nh * nw}
     return result, report
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

@@ -110,5 +110,5 @@ def load(family, source, model, device, offload=False):
     result.metadata = {**metadata, "family": family, "dtype": str(dtype), "offload": offload}
     return result
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

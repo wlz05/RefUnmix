@@ -380,5 +380,5 @@ class Session:
     def stats(self):
         return {"calls": self.calls, "samples": self.samples, "decodes": self.decodes, "encodes": self.encodes, "textcalls": self.editor.textcalls - self.textbase, "ticks": sorted(self.cache), "queryticks": sorted({item["tick"] for item in self.queries}), "queries": list(self.queries), "elapsed": perf_counter() - self.started, "attention": {str(key): value for key, value in self.attentionlog.items()}, "renders": dict(self.renders), "references": [{"cleanup": key is not None, "tick": key, "decoded": entry["pixels"] is not None} for key, entry in self.references.items()], "budget": self.limit.report() if self.limit is not None else None}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

@@ -35,5 +35,5 @@ def feature(judge, values):
         return judge.model.visual_projection(judge.model.vision_model(pixel_values=values).pooler_output).float()
     return judge.model.get_image_features(pixel_values=values).float()
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

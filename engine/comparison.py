@@ -205,5 +205,5 @@ class Registry:
         report.update({"comparison": {"method": name, "backbone": backbone}, "seed": requestseed, "stats": session.stats()})
         return pixels, report, session
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

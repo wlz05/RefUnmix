@@ -27,5 +27,5 @@ def project(value, reference, window=5, ridge=.1):
     report = {"window": window, "ridge": ridge, "coefficientmean": float(combined.mean()), "coefficientrms": float(combined.square().mean().sqrt()), "energybefore": before, "energyafter": after, "normspace": "input field"}
     return result, report
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

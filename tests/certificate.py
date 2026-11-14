@@ -239,7 +239,7 @@ class CertificateTests(unittest.TestCase):
             lines = text.splitlines()
             self.assertGreaterEqual(len(lines), 6, str(source))
             self.assertEqual(lines[:3], ["# -*- coding: utf-8 -*-", "# RefUnmix: Reference-Grounded Response Unmixing for One-Step Image Editing", ""], str(source))
-            self.assertEqual(lines[-3:], ["", "# Author: Weiliang Zhu; Other main author: Yeming Dai", "# Email: wlzchina05@gmail.com"], str(source))
+            self.assertEqual(lines[-3:], ["", "# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv", "# Email: wlzchina05@gmail.com"], str(source))
             self.assertFalse(any(not first.strip() and not second.strip() for first, second in zip(lines, lines[1:])), str(source))
             compile(source.read_bytes(), str(source), "exec")
 
@@ -253,5 +253,5 @@ class CertificateTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

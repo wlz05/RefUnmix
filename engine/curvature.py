@@ -106,5 +106,5 @@ def fallback(model, points, radius, preferred=None):
                 return tuple(point)
     return None
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

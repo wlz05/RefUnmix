@@ -38,5 +38,5 @@ def resolve(origin, conditional, shared, responsibility, gain=1.):
         raise RuntimeError("Fixed-adoption enhancement exceeded the digital budget.")
     return result, {"assignment": "fixed responsibility prior in both stages", "requested": gain, "effective": float(effective.mean()), "digitalerrorbefore": float(oldcost.sum()), "digitalerrorafter": float(actual.sum())}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

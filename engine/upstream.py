@@ -144,5 +144,5 @@ def build(method):
         return lambda item, origin, seed, local: scope['edit_image'](str(item.image), item.source, item.target, inverse, auxiliary, model)
     raise ValueError('Unknown baseline.')
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

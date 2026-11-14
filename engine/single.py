@@ -313,5 +313,5 @@ def edit(session, args, metadata):
     report = {**metadata, 'method': 'single', 'renderer': 'anchored' if args.singlelift else 'native', 'field': {'requested': args.singlemode, 'actual': args.singlemode, 'times': times, 'gain': args.singlegain, 'calibration': details}, 'stats': session.stats(), 'selected': 'single', 'controller': {'enabled': False}, 'candidates': [], 'explicitregion': False, 'scope': 'One field update, fixed paired prediction branches, and no semantic search.'}
     return pixels, report, session
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

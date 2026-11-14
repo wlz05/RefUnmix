@@ -391,5 +391,5 @@ class ProjectionTests(unittest.TestCase):
         self.assertAlmostEqual(report["semanticinteraction"]["score"], -.05, places=6)
         json.dumps(report, allow_nan=False)
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

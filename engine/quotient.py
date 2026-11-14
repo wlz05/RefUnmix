@@ -52,5 +52,5 @@ def field(origin, image, columns, weight, mode='local', direction=None, patch=16
         raise RuntimeError('Reference quotient increased its measured preservation cost.')
     return result, {'mode': mode, 'patch': patch, 'scale': scale, 'coefficients': coefficients.mean((1, 2)).tolist(), 'before': before, 'after': after}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

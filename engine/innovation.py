@@ -63,5 +63,5 @@ def amplify(origin, conditional, shared, responsibility, coefficient, baseline, 
     report = {"requested": gain, "effective": float(effective.mean()), "acceptedfraction": float(valid.double().mean()), "quantizedfraction": float((newcost > oldcost).double().mean()), "digitalerrorbefore": float(oldcost.sum()), "digitalerrorafter": float(actualcost.sum()), "scope": "Per-pixel RGB source-error budget relative to the unamplified field."}
     return pixels, report
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

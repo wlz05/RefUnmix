@@ -71,5 +71,5 @@ class Official:
             raise RuntimeError("The official editor issued no native queries.")
         return result, {"parameters": self.parameters, "native": self.native, "choice": choice, "calls": len(self.queries), "samples": sum(q["samples"] for q in self.queries)}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

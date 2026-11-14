@@ -124,5 +124,5 @@ def export(path, study):
     with path.open("x", encoding="utf-8", newline="") as handle:
         handle.write(content)
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

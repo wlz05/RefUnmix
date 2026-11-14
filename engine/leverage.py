@@ -124,5 +124,5 @@ def probe(model, diagnostics, points, radius, lower, scales, damage, damagescale
                 options.append((violation, predicted, -float(np.sum((semantic - model.scores) / scales)), tuple(point)))
     return min(options)[-1] if options else None
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

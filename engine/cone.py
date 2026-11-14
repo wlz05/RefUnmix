@@ -24,5 +24,5 @@ def project(first, second, advection, normalize=True, geometry="local"):
         raise ValueError('Conditional response projection must be finite.')
     return value.float(), {'rawnorm': before, 'projectednorm': after, 'scale': scale, 'fieldnorm': float(value.norm()), 'retainedenergy': after ** 2 / before ** 2 if before else 1.}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

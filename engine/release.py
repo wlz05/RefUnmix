@@ -207,5 +207,5 @@ def propose(model, radius, lower, damage, reference, scales, indices, damping, l
         selected["solver"]["comparison"] = {"increment": old, "residual": new, "improvement": max(0., old - selected["objective"]) if old is not None else None, "paths": len(paths), "skipped": skipped, "queries": 0, "scope": "Same frozen response model and bounds; not a comparison of generated images."}
     return selected if selected is not None and selected["solver"]["gain"] > current + loss + 1e-12 else None
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

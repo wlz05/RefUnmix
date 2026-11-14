@@ -783,5 +783,5 @@ def redirect(field, native, score, mask, gain=.02, penalty=1., checks=3, match=F
         if limit is not None:
             limit.phase = previous
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

@@ -182,5 +182,5 @@ def records(dataset: str = "./pie", mapping: str = "./mapping_file.json", images
         raise FileNotFoundError("No valid benchmark records were found.")
     return result
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

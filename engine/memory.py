@@ -58,5 +58,5 @@ def install(model):
     model.referencehandles = handles
     return len(handles)
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

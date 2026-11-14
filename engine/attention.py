@@ -112,5 +112,5 @@ class Collector:
     def report(self):
         return {"layout": self.layout, "tokens": self.indices, "maps": len(self.maps), "skipped": self.skipped, "maximumqueries": self.maximum, "note": "Read-only attention reconstruction with token-neighbor phrase heuristics."}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

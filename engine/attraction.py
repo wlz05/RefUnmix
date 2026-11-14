@@ -18,5 +18,5 @@ def attract(field, anchor, target, weight=.5):
     tensor(result, 4)
     return result, {"weight": weight, "initialnorm": float(field.double().norm()), "residualnorm": float(residual.double().norm()), "finalnorm": float(result.double().norm()), "source": "Existing target-conditioned field-query prediction", "extraqueries": 0}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

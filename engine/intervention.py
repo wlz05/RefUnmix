@@ -67,5 +67,5 @@ def edit(session, args, transported, metadata, times, calibration):
     report = {**metadata, "method": "single", "renderer": "intervention", "ablation": mode, "field": {"requested": args.singlemode, "actual": args.singlemode, "times": times, "gain": args.singlegain, "calibration": calibration, "response": response}, "stats": session.stats(), "selected": "single", "controller": {"enabled": False}, "candidates": [], "explicitregion": False, "scope": "Paired structural control; target-only and unified gating are constructed mechanism comparisons."}
     return pixels, report, session
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

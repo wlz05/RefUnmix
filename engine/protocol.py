@@ -36,5 +36,5 @@ def signature(args):
     encoded = json.dumps(values, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     return {"sha256": hashlib.sha256(encoded).hexdigest(), "settings": values, "scope": "Effective control settings; seed, input, code, and checkpoint hashes are recorded separately."}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

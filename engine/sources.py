@@ -58,5 +58,5 @@ def manifest(root, method):
         actual = subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
     return {"root": path.as_posix(), "repository": "https://github.com/" + repository, "expectedrevision": expected, "revision": actual, "files": {p.relative_to(path).as_posix(): digest(p) for p in files}}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

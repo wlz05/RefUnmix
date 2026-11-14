@@ -46,5 +46,5 @@ def allocate(benefits, protection, energy, ridge=.1, lower=.5, upper=2.):
         return np.ones_like(energy), {"status": "no common semantic ascent", "gains": gains, "mixture": alpha}
     return result, {"status": "resolved", "gains": gains, "mixture": alpha}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

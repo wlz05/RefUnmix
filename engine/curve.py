@@ -237,5 +237,5 @@ def load(summary, metrics, repeats=2000, seed=42):
     result["cost"] = {name: value.get("cost") for name, value in suite["variants"].items()}
     return result
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

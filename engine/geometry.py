@@ -301,5 +301,5 @@ def response(model, points, values, regularization=.0001, initial=None):
         raise ValueError("Latent response fits exceed numerical range.")
     return fitted, {"neighbors": indices.tolist(), "fiterror": error, "dimension": values.shape[1], "queries": 0, "scope": "Unweighted clean-latent endpoint geometry; not an external editor reproduction."}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

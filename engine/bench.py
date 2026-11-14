@@ -427,5 +427,5 @@ def main(argv=None):
             else:
                 write(output, value)
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

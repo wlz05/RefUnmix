@@ -131,5 +131,5 @@ class Interventions(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate(self.args)
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

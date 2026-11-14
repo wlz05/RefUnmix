@@ -164,5 +164,5 @@ class AblationTests(unittest.TestCase):
         self.assertEqual((restored.singlemode, restored.singlebias, restored.recenter), ('recenter', True, .5))
         self.assertEqual((main.conditiongain, main.singlegain, main.innovationgain), (1.25, 1., 3.))
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

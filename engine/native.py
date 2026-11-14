@@ -145,5 +145,5 @@ class Native:
     def metadata(self):
         return {"kind": self.mode, "steps": self.steps, "ticks": self.ticks, "cfg": self.cfg, "guidance": self.guidance, "referencepath": self.path, "continuous": self.continuous, "affine": self.affine, "conditional": self.session.cleanup, "endpoints": self.endpoints, "prediction": getattr(self.session.editor, "metadata", {}).get("native"), "sampler": "Deterministic DDIM without latent clipping." if self.steps > 1 else "One clean prediction without latent clipping."}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

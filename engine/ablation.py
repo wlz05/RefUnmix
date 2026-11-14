@@ -43,5 +43,5 @@ def edit(session, args, transported, metadata, times, calibration):
     report = {**metadata, "method": "single", "renderer": "ablation", "ablation": mode, "field": {"requested": args.singlemode, "actual": args.singlemode, "times": times, "gain": args.singlegain, "calibration": calibration, "response": response}, "stats": session.stats(), "selected": "single", "controller": {"enabled": False}, "candidates": [], "explicitregion": False, "scope": "Target-only is a constructed truncation; other modes retain their declared endpoint and allocation mechanisms."}
     return pixels, report, session
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

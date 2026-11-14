@@ -42,5 +42,5 @@ def resolve(origin, conditional, shared, responsibility, penalty=1., gain=1.):
         report["digitalerrorafter"] = report["innovation"]["digitalerrorafter"]
     return pixels, report
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

@@ -63,5 +63,5 @@ def write(path, payload):
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

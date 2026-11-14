@@ -39,5 +39,5 @@ class CouplingTests(unittest.TestCase):
             corrected = np.clip(candidate - common @ value, 0, 1)
             self.assertLessEqual(np.sum(weight * (corrected - origin) ** 2), np.sum(weight * residual ** 2) + 1e-10)
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

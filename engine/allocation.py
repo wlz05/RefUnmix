@@ -118,5 +118,5 @@ def redistribute(origin, candidate, judge, source, target, patch=32, lower=.5, u
         raise RuntimeError("The allocated field exceeds its finite energy budget.")
     return pixels, report
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

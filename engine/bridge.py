@@ -58,5 +58,5 @@ def check():
             raise AssertionError("An invalid native clock was accepted.")
     print("CROSS_FLOW_CPU_ORACLE_PASSED", flush=True)
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

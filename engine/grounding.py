@@ -57,5 +57,5 @@ def restrict(origin, pixels, scope, retained=0.):
         raise RuntimeError("Semantic support increased source displacement.")
     return result, {"retainedcontext": retained, "digitalerrorbefore": float(before.sum()), "digitalerrorafter": float(after.sum()), "scope": "Fixed inferred support; no annotation or quality-score selection."}
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

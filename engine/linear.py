@@ -58,5 +58,5 @@ class Editor(Base):
         sample = (1 - sigma) * anchor.float() + sigma * noise.float()
         return self.state(sample, tick, embedding)
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

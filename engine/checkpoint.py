@@ -39,5 +39,5 @@ def configuration(root):
         digest.update(hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

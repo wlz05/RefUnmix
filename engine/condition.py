@@ -55,5 +55,5 @@ def refine(session, source, target, mode="projected", gain=1.5):
     report = {"mode": mode, "rank": int(keep.sum()), "gain": gain, "changed": int((~shared).sum()), "originalnorm": float(residual.norm()), "retainednorm": float(restored.norm())}
     return result[None], report
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

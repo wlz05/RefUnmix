@@ -157,5 +157,5 @@ if __name__ == "__main__":
         from run import main as responsive
         responsive()
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com

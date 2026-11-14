@@ -74,5 +74,5 @@ if __name__ == "__main__":
     torch.set_num_threads(1)
     unittest.main()
 
-# Author: Weiliang Zhu; Other main author: Yeming Dai
+# Author: Weiliang Zhu; Other main author: Yeming Dai, Yaming Lv
 # Email: wlzchina05@gmail.com
